@@ -1,101 +1,84 @@
 @echo off
-setlocal
-
-REM Double-click to start the React/Vite dev server.
-REM It will run "npm ci" once if dependencies are missing.
-
+setlocal enabledelayedexpansion
+chcp 65001 > nul
 cd /d "%~dp0"
 
-set "LOG=%~dp0start-dev.log"
-> "%LOG%" echo === start-dev.cmd log ===
->> "%LOG%" echo Started at: %date% %time%
->> "%LOG%" echo Working dir: %cd%
-
-title testdata-tool-main - start-dev
-echo (Log saved to: start-dev.log)
-
-echo.
-echo [1/3] Checking Node.js and npm...
-where node >nul 2>&1
+:: === Check Node ===
+where node >nul 2>nul
 if errorlevel 1 (
-  echo ERROR: Node.js not found.
-  >> "%LOG%" echo ERROR: node not found
-  echo.
-  echo npm is shipped with Node.js. You need to install Node.js (LTS).
-  echo.
-  where winget >nul 2>&1
+  echo [Harness] Node.js not found. Trying winget...
+  where winget >nul 2>nul
   if errorlevel 1 (
-    echo Hint: winget not found. Opening Node.js download page...
-    >> "%LOG%" echo winget not found. Opening https://nodejs.org/en/download
-    start "" "https://nodejs.org/en/download"
-    pause
-    exit /b 1
-  ) else (
-    echo winget detected. You can auto-install Node.js LTS now.
-    set /p INSTALL_NODE=Install Node.js LTS via winget? (Y/N):
-    if /i "%INSTALL_NODE%"=="Y" (
-      echo.
-      echo Installing Node.js LTS...
-      >> "%LOG%" echo Running: winget install -e --id OpenJS.NodeJS.LTS
-      winget install -e --id OpenJS.NodeJS.LTS >> "%LOG%" 2>&1
-      if errorlevel 1 (
-        echo.
-        echo ERROR: winget install failed. Please install Node.js manually:
-        echo https://nodejs.org/en/download
-        >> "%LOG%" echo ERROR: winget install failed
-        start "" "https://nodejs.org/en/download"
-        pause
-        exit /b 1
-      )
-      echo.
-      echo Node.js installation finished. Please close and re-open this script if node is still not found.
-      >> "%LOG%" echo Node.js installed via winget. User should re-run script.
-      pause
-      exit /b 0
-    ) else (
-      echo Skipped auto-install. Opening Node.js download page...
-      >> "%LOG%" echo User skipped winget install. Opening https://nodejs.org/en/download
-      start "" "https://nodejs.org/en/download"
-      pause
-      exit /b 1
-    )
-  )
-)
-where npm >nul 2>&1
-if errorlevel 1 (
-  echo ERROR: npm not found. Please re-install/repair Node.js (LTS).
-  >> "%LOG%" echo ERROR: npm not found (node exists)
-  start "" "https://nodejs.org/en/download"
-  pause
-  exit /b 1
-)
-
-if not exist "node_modules\vite\package.json" (
-  echo.
-  echo [2/3] Installing dependencies (npm ci)...
-  >> "%LOG%" echo Running: npm ci
-  call npm ci >> "%LOG%" 2>&1
-  if errorlevel 1 (
-    echo.
-    echo ERROR: npm ci failed.
-    >> "%LOG%" echo ERROR: npm ci failed
-    start notepad "%LOG%"
+    echo [Harness] winget not found. Please install Node.js LTS manually: https://nodejs.org/
+    start "" https://nodejs.org/
     pause
     exit /b 1
   )
+  echo [Harness] Running: winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements
+  winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements
+  if errorlevel 1 (
+    echo [Harness] Install aborted. Please manually install Node.js LTS.
+    start "" https://nodejs.org/
+    pause
+    exit /b 1
+  )
+  echo [Harness] Node installed; you may need to re-open this terminal. Restarting in 2s...
+  ping 127.0.0.1 -n 3 >nul
+  start "" "%~f0"
+  exit /b 0
 )
 
-echo.
-echo [3/3] Starting dev server (http://localhost:3000/)...
->> "%LOG%" echo Running: npm run dev
-start "" "http://localhost:3000/"
-call npm run dev
+:: === Check Python ===
+where python >nul 2>nul
 if errorlevel 1 (
-  echo.
-  echo ERROR: Dev server exited with error.
-  echo Tip: If the window closes too fast, run start-dev-debug.cmd to see full logs.
-  >> "%LOG%" echo ERROR: npm run dev exited with errorlevel %errorlevel%
-  start notepad "%LOG%"
-  pause
-  exit /b 1
+  echo [Harness] Python not found. Trying winget install Python 3.11...
+  where winget >nul 2>nul
+  if errorlevel 1 (
+    echo [Harness] winget not found. Please install Python 3.11+ manually: https://www.python.org/downloads/
+    start "" https://www.python.org/downloads/
+    pause
+    exit /b 1
+  )
+  winget install -e --id Python.Python.3.11 --silent --accept-package-agreements
+  if errorlevel 1 (
+    echo [Harness] Python install aborted.
+    pause
+    exit /b 1
+  )
+  echo [Harness] Python installed. Restarting in 2s...
+  ping 127.0.0.1 -n 3 >nul
+  start "" "%~f0"
+  exit /b 0
 )
+
+:: === Install deps ===
+if not exist "node_modules" (
+  echo [Harness] Installing npm dependencies (npm ci)...
+  call npm.cmd ci
+)
+
+if not exist ".deps\fastapi" (
+  echo [Harness] .deps\fastapi not found. Installing backend dependencies into .deps...
+  call python -m pip install -r server\requirements.txt --target .deps
+  if errorlevel 1 (
+    echo [Harness] pip install --target .deps failed.
+    pause
+    exit /b 1
+  )
+) else (
+  echo [Harness] .deps already present. Skipping pip install (delete folder to re-install).
+)
+
+:: === Start FastAPI in background (hidden window) ===
+echo [Harness] Starting FastAPI backend (uvicorn port 8000)...
+start "HARNESS-FASTAPI" /MIN cmd /c "server\start-server.cmd"
+
+:: Wait a bit for backend to come up (warm-up)
+echo [Harness] Backend warm-up (4s)...
+ping 127.0.0.1 -n 5 >nul
+
+:: === Start Vite ===
+echo [Harness] Starting Vite dev server (port 3000). Launching browser...
+start "" "http://localhost:3000"
+call npm.cmd run dev
+endlocal

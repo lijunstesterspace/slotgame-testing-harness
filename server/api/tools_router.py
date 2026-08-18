@@ -1,0 +1,97 @@
+from __future__ import annotations
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
+from server.infra.security import require_user
+from server.main import shared  # type: ignore # will be defined below
+
+router = APIRouter(prefix="/api/tools", tags=["Tools"])
+
+
+class ExecuteReq(BaseModel):
+    tool_name: str
+    params: dict
+
+
+class ExecuteAsyncReq(BaseModel):
+    tool_name: str
+    params: dict
+    execution_id: str | None = None
+
+
+@router.get("/list")
+async def list_tools(user=Depends(require_user())):
+    registry = shared.tool_registry
+    return {"tools": [i.model_dump() for i in registry.list_info()],
+            "function_calling_schema": registry.as_function_calling_schema()}
+
+
+@router.post("/execute")
+async def execute_sync(req: ExecuteReq, request: Request, user=Depends(require_user())):
+    from server.tools.base import HarnessContext
+    from server.infra.storage import StorageAsync
+    storage = StorageAsync.singleton()
+    eid = req.params.pop("__execution_id", None) or f"on_demand_{user['id']}_{int(__import__('time').time()*1000)}"
+    await storage.update_execution_status if False else None
+    # lightweight: create execution row for audit
+    if not await storage.get_execution(eid):
+        eid = await storage.new_execution(user_id=user["id"], intent=f"tool_direct:{req.tool_name}",
+                                           workflow_stage=0, status="RUNNING",
+                                           llm_provider=None, llm_model=None)
+    ctx = HarnessContext(execution_id=eid, user_id=user["id"], user_role=user["role"],
+                         session_token=user["token"], work_dir="")
+    queue = shared.execution_queue
+    try:
+        res = await asyncio.wait_for(
+            queue.submit(execution_id=eid, tool_name=req.tool_name, params=req.params, context=ctx),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="tool_timeout_use_execute_async_instead")
+    await storage.update_execution_status(eid, "SUCCESS" if res.success else "FAILED",
+                                          finished_at=int(__import__("time").time()*1000),
+                                          total_ms=res.execution_ms, error_message=res.error)
+    return res.model_dump()
+
+
+@router.post("/execute-async")
+async def execute_async(req: ExecuteAsyncReq, request: Request, user=Depends(require_user())):
+    """Long-running tool dispatcher: immediately returns execution_id and runs in background task.
+    Stream progress via GET /api/executions/stream/{execution_id} (handled in executions_router via shared SSE hub)."""
+    from server.tools.base import HarnessContext
+    storage = shared.storage
+    eid = req.execution_id or await storage.new_execution(
+        user_id=user["id"], intent=f"async_tool:{req.tool_name}", workflow_stage=0,
+        status="PENDING", llm_provider=None, llm_model=None)
+    if not await storage.get_execution(eid):
+        # execution_id given but not exists → create
+        eid2 = await storage.new_execution(user_id=user["id"], intent=f"async_tool:{req.tool_name}",
+                                           workflow_stage=0, status="PENDING",
+                                           llm_provider=None, llm_model=None)
+        eid = eid2
+    await storage.update_execution_status(eid, "RUNNING")
+    ctx = HarnessContext(execution_id=eid, user_id=user["id"], user_role=user["role"],
+                         session_token=user["token"], work_dir="")
+    hub = shared.sse_hub
+
+    async def _bg():
+        async def _evt(evt):
+            await hub.publish(eid, evt)
+        try:
+            res = await shared.execution_queue.submit(
+                execution_id=eid, tool_name=req.tool_name, params=req.params,
+                context=ctx, on_event=_evt)
+            await hub.publish(eid, {"type": "HARNESS_EVENT", "content": f"Tool completed success={res.success}",
+                                    "status": "success" if res.success else "error",
+                                    "timestamp": __import__("datetime").datetime.now().strftime("%H:%M:%S")})
+            await storage.update_execution_status(eid, "SUCCESS" if res.success else "FAILED",
+                                                  finished_at=int(__import__("time").time()*1000),
+                                                  total_ms=res.execution_ms, error_message=res.error)
+            await hub.publish_done(eid, success=res.success, total_ms=res.execution_ms)
+        except Exception as e:
+            await storage.update_execution_status(eid, "FAILED", error_message=str(e))
+            await hub.publish_done(eid, success=False, total_ms=0)
+
+    asyncio.create_task(_bg())
+    return {"ok": True, "execution_id": eid}

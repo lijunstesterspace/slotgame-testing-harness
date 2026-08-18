@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,14 +30,14 @@ class Settings:
     app_name: str = "Slot AI Harness"
     api_host: str = os.getenv("HARNESS_API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("HARNESS_API_PORT", "8000"))
-    cors_origins: list[str] = [
+    cors_origins: list[str] = field(default_factory=lambda: [
         o.strip()
         for o in os.getenv(
             "HARNESS_CORS_ORIGINS",
             "http://localhost:3000,http://127.0.0.1:3000",
         ).split(",")
         if o.strip()
-    ]
+    ])
     admin_username: str = os.getenv("HARNESS_ADMIN_USERNAME", "admin")
     admin_password: str = os.getenv("HARNESS_ADMIN_PASSWORD", "admin123")
     default_tester_password: str = os.getenv("HARNESS_TESTER_PASSWORD", "test1234")

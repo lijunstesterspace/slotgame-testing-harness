@@ -1,18 +1,16 @@
 @echo off
-setlocal EnableExtensions
-
+setlocal
 cd /d "%~dp0"
-set "LOG=%~dp0healthcheck.log"
-> "%LOG%" echo === healthcheck.cmd ===
->> "%LOG%" echo Started at: %date% %time%
->> "%LOG%" echo Working dir: %cd%
-
-echo This is a simple script health check.
-echo If you can see this window, CMD scripts are allowed to run.
+echo === AI HARNESS Health Check ===
 echo.
-echo Writing log to: healthcheck.log
-
-echo OK >> "%LOG%"
-start notepad "%LOG%"
+echo [1] Vite (frontend) port 3000:
+powershell -Command "try { $r = Invoke-WebRequest -Uri http://localhost:3000 -UseBasicParsing -TimeoutSec 3; Write-Host ('  OK HTTP ' + $r.StatusCode) } catch { Write-Host ('  FAIL: ' + $_.Exception.Message) }"
+echo.
+echo [2] FastAPI (backend) port 8000:
+powershell -Command "try { $r = Invoke-WebRequest -Uri http://localhost:8000/healthz -UseBasicParsing -TimeoutSec 3; Write-Host ('  OK ' + $r.Content) } catch { Write-Host ('  FAIL: ' + $_.Exception.Message) }"
+echo.
+echo [3] Ollama (local planner model) port 11434:
+powershell -Command "try { $r = Invoke-WebRequest -Uri http://localhost:11434/api/tags -UseBasicParsing -TimeoutSec 3; Write-Host ('  OK HTTP ' + $r.StatusCode) } catch { Write-Host ('  FAIL: ' + $_.Exception.Message) }"
+echo.
 pause
-
+endlocal

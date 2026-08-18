@@ -1,252 +1,229 @@
-import { LlmProviderConfig, LlmProviderType } from '../types';
+import type { LlmProviderConfig, LlmProviderType } from "../types";
 
-export const STORAGE_KEY = 'slot_harness_llm_config';
+export const STORAGE_KEY = "slot_harness_llm_config";
 
 export const DEFAULT_LLM_CONFIG: LlmProviderConfig = {
-  provider: 'OLLAMA',
-  baseUrl: '/ollama',
-  apiKey: '',
-  selectedModel: 'qwen2.5-coder:7b',
+  provider: "OLLAMA",
+  baseUrl: "/ollama",
+  apiKey: "",
+  selectedModel: "qwen2.5-coder:7b",
   availableModels: [
-    'qwen2.5-coder:7b',
-    'deepseek-r1:8b',
-    'qwen3-vl:8b',
-    'qwen3:latest'
-  ]
+    "qwen2.5-coder:7b",
+    "deepseek-r1:8b",
+    "qwen3-vl:8b",
+    "qwen3:latest",
+  ],
 };
 
-export const PROVIDER_PRESETS: Record<LlmProviderType, { name: string; defaultUrl: string; defaultModels: string[] }> = {
+export const PROVIDER_PRESETS: Record<
+  LlmProviderType,
+  { name: string; defaultUrl: string; defaultModels: string[]; complianceRisk?: boolean }
+> = {
   OLLAMA: {
-    name: 'Local Ollama Instance',
-    defaultUrl: '/ollama',
-    defaultModels: ['qwen2.5-coder:7b', 'deepseek-r1:8b', 'qwen3-vl:8b', 'qwen3:latest']
+    name: "Local Ollama Instance (Default · 保密合规)",
+    defaultUrl: "/ollama",
+    defaultModels: ["qwen2.5-coder:7b", "deepseek-r1:8b", "qwen3-vl:8b", "qwen3:latest"],
   },
   OPENAI: {
-    name: 'OpenAI API (v1)',
-    defaultUrl: 'https://api.openai.com/v1',
-    defaultModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3-mini']
+    name: "OpenAI API (v1 · ⚠️ 外部，需确认合规)",
+    defaultUrl: "https://api.openai.com/v1",
+    defaultModels: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"],
+    complianceRisk: true,
   },
   ANTHROPIC: {
-    name: 'Anthropic Claude API',
-    defaultUrl: 'https://api.anthropic.com/v1',
-    defaultModels: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022']
+    name: "Anthropic Claude API (⚠️ 外部，需确认合规)",
+    defaultUrl: "https://api.anthropic.com/v1",
+    defaultModels: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
+    complianceRisk: true,
   },
   CUSTOM: {
-    name: 'Custom LLM Gateway / vLLM',
-    defaultUrl: 'http://localhost:8000/v1',
-    defaultModels: ['custom-slot-llm', 'qwen2.5-coder-32b', 'llama3-70b']
-  }
+    name: "Custom LLM Gateway / vLLM (⚠️ 外部，需确认合规)",
+    defaultUrl: "http://localhost:8000/v1",
+    defaultModels: ["custom-slot-llm", "qwen2.5-coder-32b", "llama3-70b"],
+    complianceRisk: true,
+  },
 };
 
-/**
- * Loads saved LLM config from localStorage or defaults.
- */
 export function loadStoredLlmConfig(): LlmProviderConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        ...DEFAULT_LLM_CONFIG,
-        ...parsed
-      };
-    }
+    if (raw) return { ...DEFAULT_LLM_CONFIG, ...JSON.parse(raw) };
   } catch (e) {
-    console.warn('Failed to load stored LLM config from localStorage', e);
+    console.warn("[llmGateway] loadStoredLlmConfig failed", e);
   }
   return DEFAULT_LLM_CONFIG;
 }
 
-/**
- * Persists LLM config to localStorage.
- */
 export function saveLlmConfig(config: LlmProviderConfig): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   } catch (e) {
-    console.error('Failed to save LLM config to localStorage', e);
+    console.error("[llmGateway] saveLlmConfig failed", e);
   }
 }
 
-/**
- * Tests HTTP connectivity to the configured LLM provider endpoint.
- */
-export async function testLlmConnection(config: LlmProviderConfig): Promise<{
+export interface LlmHealth {
   online: boolean;
   models: string[];
   latencyMs: number;
   error?: string;
-}> {
-  const startTime = Date.now();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
+}
 
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`;
-  }
-
+export async function testLlmConnection(config: LlmProviderConfig): Promise<LlmHealth> {
+  const t0 = Date.now();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
+  const lat = () => Date.now() - t0;
   try {
-    if (config.provider === 'OLLAMA') {
-      const url = `${config.baseUrl.replace(/\/$/, '')}/api/tags`;
-      const res = await fetch(url, { method: 'GET', headers });
-      const latencyMs = Date.now() - startTime;
-
-      if (!res.ok) {
-        return { online: false, models: [], latencyMs, error: `Ollama HTTP Error ${res.status}` };
-      }
-
-      const data = await res.json();
-      const models = (data.models || []).map((m: any) => m.name);
-      return { online: true, models, latencyMs };
-    } else {
-      // OpenAI / Custom endpoints: ping /models
-      let cleanUrl = config.baseUrl.replace(/\/$/, '');
-      if (!cleanUrl.endsWith('/v1') && !cleanUrl.endsWith('/models')) {
-        cleanUrl += '/v1';
-      }
-      const url = cleanUrl.endsWith('/models') ? cleanUrl : `${cleanUrl}/models`;
-
-      const res = await fetch(url, { method: 'GET', headers });
-      const latencyMs = Date.now() - startTime;
-
-      if (!res.ok) {
-        return { online: false, models: config.availableModels, latencyMs, error: `HTTP Error ${res.status}` };
-      }
-
-      const data = await res.json();
-      const models = (data.data || []).map((m: any) => m.id);
-      return {
-        online: true,
-        models: models.length > 0 ? models : config.availableModels,
-        latencyMs
-      };
+    if (config.provider === "OLLAMA") {
+      const res = await fetch(`${stripSlash(config.baseUrl)}/api/tags`, { method: "GET", headers });
+      if (!res.ok) return { online: false, models: [], latencyMs: lat(), error: `Ollama HTTP ${res.status}` };
+      const d = await res.json();
+      return { online: true, models: (d.models ?? []).map((m: any) => m.name), latencyMs: lat() };
     }
+    let base = stripSlash(config.baseUrl);
+    if (!/\/v1$/.test(base) && !/\/models$/.test(base)) base += "/v1";
+    const url = base.endsWith("/models") ? base : `${base}/models`;
+    const res = await fetch(url, { method: "GET", headers });
+    if (!res.ok) return { online: false, models: config.availableModels, latencyMs: lat(), error: `HTTP ${res.status}` };
+    const d = await res.json();
+    const models = (d.data ?? []).map((m: any) => m.id);
+    return { online: true, models: models.length ? models : config.availableModels, latencyMs: lat() };
   } catch (err: any) {
-    const latencyMs = Date.now() - startTime;
-    return {
-      online: false,
-      models: config.availableModels,
-      latencyMs,
-      error: err?.message || `Failed to connect to ${config.baseUrl}`
-    };
+    return { online: false, models: config.availableModels, latencyMs: lat(), error: err?.message ?? `Failed to connect ${config.baseUrl}` };
   }
 }
 
 export interface UniversalChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: "system" | "user" | "assistant";
   content: string;
+  images?: string[];
 }
 
-/**
- * Universal SSE chat streaming for Ollama, OpenAI-compatible APIs, or Custom Gateways.
- */
 export async function streamUniversalLlmChat(
   config: LlmProviderConfig,
   messages: UniversalChatMessage[],
   onChunk: (chunkText: string) => void,
-  signal?: AbortSignal
-): Promise<string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
+  signal?: AbortSignal,
+): Promise<{ fullText: string; tokensInEstimate: number; tokensOutEstimate: number }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
+  if (config.provider === "ANTHROPIC") headers["x-api-key"] = config.apiKey ?? "";
 
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`;
-  }
+  const tokensInEstimate = messages.reduce((n, m) => n + Math.ceil(m.content.length / 3.5), 0) | 0;
+  let tokensOutEstimate = 0;
+  let fullText = "";
 
-  let fullResponse = '';
-
-  if (config.provider === 'OLLAMA') {
-    const url = `${config.baseUrl.replace(/\/$/, '')}/api/chat`;
+  if (config.provider === "OLLAMA") {
+    const url = `${stripSlash(config.baseUrl)}/api/chat`;
     const res = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers,
-      body: JSON.stringify({
-        model: config.selectedModel,
-        messages,
-        stream: true
-      }),
-      signal
+      body: JSON.stringify({ model: config.selectedModel, messages, stream: true }),
+      signal,
     });
-
-    if (!res.ok) throw new Error(`Ollama Error ${res.status}: ${await res.text()}`);
-    if (!res.body) throw new Error('ReadableStream not supported.');
-
+    if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
+    if (!res.body) throw new Error("ReadableStream unsupported");
     const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-
+    const dec = new TextDecoder("utf-8");
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter((l) => l.trim() !== '');
-
-      for (const line of lines) {
+      const chunk = dec.decode(value, { stream: true });
+      for (const line of chunk.split("\n").filter(Boolean)) {
         try {
-          const json = JSON.parse(line);
-          if (json.message?.content) {
-            const token = json.message.content;
-            fullResponse += token;
-            onChunk(token);
+          const j = JSON.parse(line);
+          const c = j.message?.content ?? "";
+          if (c) {
+            fullText += c;
+            tokensOutEstimate += Math.max(1, Math.ceil(c.length / 3.5));
+            onChunk(c);
           }
-        } catch {
-          // ignore stream parse errors
-        }
+        } catch {}
+      }
+    }
+  } else if (config.provider === "ANTHROPIC") {
+    const url = `${stripSlash(config.baseUrl).replace(/\/v1$/, "")}/v1/messages`;
+    const systemMsg = messages.find((m) => m.role === "system")?.content ?? "";
+    const userOnly = messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content }));
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...headers, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: config.selectedModel,
+        system: systemMsg,
+        messages: userOnly,
+        max_tokens: 4096,
+        stream: true,
+      }),
+      signal,
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+    if (!res.body) throw new Error("ReadableStream unsupported");
+    const reader = res.body.getReader();
+    const dec = new TextDecoder("utf-8");
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = dec.decode(value, { stream: true });
+      for (const rawLine of chunk.split("\n").filter(Boolean)) {
+        if (!rawLine.startsWith("data:")) continue;
+        const payload = rawLine.replace(/^data:\s*/, "").trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          if (j.type === "content_block_delta" && j.delta?.type === "text_delta") {
+            const c = j.delta.text ?? "";
+            if (c) {
+              fullText += c;
+              tokensOutEstimate += Math.max(1, Math.ceil(c.length / 3.5));
+              onChunk(c);
+            }
+          }
+        } catch {}
       }
     }
   } else {
-    // OpenAI / Custom OpenAI-compatible /v1/chat/completions endpoint
-    let endpointUrl = config.baseUrl.replace(/\/$/, '');
-    if (!endpointUrl.endsWith('/chat/completions')) {
-      if (!endpointUrl.endsWith('/v1')) {
-        endpointUrl += '/v1';
-      }
-      endpointUrl += '/chat/completions';
+    // OpenAI / Custom OpenAI-compatible /v1/chat/completions
+    let url = stripSlash(config.baseUrl);
+    if (!url.endsWith("/chat/completions")) {
+      if (!url.endsWith("/v1")) url += "/v1";
+      url += "/chat/completions";
     }
-
-    const res = await fetch(endpointUrl, {
-      method: 'POST',
+    const res = await fetch(url, {
+      method: "POST",
       headers,
-      body: JSON.stringify({
-        model: config.selectedModel,
-        messages,
-        stream: true
-      }),
-      signal
+      body: JSON.stringify({ model: config.selectedModel, messages, stream: true }),
+      signal,
     });
-
-    if (!res.ok) throw new Error(`LLM Gateway Error ${res.status}: ${await res.text()}`);
-    if (!res.body) throw new Error('ReadableStream not supported.');
-
+    if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);
+    if (!res.body) throw new Error("ReadableStream unsupported");
     const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-
+    const dec = new TextDecoder("utf-8");
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter((l) => l.startsWith('data:'));
-
-      for (const line of lines) {
-        const payload = line.replace(/^data:\s*/, '').trim();
-        if (payload === '[DONE]') break;
-
+      const chunk = dec.decode(value, { stream: true });
+      for (const rawLine of chunk.split("\n").filter(Boolean)) {
+        if (!rawLine.startsWith("data:")) continue;
+        const payload = rawLine.replace(/^data:\s*/, "").trim();
+        if (!payload || payload === "[DONE]") continue;
         try {
-          const json = JSON.parse(payload);
-          const token = json.choices?.[0]?.delta?.content;
-          if (token) {
-            fullResponse += token;
-            onChunk(token);
+          const j = JSON.parse(payload);
+          const c = j.choices?.[0]?.delta?.content ?? "";
+          if (c) {
+            fullText += c;
+            tokensOutEstimate += Math.max(1, Math.ceil(c.length / 3.5));
+            onChunk(c);
           }
-        } catch {
-          // ignore partial json
-        }
+        } catch {}
       }
     }
   }
 
-  return fullResponse;
+  return { fullText, tokensInEstimate: tokensInEstimate | 0, tokensOutEstimate: tokensOutEstimate | 0 };
+}
+
+function stripSlash(u: string): string {
+  return u.replace(/\/+$/, "");
 }

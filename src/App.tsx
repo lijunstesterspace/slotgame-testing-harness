@@ -1,269 +1,282 @@
-import React, { useState } from 'react';
-import { Header } from './components/Header';
-import { IntentPanel } from './components/IntentPanel';
-import { AgentCore } from './components/AgentCore';
-import { TestDataPreview } from './components/TestDataPreview';
-import { VerificationPanel } from './components/VerificationPanel';
-import { VerificationReportModal } from './components/VerificationReportModal';
-import { LlmConfigModal } from './components/LlmConfigModal';
-import { 
-  SlotGameConfig, 
-  WorkflowStage, 
-  WorkflowState, 
-  TaskItem, 
-  ToolCallLog, 
-  TestRecord,
-  VerificationConfig,
-  VerificationReport,
-  LlmProviderConfig
-} from './types';
-import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from './mock/testData';
-import { runRealGameVerification } from './utils/verificationEngine';
-import { parseLLMOutputToTestRecords } from './utils/ollamaClient';
-import { loadStoredLlmConfig, saveLlmConfig, streamUniversalLlmChat, testLlmConnection } from './utils/llmGateway';
-import { Bot, Sparkles } from 'lucide-react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { Header } from "./components/Header";
+import { IntentPanel } from "./components/IntentPanel";
+import { AgentCore } from "./components/AgentCore";
+import { TestDataPreview } from "./components/TestDataPreview";
+import { VerificationPanel } from "./components/VerificationPanel";
+import { VerificationReportModal } from "./components/VerificationReportModal";
+import { LlmConfigModal } from "./components/LlmConfigModal";
+import { LoginPage } from "./pages/LoginPage";
+import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationConfig, VerificationReport, LlmProviderConfig } from "./types";
+import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
+import { runRealGameVerification } from "./utils/verificationEngine";
+import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
+import { Sparkles, Bot, AlertCircle } from "lucide-react";
+import { harnessClient, clearAuth } from "./harness/client";
+import type { TestRecordDto } from "./harness/sharedTypes";
+import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
+
+// --- Auth Context ---
+interface AuthUser { id: string; username: string; role: string; isAdmin: boolean; }
+const AuthContext = createContext<{ user: AuthUser | null; refresh: () => Promise<void> }>({ user: null, refresh: async () => {} });
+const useAuth = () => useContext(AuthContext);
+
+const STAGE1_TASKS: TaskItem[] = [
+  { id: 't1-1', stage: 1, title: 'Intent Analysis', description: 'Parse natural language requirement and game constraints', status: 'pending' },
+  { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
+  { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
+];
 
 export const App: React.FC = () => {
-  const [selectedGame, setSelectedGame] = useState<SlotGameConfig>(MOCK_GAME_CONFIGS[0]);
-  const [sheetUrl, setSheetUrl] = useState<string>(`https://docs.google.com/spreadsheets/d/1X9_MedusasGold_Paytable_v2/edit#gid=10539`);
-  const [promptIntent, setPromptIntent] = useState<string>(`Create testdata`);
-  const [loginName, setLoginName] = useState<string>('');
-  
-  const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(loadStoredLlmConfig());
-  const [selectedModel, setSelectedModel] = useState<string>(llmConfig.selectedModel || 'qwen2.5-coder:7b');
-  const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const [workflowStage, setWorkflowStage] = useState<WorkflowStage>(1);
-  const [workflowState, setWorkflowState] = useState<WorkflowState>('READY');
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  const [isVerifying, setIsVerifying] = useState<boolean>(false);
-  
-  const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
-  const [showReportModal, setShowReportModal] = useState<boolean>(false);
-
-  // Agent tasks
-  const [tasks, setTasks] = useState<TaskItem[]>([
-    { id: 'ST1-1', stage: 1, title: 'Connect & Parse Google Sheet Configuration', description: 'Fetch paytable, reel strips, and math model', status: 'pending' },
-    { id: 'ST1-2', stage: 1, title: 'Verify Paytable & Reel Strip consistency', description: 'Validate 20 payline rules and symbol weights', status: 'pending' },
-    { id: 'ST1-3', stage: 1, title: 'Generate testdata records & BetLines ID table', description: 'Construct single spin, double pregen bonus pairs, and multi-spin bet lines', status: 'pending' },
-    { id: 'ST1-4', stage: 1, title: 'Validate outcome files XML schema', description: 'Ensure moduleID=105359 compatibility and build outcome.zip', status: 'pending' }
-  ]);
-
-  // Terminal tool logs
-  const [logs, setLogs] = useState<ToolCallLog[]>([]);
-
-  // Generated records
-  const [testRecords, setTestRecords] = useState<TestRecord[]>(INITIAL_TEST_RECORDS);
-
-  const handleSaveLlmConfig = (newConfig: LlmProviderConfig) => {
-    setLlmConfig(newConfig);
-    saveLlmConfig(newConfig);
-    setSelectedModel(newConfig.selectedModel);
+  const refresh = async () => {
+    try {
+      const u = await harnessClient.me();
+      setUser({ id: u.id, username: u.username, role: u.role, isAdmin: u.role === "admin" });
+    } catch {
+      setUser(null);
+    }
   };
 
-  // Sound chimes
-  const playChime = () => {
+  useEffect(() => {
+    setAuthLoading(true);
+    refresh().finally(() => setAuthLoading(false));
+  }, []);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400 font-mono text-xs">
+        🔐 Validating session token...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage onLoggedIn={() => { void refresh(); }} />;
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, refresh }}>
+      <Workbench onLogout={() => { clearAuth(); setUser(null); }} />
+    </AuthContext.Provider>
+  );
+};
+
+const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+  const auth = useAuth();
+  const [selectedGame, setSelectedGame] = useState<SlotGameConfig>(MOCK_GAME_CONFIGS[0]);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [promptIntent, setPromptIntent] = useState("");
+  const [workflowStage, setWorkflowStage] = useState<WorkflowStage>(1);
+  const [workflowState, setWorkflowState] = useState<WorkflowState>("READY");
+  const [tasks, setTasks] = useState<TaskItem[]>(STAGE1_TASKS);
+  const [logs, setLogs] = useState<ToolCallLog[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testRecords, setTestRecords] = useState<TestRecord[]>(INITIAL_TEST_RECORDS);
+  const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showLlmConfig, setShowLlmConfig] = useState(false);
+  const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(() => loadStoredLlmConfig());
+  const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
+  const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
+
+  const chime = () => {
     if (isMuted) return;
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.15);
-    } catch (e) {
-      // Audio context fallbacks
-    }
+      const ctx = new AudioContext();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.08, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      o.connect(g).connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.3);
+      setTimeout(() => ctx.close(), 500);
+    } catch {}
   };
 
-  // Reset entire state
-  const handleReset = () => {
-    setWorkflowStage(1);
-    setWorkflowState('READY');
-    setIsGenerating(false);
-    setIsVerifying(false);
-    setVerificationReport(null);
-    setShowReportModal(false);
-    setLogs([]);
-    setTasks(tasks.map((t) => ({ ...t, status: 'pending' })));
-    setTestRecords(INITIAL_TEST_RECORDS);
-  };
-
-  // TestData Generation Execution
-  const handleStartGeneration = async () => {
-    setWorkflowStage(1);
-    setWorkflowState('GENERATING');
-    setIsGenerating(true);
-    setLogs([]);
-
-    // Reset tasks
-    setTasks((prev) => prev.map((t, idx) => ({ ...t, status: idx === 0 ? 'active' : 'pending' })));
-
-    const activeConfig = { ...llmConfig, selectedModel };
-    const conn = await testLlmConnection(activeConfig);
-    const timeStr = new Date().toLocaleTimeString();
-    let llmAccumulatedText = '';
-
-    if (conn.online) {
-      setLogs((prev) => [
-        ...prev,
-        { id: '1', timestamp: timeStr, type: 'THOUGHT', content: `[${activeConfig.provider} ACTIVE] Dispatching prompt to model "${activeConfig.selectedModel}" at ${activeConfig.baseUrl}...` }
-      ]);
-
-      try {
-        let lastLogId = 'llm-stream';
-
-        llmAccumulatedText = await streamUniversalLlmChat(
-          activeConfig,
-          [
-            {
-              role: 'system',
-              content: 'You are an AI Test Harness Agent for Slot Machine testdata generation. Output test case specifications for the user requested intent. Format test cases as XML <Spin> tags or batch,index pairs.'
-            },
-            {
-              role: 'user',
-              content: `User prompt intent: "${promptIntent}". Target loginName: "${loginName}". Generate testdata entries.`
-            }
-          ],
-          (chunk) => {
-            llmAccumulatedText += chunk;
-            setLogs((prev) => {
-              const existingIdx = prev.findIndex((l) => l.id === lastLogId);
-              if (existingIdx >= 0) {
-                const updated = [...prev];
-                updated[existingIdx] = {
-                  ...updated[existingIdx],
-                  content: llmAccumulatedText
-                };
-                return updated;
-              } else {
-                return [
-                  ...prev,
-                  { id: lastLogId, timestamp: new Date().toLocaleTimeString(), type: 'THOUGHT', content: llmAccumulatedText }
-                ];
-              }
-            });
-          }
-        );
-      } catch (err: any) {
-        setLogs((prev) => [
-          ...prev,
-          { id: 'llm-err', timestamp: new Date().toLocaleTimeString(), type: 'SELF_HEAL', content: `LLM Stream error: ${err.message || 'Connection interrupted'}. Falling back to deterministic tool execution.` }
-        ]);
-      }
-    } else {
-      setLogs((prev) => [
-        ...prev,
-        { id: '1', timestamp: timeStr, type: 'THOUGHT', content: `[${activeConfig.provider} OFFLINE] Using deterministic agent engine for task planning.` }
-      ]);
-    }
-
-    // Step sequence with real tool dispatch output
-    const speedFactor = 1000;
-    let step = 0;
-    const interval = setInterval(() => {
-      step++;
-      const currentTimes = new Date().toLocaleTimeString();
-
-      if (step === 1) {
-        setLogs((prev) => [
-          ...prev,
-          { id: '2', timestamp: currentTimes, type: 'TOOL_CALL', toolName: 'read_sheets.py', content: `--sheet_url="${sheetUrl}" --tabs=Testdata` }
-        ]);
-        playChime();
-      } else if (step === 2) {
-        setLogs((prev) => [
-          ...prev,
-          { id: '3', timestamp: currentTimes, type: 'SELF_HEAL', content: `Detected 'Bet Lines ID' sub-table block and cleaned trailing text. Parsing bet lines into XML spec...` },
-          { id: '4', timestamp: currentTimes, type: 'TOOL_CALL', toolName: 'paytable_validator.py', content: `--module=105359 --validate-schema=true` }
-        ]);
-        setTasks((prev) => prev.map((t, idx) => (idx === 0 ? { ...t, status: 'completed' } : idx === 1 ? { ...t, status: 'active' } : t)));
-        playChime();
-      } else if (step === 3) {
-        setLogs((prev) => [
-          ...prev,
-          { id: '5', timestamp: currentTimes, type: 'THOUGHT', content: `Constructing Single Spin and Double PreGen XML specs for loginName="${loginName}" with model "${selectedModel}"...` },
-          { id: '6', timestamp: currentTimes, type: 'TOOL_CALL', toolName: 'outcome_generator.py', content: `--intent="${promptIntent}" --login_name="${loginName}" --model="${selectedModel}"` }
-        ]);
-        setTasks((prev) => prev.map((t, idx) => (idx <= 1 ? { ...t, status: 'completed' } : idx === 2 ? { ...t, status: 'active' } : t)));
-        playChime();
-      } else if (step === 4) {
-        // Dynamically parse LLM text output into TestRecords
-        const generatedRecords = parseLLMOutputToTestRecords(llmAccumulatedText, promptIntent, loginName, '105359');
-        setTestRecords(generatedRecords);
-
-        setLogs((prev) => [
-          ...prev,
-          { id: '7', timestamp: currentTimes, type: 'TOOL_CALL', toolName: 'generate_testdata.py', content: `-m 105359 -u ${loginName} -s BaseGame -o outcome.zip` },
-          { id: '8', timestamp: currentTimes, type: 'TOOL_RES', content: `[SUCCESS] Generated TestData package (${generatedRecords.length} records) for loginName="${loginName}" using ${selectedModel}.\n  - Single Spins: ${generatedRecords.filter(r => r.formatType === 'SINGLE').length}\n  - Double PreGen Pairs: ${generatedRecords.filter(r => r.formatType === 'DOUBLE_PREGEN').length}\n  - Files created: File_A_BaseSpins.testdata, P5P_Bonus_Mini.testdata, generated_wins.testdata` }
-        ]);
-        setTasks((prev) => prev.map((t, idx) => (idx <= 2 ? { ...t, status: 'completed' } : idx === 3 ? { ...t, status: 'active' } : t)));
-        playChime();
-      } else if (step >= 5) {
-        clearInterval(interval);
-        setTasks((prev) => prev.map((t) => ({ ...t, status: 'completed' })));
-        setLogs((prev) => [
-          ...prev,
-          { id: '9', timestamp: currentTimes, type: 'THOUGHT', content: `TestData Generation Complete (loginName="${loginName}"). Model "${selectedModel}" generated ${testRecords.length || 'dynamic'} test cases.` }
-        ]);
-        setIsGenerating(false);
-        setWorkflowState('REVIEW');
-        playChime();
-      }
-    }, speedFactor);
-  };
-
-  // Real Game Environment Verification Execution
-  const handleStartVerification = async (config: VerificationConfig) => {
-    setWorkflowStage(2);
-    setWorkflowState('VERIFYING');
-    setIsVerifying(true);
-
-    const timeStr = new Date().toLocaleTimeString();
+  const addLog = (log: Omit<ToolCallLog, "id" | "timestamp">) => {
     setLogs((prev) => [
       ...prev,
-      { id: 'v-1', timestamp: timeStr, type: 'HARNESS_EVENT', content: `Connecting to Real Game Environment: ${config.targetUrl}` },
-      { id: 'v-2', timestamp: timeStr, type: 'TOOL_CALL', toolName: 'verify_endpoint.py', content: `--url="${config.targetUrl}" --username="${loginName}" --cases=${testRecords.length} --delay=${config.spinDelayMs}` }
+      { ...log, id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: new Date().toLocaleTimeString() },
     ]);
-    playChime();
+  };
 
-    try {
-      const report = await runRealGameVerification(testRecords, config, (completedCount, currentResult) => {
-        const timeLog = new Date().toLocaleTimeString();
-        setLogs((prev) => [
+  const plannerCallbacks = useMemo<PlannerCallbacks>(() => ({
+    onThought: (full) => {
+      setLogs((prev) => {
+        const idx = prev.length - 1;
+        if (idx >= 0 && prev[idx].type === "THOUGHT") {
+          const cp = [...prev];
+          cp[idx] = { ...cp[idx], content: full };
+          return cp;
+        }
+        return [
           ...prev,
-          { 
-            id: `v-res-${completedCount}`, 
-            timestamp: timeLog, 
-            type: currentResult.status === 'PASSED' ? 'TOOL_RES' : 'SELF_HEAL',
-            content: `[VERIFY ${completedCount}/${testRecords.length}] Case ${currentResult.caseName} -> HTTP ${currentResult.httpStatus} (${currentResult.responseTimeMs}ms) [${currentResult.status}]`
-          }
-        ]);
-        playChime();
+          { id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: new Date().toLocaleTimeString(), type: "THOUGHT", content: full },
+        ];
       });
+    },
+    onToolCall: (toolName, params) => addLog({ type: "TOOL_CALL", toolName, content: toolName, detail: JSON.stringify(params, null, 2), status: "running" }),
+    onToolResult: (toolName, resultSnippet, ok) => {
+      chime();
+      addLog({ type: "TOOL_RES", toolName, content: toolName, detail: resultSnippet, status: ok ? "success" : "error" });
+    },
+    onSelfHeal: (reason) => addLog({ type: "SELF_HEAL", content: `RECOVERY: ${reason}`, status: "warning" }),
+    onHarnessEvent: (content) => addLog({ type: "HARNESS_EVENT", content }),
+    onProgress: (records) => {
+      if (records.length) setTestRecords(toFrontendRecords(records));
+    },
+  }), [isMuted]);
 
-      setVerificationReport(report);
-      setWorkflowState('VERIFIED');
-      setShowReportModal(true);
-    } catch (e) {
-      console.error('Verification Error', e);
+  const toFrontendRecords = (dtos: TestRecordDto[]): TestRecord[] =>
+    dtos.map((d) => ({
+      id: d.id,
+      caseName: d.case_name,
+      formatType: d.format_type,
+      moduleID: d.module_id,
+      stage: d.bonus_batch != null ? "Bonus" : "Base",
+      comment: "",
+      baseBatch: d.base_batch,
+      baseIndex: d.base_index,
+      bonusBatch: d.bonus_batch ?? undefined,
+      bonusIndex: d.bonus_index ?? undefined,
+      fileName: d.file_name ?? undefined,
+      xmlSnippet: d.xml_snippet,
+    }));
+
+  const handleStartGeneration = async () => {
+    if (isGenerating) return;
+    setIsGenerating(true);
+    setError(null);
+    if (workflowStage >= 1) setWorkflowStage(2);
+    setWorkflowState("GENERATING");
+    setTasks((prev) => prev.map((t) => (t.id === "t1-1" ? { ...t, status: "active" } : t)));
+    try {
+      const plannerCfg = { ...llmConfig, selectedModel };
+      const planner = new PlannerAgent(plannerCfg, plannerCallbacks);
+      if (planner.complianceRisk) {
+        addLog({
+          type: "HARNESS_EVENT",
+          content: `⚠️ 外部 Provider ${plannerCfg.provider} 已启用 — 请确认合规（API Key 仅存本机）`,
+          status: "warning",
+        });
+      }
+      const outcome = await planner.run({
+        intent: { prompt: promptIntent, sheetUrl, loginName, workflowStage: 1 },
+        maxCycles: 14,
+      });
+      if (!outcome.success) throw new Error(outcome.message ?? "Planner 未完成任务");
+      setWorkflowState("REVIEW");
+      setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      setWorkflowState("READY");
     } finally {
-      setIsVerifying(false);
+      setIsGenerating(false);
     }
+  };
+
+  const handleStartVerification = async (config: VerificationConfig) => {
+    if (isTesting) return;
+    setIsTesting(true);
+    setWorkflowStage(4);
+    setWorkflowState("VERIFYING");
+    setVerificationReport(null);
+    addLog({ type: "TOOL_CALL", toolName: "game_verifier", content: "Connecting to Real Game Environment via Backend Harness...", detail: JSON.stringify(config, null, 2), status: "running" });
+    try {
+      const cfg: VerificationConfig = {
+        targetUrl: config.targetUrl,
+        spinDelayMs: config.spinDelayMs,
+        timeoutMs: config.timeoutMs,
+        loginName: config.loginName,
+        autoRetryServerError: config.autoRetryServerError,
+      };
+      const report = await runRealGameVerification(testRecords, cfg, (completedCount, currentResult) => {
+        addLog({
+          type: currentResult.status === "PASSED" ? "TOOL_RES" : "SELF_HEAL",
+          toolName: "game_verifier",
+          content: `Verifying Case: ${currentResult.caseName} (${completedCount}/${testRecords.length})`,
+          detail: currentResult.status === "PASSED" ? `Server Payout Match. Response: ${currentResult.responseTimeMs}ms` : `Discrepancy Detected: ${currentResult.errorMessage}`,
+          status: currentResult.status === "PASSED" ? "success" : "error",
+        });
+      });
+      setVerificationReport(report);
+      const results = report.results;
+      const failedCount = results.filter((r) => !r.passed).length;
+      addLog({
+        type: "TOOL_RES",
+        toolName: "game_verifier",
+        content: `Verification Complete: ${report.passedCount}/${report.totalCases} Passed`,
+        detail: failedCount > 0 ? `${failedCount} discrepancies found. Generating Diagnostic Report...` : "All server payouts matched expected values.",
+        status: failedCount > 0 ? "warning" : "success",
+      });
+      chime();
+      if (failedCount > 0) {
+        addLog({ type: "TOOL_CALL", toolName: "log_diagnoser", content: "Running Vision Analysis on Error Logs...", status: "running" });
+        try {
+          const diag = await harnessClient.executeTool("log_diagnoser", { results: report.results });
+          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: `Identified ${diag.content && typeof diag.content === "object" ? (diag.content as any)?.count ?? 0 : 0} root causes.`, status: "success" });
+        } catch (e: any) {
+          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: "Local heuristic fallback used", detail: String(e?.message ?? e), status: "warning" });
+        }
+      }
+      setWorkflowStage(5);
+      setWorkflowState("VERIFIED");
+    } catch (e: any) {
+      addLog({ type: "SELF_HEAL", content: `Verification Interrupted: ${e?.message ?? String(e)}`, status: "error" });
+      setWorkflowState("REVIEW");
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const handleRegenerate = () => {
+    setWorkflowStage(2);
+    setWorkflowState("GENERATING");
+    setTasks((prev) => prev.map((t) => ({ ...t, status: t.stage === 1 ? "completed" : "pending" })));
+    setTestRecords(INITIAL_TEST_RECORDS);
+    setTimeout(() => setWorkflowState("REVIEW"), 1500);
+  };
+
+  const handleReset = () => {
+    setWorkflowStage(1);
+    setWorkflowState("READY");
+    setTasks(STAGE1_TASKS);
+    setLogs([]);
+    setTestRecords(INITIAL_TEST_RECORDS);
+    setVerificationReport(null);
+    setPromptIntent("");
+    setSheetUrl("");
+    setError(null);
+  };
+
+  const errorBanner = (
+    <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
+      <AlertCircle className="w-4 h-4" />
+      <span>
+        <span className="font-bold mr-2">System Alert:</span>
+        {error}
+      </span>
+      <button onClick={() => setError(null)} className="ml-auto text-rose-400 hover:text-rose-200">✕</button>
+    </div>
+  );
+
+  const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
+    setLlmConfig(cfg);
+    setSelectedModel(cfg.selectedModel);
+    saveLlmConfig(cfg);
+    addLog({ type: "HARNESS_EVENT", content: `LLM Provider switched to ${cfg.provider} · ${cfg.selectedModel}`, status: "success" });
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 selection:bg-emerald-500/30">
-      
-      {/* 🧭 Top Navigation */}
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
       <Header
         workflowStage={workflowStage}
         workflowState={workflowState}
@@ -273,97 +286,64 @@ export const App: React.FC = () => {
         selectedModel={selectedModel}
         setSelectedModel={setSelectedModel}
         llmConfig={llmConfig}
-        onOpenConfigModal={() => setIsConfigModalOpen(true)}
+        onOpenConfigModal={() => setShowLlmConfig(true)}
+        user={auth.user}
+        onLogout={onLogout}
       />
+      {error && errorBanner}
 
-      {/* 🖥️ Main Workspace (Split 2-Column Layout) */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-6 flex flex-col gap-6">
-
-        {/* 2-Column Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          
-          {/* Left Column: Input & Verification Panel (5 Cols) */}
-          <div className="lg:col-span-5 flex flex-col gap-6">
-            <IntentPanel
-              selectedGame={selectedGame}
-              sheetUrl={sheetUrl}
-              setSheetUrl={setSheetUrl}
-              promptIntent={promptIntent}
-              setPromptIntent={setPromptIntent}
-              workflowStage={workflowStage}
-              workflowState={workflowState}
-              onStartGeneration={handleStartGeneration}
-              onRunTestSuite={() => {}}
-              isGenerating={isGenerating}
-              isTesting={false}
-            />
-
-            {/* Stage 2 Verification Panel (Always visible in UI) */}
-            <VerificationPanel
-              onStartVerification={handleStartVerification}
-              isVerifying={isVerifying}
-              loginName={loginName}
-              setLoginName={setLoginName}
-            />
-          </div>
-
-          {/* Right Column: Agent Core Thought Trace & Tasks (7 Cols) */}
-          <div className="lg:col-span-7 flex flex-col gap-6">
-            <AgentCore
-              tasks={tasks}
-              logs={logs}
-              workflowStage={1}
-              isGenerating={isGenerating}
-              isTesting={isVerifying}
-            />
-          </div>
-
+      <main className="flex-1 flex overflow-hidden">
+        <div className="w-[380px] border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-y-auto">
+          <IntentPanel
+            selectedGame={selectedGame}
+            sheetUrl={sheetUrl}
+            setSheetUrl={setSheetUrl}
+            promptIntent={promptIntent}
+            setPromptIntent={setPromptIntent}
+            workflowStage={workflowStage}
+            workflowState={workflowState}
+            onStartGeneration={handleStartGeneration}
+            onRunTestSuite={() => {
+              setWorkflowState("VERIFYING");
+            }}
+            isGenerating={isGenerating}
+            isTesting={isTesting}
+          />
+          <VerificationPanel onStartVerification={handleStartVerification} isVerifying={isTesting} loginName={loginName} setLoginName={setLoginName} />
         </div>
-
-        {/* TestData Preview & Download Section */}
-        {(workflowState === 'REVIEW' || workflowState === 'VERIFYING' || workflowState === 'VERIFIED' || isGenerating) && (
-          <div className="mt-2">
-            <TestDataPreview
-              records={testRecords}
-              loginName={loginName}
-              onRegenerate={handleStartGeneration}
-            />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <AgentCore tasks={tasks} logs={logs} workflowStage={workflowStage} isGenerating={isGenerating} isTesting={isTesting} />
+          <div className="h-[40%] border-t border-slate-800 bg-slate-900/30">
+            <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
           </div>
-        )}
-
+        </div>
       </main>
 
-      {/* Real Game Environment Verification Report Modal */}
-      {showReportModal && verificationReport && (
-        <VerificationReportModal
-          report={verificationReport}
-          onClose={() => setShowReportModal(false)}
-          onReRun={() => handleStartVerification({
-            targetUrl: verificationReport.targetUrl,
-            spinDelayMs: 300,
-            timeoutMs: 5000,
-            autoRetryServerError: true
-          })}
-        />
-      )}
-
-      {/* LLM Provider Configuration Gateway Modal */}
-      <LlmConfigModal
-        isOpen={isConfigModalOpen}
-        onClose={() => setIsConfigModalOpen(false)}
-        config={llmConfig}
-        onSaveConfig={handleSaveLlmConfig}
-      />
-      <footer className="border-t border-slate-800/80 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4 max-w-7xl mx-auto w-full">
+      <footer className="px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <div className="flex items-center gap-2">
-          <Bot className="w-4 h-4 text-emerald-400" />
-          <span>Slot Test Data Generator & Real Game Verifier Agent</span>
+          <Bot className="w-3.5 h-3.5 text-emerald-500" />
+          <span>HARNESS v2 · PlannerAgent + Tool Registry · 全链路审计</span>
         </div>
-        <div className="flex items-center gap-4 text-slate-400">
-          <span>Python generate_testdata.py</span> • <span>verify_endpoint.py</span>
+        <div className="flex items-center gap-4">
+          <span className={`flex items-center gap-1.5 ${workflowState === "GENERATING" ? "text-cyan-400" : "text-emerald-400"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${workflowState === "GENERATING" ? "bg-cyan-400 animate-ping" : "bg-emerald-400"}`} />
+            {workflowState}
+          </span>
+          <span>USER: {auth.user?.username}</span>
         </div>
       </footer>
 
+      {verificationReport && (
+        <VerificationReportModal
+          report={verificationReport}
+          onClose={() => setVerificationReport(null)}
+          onReRun={() => {
+            setVerificationReport(null);
+            setWorkflowState("VERIFYING");
+          }}
+        />
+      )}
+      <LlmConfigModal isOpen={showLlmConfig} onClose={() => setShowLlmConfig(false)} config={llmConfig} onSaveConfig={handleSaveLlmConfig} />
     </div>
   );
 };

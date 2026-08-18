@@ -1,4 +1,4 @@
-export type WorkflowStage = 1 | 2;
+export type WorkflowStage = 1 | 2 | 3 | 4 | 5;
 
 export type WorkflowState = 
   | 'READY'         // Ready to generate
@@ -57,12 +57,15 @@ export interface VerificationConfig {
   timeoutMs: number;
   autoRetryServerError: boolean;
   authToken?: string;
+  loginName?: string;
+  timeoutSeconds?: number;
 }
 
 export interface VerificationResult {
   recordId: string;
   caseName: string;
   status: 'PASSED' | 'DISCREPANCY' | 'ERROR';
+  passed: boolean;
   httpStatus: number;
   responseTimeMs: number;
   serverPayout?: number;

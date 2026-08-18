@@ -95,6 +95,23 @@ async def audit_llm(req: LLMAuditReq, user=Depends(require_user())):
     return {"ok": True}
 
 
+class NewExecutionReq(BaseModel):
+    intent: str = ""
+    workflow_stage: int = 1
+    llm_provider: str | None = None
+    llm_model: str | None = None
+
+
+@router.post("/new")
+async def new_execution(req: NewExecutionReq, user=Depends(require_user())):
+    storage: StorageAsync = shared.storage
+    eid = await storage.new_execution(user_id=user["id"], intent=req.intent[:500],
+                                      workflow_stage=int(req.workflow_stage),
+                                      status="RUNNING",
+                                      llm_provider=req.llm_provider, llm_model=req.llm_model)
+    return {"execution_id": eid}
+
+
 # ---- helpers ----
 def _now_ts() -> str:
     return datetime.now().strftime("%H:%M:%S")

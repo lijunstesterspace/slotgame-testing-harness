@@ -81,7 +81,7 @@ export async function runRealGameVerification(
           summary = {
             passed: Number(inner.passed ?? 0),
             failed: Number(inner.failed ?? 0),
-            total: Number(inner.total ?? inner.passed + inner.failed ?? 0),
+            total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
           };
           if (Array.isArray(inner.cases)) parsed_cases = inner.cases;
         }

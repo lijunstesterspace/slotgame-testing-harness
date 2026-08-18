@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock Slot Game for Verification</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #222;
+            color: #fff;
+            text-align: center;
+            padding: 50px;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 18px;
+            cursor: pointer;
+            background-color: #ff3366;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        .status {
+            margin-top: 30px;
+            font-size: 24px;
+            color: #00ffcc;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mock Slot Game</h1>
+    <p>Click Spin to log PreGen batch and index data to console.</p>
+    <button id="spinBtn" onclick="spin()">SPIN</button>
+    <div class="status" id="statusText">Ready</div>
+
+    <script>
+        let spinCount = 0;
+        
+        // Simulating sequence for P5P_Bonus_Mini.testdata
+        // Expected spins:
+        // 1. batch: 58, index: 3
+        // 2. batch: 2, index: 67933
+        const sequence = [
+            { batch: 58, index: 3, text: "Spin 1: Base Game Spin Triggered" },
+            { batch: 2, index: 67933, text: "Spin 2: Bonus Feature Spin Triggered" }
+        ];
+
+        // Also allow keyboard spacebar to spin to test spacebar automation
+        window.addEventListener('keydown', function(e) {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                spin();
+            }
+        });
+
+        function spin() {
+            if (spinCount >= sequence.length) {
+                document.getElementById('statusText').innerText = "All spins completed.";
+                console.log("No more spins in mock sequence.");
+                return;
+            }
+            
+            const current = sequence[spinCount];
+            document.getElementById('statusText').innerText = current.text;
+            
+            // Log to console exactly what the python script listens to
+            console.log("responseLogger", { id: spinCount, gameResponse: { batch: current.batch, index: current.index } });
+            console.log(`batch: ${current.batch}, index: ${current.index}`);
+            
+            spinCount++;
+        }
+    </script>
+</body>
+</html>

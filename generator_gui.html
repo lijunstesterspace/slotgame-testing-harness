@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slot Machine .testdata Generator</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- JSZip for Zip download -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(22, 28, 45, 0.45);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.35);
+            --secondary: #a855f7;
+            --accent: #10b981;
+            --accent-glow: rgba(16, 185, 129, 0.2);
+            --error: #ef4444;
+            --input-bg: #111827;
+            --input-border: #374151;
+            --input-focus: #4b5563;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.15) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2.25rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a5b4fc, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.025em;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+
+        @media (min-width: 968px) {
+            .container {
+                grid-template-columns: 1.2fr 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+            box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.6);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-bottom: 1px solid var(--card-border);
+            padding-bottom: 0.75rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        input[type="text"], textarea {
+            background-color: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 0.75rem 1rem;
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        input[type="text"]:focus, textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 250px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .grid-inputs {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+
+        .toggle-group {
+            display: flex;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.25rem;
+            border-radius: 8px;
+            border: 1px solid var(--card-border);
+        }
+
+        .toggle-btn {
+            flex: 1;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .toggle-btn.active {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: 0 2px 8px var(--primary-glow);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            padding: 0.85rem 1.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            font-size: 1rem;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            box-shadow: none;
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: none;
+        }
+
+        .preview-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            max-height: 450px;
+            overflow-y: auto;
+            padding-right: 0.5rem;
+        }
+
+        /* Scrollbar styles */
+        .preview-list::-webkit-scrollbar, textarea::-webkit-scrollbar {
+            width: 6px;
+        }
+        .preview-list::-webkit-scrollbar-track, textarea::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .preview-list::-webkit-scrollbar-thumb, textarea::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        .preview-list::-webkit-scrollbar-thumb:hover, textarea::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .preview-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            transition: all 0.2s;
+        }
+
+        .preview-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .file-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            overflow: hidden;
+        }
+
+        .file-name {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #ffffff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-meta {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .badge-spins {
+            background: rgba(99, 102, 241, 0.15);
+            color: #a5b4fc;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .badge-type-single {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .badge-type-double {
+            background: rgba(168, 85, 247, 0.15);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.2);
+        }
+
+        .download-icon-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .download-icon-btn:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 3rem 1rem;
+            font-size: 0.875rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            border: 2px dashed rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .empty-state svg {
+            color: rgba(255, 255, 255, 0.15);
+        }
+
+        footer {
+            margin-top: 3rem;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-align: center;
+        }
+
+        .action-bar {
+            display: flex;
+            gap: 1rem;
+            margin-top: auto;
+        }
+
+        .action-bar .btn {
+            flex: 1;
+        }
+
+        .status-success {
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Slot Machine .testdata Generator</h1>
+        <p>Paste data, auto-detect single/double PreGen format, and export in batch with one click</p>
+    </header>
+
+    <div class="container">
+        <!-- Left Column: Input and Configurations -->
+        <div class="card">
+            <div class="card-title">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                Input & Configurations
+            </div>
+
+            <!-- Global Configurations -->
+            <div class="grid-inputs">
+                <div class="form-group">
+                    <label for="moduleID">Module ID</label>
+                    <input type="text" id="moduleID" value="10539" placeholder="10539">
+                </div>
+                <div class="form-group">
+                    <label for="stage">Default Stage</label>
+                    <input type="text" id="stage" value="BaseGame" placeholder="BaseGame">
+                </div>
+                <div class="form-group">
+                    <label for="comment">Default Comment</label>
+                    <input type="text" id="comment" value="TestMode" placeholder="TestMode">
+                </div>
+            </div>
+
+            <!-- Mode Selector -->
+            <div class="form-group">
+                <label>Output Mode</label>
+                <div class="toggle-group">
+                    <button class="toggle-btn active" id="modeMulti" onclick="setMode('multi')">Split into Multiple Files (Rec.)</button>
+                    <button class="toggle-btn" id="modeSingle" onclick="setMode('single')">Combine into Single File</button>
+                </div>
+            </div>
+
+            <!-- Single Filename Input (Hidden in multi unless single file output generated) -->
+            <div class="form-group" id="singleFilenameGroup" style="display: none;">
+                <label for="singleFilename">Output Filename</label>
+                <input type="text" id="singleFilename" value="generated_wins.testdata" placeholder="generated_wins.testdata">
+            </div>
+
+            <!-- Paste Area -->
+            <div class="form-group">
+                <label for="dataInput">Paste Your Data (Supports mixed formats)</label>
+                <textarea id="dataInput" placeholder="Paste data here. Examples:
+# Format A (Block Headers)
+# File_A
+58,3  2,67933
+58,3  4,145
+
+# Format B (Single Line with Descriptions)
+Bonus Feature_MINI Prize	58,3	2,67933
+Bonus Feature trigger_Ascend	58,3
+1,10"></textarea>
+            </div>
+        </div>
+
+        <!-- Right Column: Live Preview and Download -->
+        <div class="card">
+            <div class="card-title" style="justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Live Preview & Export
+                </div>
+                <div id="statusIndicator" class="status-success" style="display: none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    Parsed Successfully
+                </div>
+            </div>
+
+            <!-- Files list -->
+            <div class="preview-list" id="previewList">
+                <div class="empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/><path d="M15 9h-4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2z"/></svg>
+                    <span>Paste data on the left to preview generated files in real-time</span>
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="action-bar">
+                <button class="btn btn-secondary" onclick="clearAll()">Clear Input</button>
+                <button class="btn" id="downloadZipBtn" onclick="downloadAllAsZip()" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download All as ZIP
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        Slot Machine TestData Automated Generator &bull; Supports nested double PreGen detection
+    </footer>
+
+    <script>
+        let currentMode = 'multi'; // 'multi' or 'single'
+        let parsedFiles = {}; // filename -> array of tuples (length 2 or 4)
+
+        // Add event listener to textarea for real-time parsing
+        document.getElementById('dataInput').addEventListener('input', runParser);
+        document.getElementById('moduleID').addEventListener('input', runParser);
+        document.getElementById('stage').addEventListener('input', runParser);
+        document.getElementById('comment').addEventListener('input', runParser);
+        document.getElementById('singleFilename').addEventListener('input', runParser);
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('modeMulti').classList.toggle('active', mode === 'multi');
+            document.getElementById('modeSingle').classList.toggle('active', mode === 'single');
+            
+            document.getElementById('singleFilenameGroup').style.display = mode === 'single' ? 'flex' : 'none';
+            
+            runParser();
+        }
+
+        function clearAll() {
+            document.getElementById('dataInput').value = '';
+            runParser();
+        }
+
+        // JS parser mimicking Python's regex logic
+        function parseLineBatchIndex(line) {
+            // Pattern 1: batch and index: 21,4683
+            let biMatch = line.match(/batch\D+index\D*(\d+)\D+(\d+)/i);
+            if (biMatch) return [parseInt(biMatch[1]), parseInt(biMatch[2])];
+
+            // Pattern 2: batch: 21, index: 4683
+            let bMatch = line.match(/batch\D*(\d+)/i);
+            let iMatch = line.match(/index\D*(\d+)/i);
+            if (bMatch && iMatch) return [parseInt(bMatch[1]), parseInt(iMatch[1])];
+
+            // Pattern 3: last two numbers in line
+            let digits = line.match(/\d+/g);
+            if (digits && digits.length >= 2) {
+                return [parseInt(digits[digits.length - 2]), parseInt(digits[digits.length - 1])];
+            }
+
+            return null;
+        }
+
+        function runParser() {
+            const text = document.getElementById('dataInput').value.trim();
+            const moduleID = document.getElementById('moduleID').value.trim() || '10539';
+            const stage = document.getElementById('stage').value.trim() || 'BaseGame';
+            const comment = document.getElementById('comment').value.trim() || 'TestMode';
+            let defaultFilename = document.getElementById('singleFilename').value.trim() || 'generated_wins.testdata';
+            if (!defaultFilename.endsWith('.testdata')) defaultFilename += '.testdata';
+
+            const previewList = document.getElementById('previewList');
+            const downloadZipBtn = document.getElementById('downloadZipBtn');
+            const statusIndicator = document.getElementById('statusIndicator');
+
+            if (!text) {
+                previewList.innerHTML = `
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/><path d="M15 9h-4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2z"/></svg>
+                        <span>Paste data on the left to preview generated files in real-time</span>
+                    </div>`;
+                downloadZipBtn.disabled = true;
+                statusIndicator.style.display = 'none';
+                parsedFiles = {};
+                return;
+            }
+
+            parsedFiles = {};
+
+            if (currentMode === 'single') {
+                // Combine all data into one single file
+                let currentData = [];
+                const lines = text.split('\n');
+
+                for (let rawLine of lines) {
+                    let line = rawLine.trim();
+                    if (!line) continue;
+
+                    // If it's a header line, skip it or ignore it for single combined file
+                    let isHeader = line.startsWith('[') || line.startsWith('#') || line.startsWith('==') || line.toLowerCase().endsWith('.testdata');
+                    if (isHeader) continue;
+
+                    // Check if double-pair
+                    let doubleMatch = line.match(/^(\d+)\s*[\s,]\s*(\d+)\s+(\d+)\s*[\s,]\s*(\d+)$/);
+                    if (doubleMatch) {
+                        currentData.push([
+                            parseInt(doubleMatch[1]),
+                            parseInt(doubleMatch[2]),
+                            parseInt(doubleMatch[3]),
+                            parseInt(doubleMatch[4])
+                        ]);
+                    } else {
+                        let res = parseLineBatchIndex(line);
+                        if (res) currentData.push(res);
+                    }
+                }
+
+                if (currentData.length > 0) {
+                    parsedFiles[defaultFilename] = currentData;
+                }
+            } else {
+                // Split dynamically (Multi mode)
+                let currentFile = null;
+                let currentData = [];
+
+                const lines = text.split('\n');
+                for (let rawLine of lines) {
+                    let line = rawLine.trim();
+                    if (!line) continue;
+
+                    // Check Format B: Name + two pairs on same line
+                    let twoPairMatch = line.match(/^(.+?)\s+(\d+)\s*[\s,]\s*(\d+)\s+(\d+)\s*[\s,]\s*(\d+)$/);
+                    if (twoPairMatch) {
+                        let name = twoPairMatch[1].trim();
+                        // Check if it has at least one letter
+                        if (/[a-zA-Z\u4e00-\u9fa5]/.test(name)) {
+                            let base_b = parseInt(twoPairMatch[2]);
+                            let base_idx = parseInt(twoPairMatch[3]);
+                            let bonus_b = parseInt(twoPairMatch[4]);
+                            let bonus_idx = parseInt(twoPairMatch[5]);
+
+                            // Flush block data
+                            if (currentData.length > 0) {
+                                let activeFile = currentFile ? currentFile : defaultFilename;
+                                if (!activeFile.endsWith('.testdata')) activeFile += '.testdata';
+                                if (parsedFiles[activeFile]) {
+                                    parsedFiles[activeFile].push(...currentData);
+                                } else {
+                                    parsedFiles[activeFile] = [...currentData];
+                                }
+                                currentData = [];
+                                currentFile = null;
+                            }
+
+                            if (!name.endsWith('.testdata')) name += '.testdata';
+                            const item = [base_b, base_idx, bonus_b, bonus_idx];
+                            if (parsedFiles[name]) {
+                                parsedFiles[name].push(item);
+                            } else {
+                                parsedFiles[name] = [item];
+                            }
+                            continue;
+                        }
+                    }
+
+                    // Check Format B: Name + one pair on same line
+                    let oneLineMatch = line.match(/^(.+?)\s+(\d+)\s*[\s,]\s*(\d+)$/);
+                    if (oneLineMatch) {
+                        let name = oneLineMatch[1].trim();
+                        if (/[a-zA-Z\u4e00-\u9fa5]/.test(name)) {
+                            let b = parseInt(oneLineMatch[2]);
+                            let idx = parseInt(oneLineMatch[3]);
+
+                            // Flush block data
+                            if (currentData.length > 0) {
+                                let activeFile = currentFile ? currentFile : defaultFilename;
+                                if (!activeFile.endsWith('.testdata')) activeFile += '.testdata';
+                                if (parsedFiles[activeFile]) {
+                                    parsedFiles[activeFile].push(...currentData);
+                                } else {
+                                    parsedFiles[activeFile] = [...currentData];
+                                }
+                                currentData = [];
+                                currentFile = null;
+                            }
+
+                            if (!name.toLowerCase().endsWith('.testdata')) name += '.testdata';
+                            
+                            const item = [b, idx];
+                            if (parsedFiles[name]) {
+                                parsedFiles[name].push(item);
+                            } else {
+                                parsedFiles[name] = [item];
+                            }
+                            continue;
+                        }
+                    }
+
+                    // Format A: Headers or normal data lines
+                    let isHeader = false;
+                    let newFilename = "";
+
+                    if (line.startsWith('[') && line.endswith(']')) {
+                        newFilename = line.slice(1, -1).trim();
+                        isHeader = true;
+                    } else if (line.startsWith('#')) {
+                        newFilename = line.slice(1).trim();
+                        isHeader = true;
+                    } else if (line.startsWith('==') && line.endswith('==')) {
+                        newFilename = line.replace(/=/g, '').trim();
+                        isHeader = true;
+                    } else if (line.toLowerCase().endsWith('.testdata')) {
+                        newFilename = line.trim();
+                        isHeader = true;
+                    }
+
+                    if (isHeader) {
+                        if (currentData.length > 0) {
+                            let activeFile = currentFile ? currentFile : defaultFilename;
+                            if (!activeFile.endsWith('.testdata')) activeFile += '.testdata';
+                            if (parsedFiles[activeFile]) {
+                                parsedFiles[activeFile].push(...currentData);
+                            } else {
+                                parsedFiles[activeFile] = [...currentData];
+                            }
+                            currentData = [];
+                        }
+                        currentFile = newFilename;
+                    } else {
+                        // Plain data line, check double-pair
+                        let doubleMatch = line.match(/^(\d+)\s*[\s,]\s*(\d+)\s+(\d+)\s*[\s,]\s*(\d+)$/);
+                        if (doubleMatch) {
+                            currentData.push([
+                                parseInt(doubleMatch[1]),
+                                parseInt(doubleMatch[2]),
+                                parseInt(doubleMatch[3]),
+                                parseInt(doubleMatch[4])
+                            ]);
+                        } else {
+                            let res = parseLineBatchIndex(line);
+                            if (res) currentData.push(res);
+                        }
+                    }
+                }
+
+                // Flush remaining
+                if (currentData.length > 0) {
+                    let activeFile = currentFile ? currentFile : defaultFilename;
+                    if (!activeFile.endsWith('.testdata')) activeFile += '.testdata';
+                    if (parsedFiles[activeFile]) {
+                        parsedFiles[activeFile].push(...currentData);
+                    } else {
+                        parsedFiles[activeFile] = [...currentData];
+                    }
+                }
+            }
+
+            // Display results
+            renderPreview(moduleID, stage, comment);
+        }
+
+        function generateXMLContent(data, moduleID, stage, comment) {
+            let lines = [];
+            lines.push("<Test>");
+            lines.push(`<Key moduleID="${moduleID}" loginName="" />`);
+            
+            let first = true;
+            for (let item of data) {
+                if (item.length === 4) {
+                    // Double PreGen Nested Template
+                    let [base_b, base_idx, bonus_b, bonus_idx] = item;
+                    if (first) {
+                        lines.push(`<Slot><Spin stage="BaseGame">`);
+                        first = false;
+                    } else {
+                        lines.push(`<Spin stage="BaseGame">`);
+                    }
+                    lines.push(`<PreGen batch="${base_b}" index="${base_idx}"></PreGen>`);
+                    lines.push(`<Feature stage="Bonus">`);
+                    lines.push(`<PreGen batch="${bonus_b}" index="${bonus_idx}"></PreGen>`);
+                    lines.push(`</Feature>`);
+                    lines.push(`</Spin>`);
+                } else {
+                    // Single PreGen Template
+                    let [b, idx] = item;
+                    if (first) {
+                        lines.push(`<Slot><Spin stage="${stage}" comment="${comment}">`);
+                        first = false;
+                    } else {
+                        lines.push(`<Spin stage="${stage}" comment="${comment}">`);
+                    }
+                    lines.push(`<PreGen batch="${b}" index="${idx}" />`);
+                    lines.push(`</Spin>`);
+                }
+            }
+            lines.push('</Slot>');
+            lines.push('</Test>');
+            return lines.join('\n') + '\n';
+        }
+
+        function renderPreview(moduleID, stage, comment) {
+            const previewList = document.getElementById('previewList');
+            const downloadZipBtn = document.getElementById('downloadZipBtn');
+            const statusIndicator = document.getElementById('statusIndicator');
+
+            const fileKeys = Object.keys(parsedFiles);
+            if (fileKeys.length === 0) {
+                previewList.innerHTML = `
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/><path d="M15 9h-4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2z"/></svg>
+                        <span>No valid slot data found. Please check your input format.</span>
+                    </div>`;
+                downloadZipBtn.disabled = true;
+                statusIndicator.style.display = 'none';
+                return;
+            }
+
+            statusIndicator.style.display = 'flex';
+            downloadZipBtn.disabled = false;
+            previewList.innerHTML = '';
+
+            fileKeys.forEach(filename => {
+                const data = parsedFiles[filename];
+                const spinsCount = data.length;
+                const isDouble = data.some(item => item.length === 4);
+                
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'preview-item';
+                
+                itemDiv.innerHTML = `
+                    <div class="file-info">
+                        <div class="file-name" title="${filename}">${filename}</div>
+                        <div class="file-meta">
+                            <span class="badge badge-spins">${spinsCount} ${spinsCount === 1 ? 'Spin' : 'Spins'}</span>
+                            <span class="badge ${isDouble ? 'badge-type-double' : 'badge-type-single'}">
+                                ${isDouble ? 'Nested Bonus Mode' : 'Base Spin Mode'}
+                            </span>
+                        </div>
+                    </div>
+                    <button class="download-icon-btn" onclick="downloadSingleFile('${filename}', '${moduleID}', '${stage}', '${comment}')" title="Download this file">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </button>
+                `;
+                previewList.appendChild(itemDiv);
+            });
+        }
+
+        function downloadSingleFile(filename, moduleID, stage, comment) {
+            const data = parsedFiles[filename];
+            if (!data) return;
+
+            const xmlContent = generateXMLContent(data, moduleID, stage, comment);
+            const blob = new Blob([xmlContent], { type: 'text/xml;charset=utf-8;' });
+            const link = document.createElement('a');
+            
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute('download', filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function downloadAllAsZip() {
+            const moduleID = document.getElementById('moduleID').value.trim() || '10539';
+            const stage = document.getElementById('stage').value.trim() || 'BaseGame';
+            const comment = document.getElementById('comment').value.trim() || 'TestMode';
+            const fileKeys = Object.keys(parsedFiles);
+
+            if (fileKeys.length === 0) return;
+
+            const zip = new JSZip();
+            fileKeys.forEach(filename => {
+                const data = parsedFiles[filename];
+                const xmlContent = generateXMLContent(data, moduleID, stage, comment);
+                zip.file(filename, xmlContent);
+            });
+
+            zip.generateAsync({ type: 'blob' }).then(function(content) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.setAttribute('download', 'testdata_batch_files.zip');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+        }
+    </script>
+</body>
+</html>

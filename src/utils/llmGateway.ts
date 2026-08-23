@@ -1,6 +1,7 @@
-import type { LlmProviderConfig, LlmProviderType } from "../types";
+import type { LlmProviderConfig, LlmProviderType, LlmModelEntry } from "../types";
 
 export const STORAGE_KEY = "slot_harness_llm_config";
+export const MODELS_LIST_KEY = "slot_harness_llm_models";
 
 export const DEFAULT_LLM_CONFIG: LlmProviderConfig = {
   provider: "OLLAMA",
@@ -20,29 +21,31 @@ export const PROVIDER_PRESETS: Record<
   { name: string; defaultUrl: string; defaultModels: string[]; complianceRisk?: boolean }
 > = {
   OLLAMA: {
-    name: "Local Ollama Instance (Default · 保密合规)",
+    name: "Local Ollama Instance (Default · Compliant)",
     defaultUrl: "/ollama",
     defaultModels: ["qwen2.5-coder:7b", "deepseek-r1:8b", "qwen3-vl:8b", "qwen3:latest"],
   },
   OPENAI: {
-    name: "OpenAI API (v1 · ⚠️ 外部，需确认合规)",
+    name: "OpenAI API (v1 · ⚠️ External, requires compliance)",
     defaultUrl: "https://api.openai.com/v1",
     defaultModels: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"],
     complianceRisk: true,
   },
   ANTHROPIC: {
-    name: "Anthropic Claude API (⚠️ 外部，需确认合规)",
+    name: "Anthropic Claude API (⚠️ External, requires compliance)",
     defaultUrl: "https://api.anthropic.com/v1",
     defaultModels: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
     complianceRisk: true,
   },
   CUSTOM: {
-    name: "Custom LLM Gateway / vLLM (⚠️ 外部，需确认合规)",
+    name: "Custom LLM Gateway / vLLM (⚠️ External, requires compliance)",
     defaultUrl: "http://localhost:8000/v1",
     defaultModels: ["custom-slot-llm", "qwen2.5-coder-32b", "llama3-70b"],
     complianceRisk: true,
   },
 };
+
+// ─── Single active config (legacy) ───
 
 export function loadStoredLlmConfig(): LlmProviderConfig {
   try {
@@ -60,6 +63,68 @@ export function saveLlmConfig(config: LlmProviderConfig): void {
   } catch (e) {
     console.error("[llmGateway] saveLlmConfig failed", e);
   }
+}
+
+// ─── Multi-model storage (new) ───
+
+export function getDefaultModelEntry(): LlmModelEntry {
+  return {
+    id: "default-ollama",
+    name: "Local Ollama",
+    provider: "OLLAMA",
+    baseUrl: "/ollama",
+    apiKey: "",
+    selectedModel: "qwen2.5-coder:7b",
+    availableModels: ["qwen2.5-coder:7b", "deepseek-r1:8b", "qwen3-vl:8b", "qwen3:latest"],
+    isDefault: true,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function loadStoredModels(): LlmModelEntry[] {
+  try {
+    const raw = localStorage.getItem(MODELS_LIST_KEY);
+    if (raw) {
+      const list: LlmModelEntry[] = JSON.parse(raw);
+      if (list.length > 0) return list;
+    }
+  } catch (e) {
+    console.warn("[llmGateway] loadStoredModels failed", e);
+  }
+  // Seed with default
+  const defaultEntry = getDefaultModelEntry();
+  saveStoredModels([defaultEntry]);
+  return [defaultEntry];
+}
+
+export function saveStoredModels(models: LlmModelEntry[]): void {
+  try {
+    localStorage.setItem(MODELS_LIST_KEY, JSON.stringify(models));
+  } catch (e) {
+    console.error("[llmGateway] saveStoredModels failed", e);
+  }
+}
+
+export function getActiveModelConfig(models: LlmModelEntry[]): LlmProviderConfig {
+  const defaultModel = models.find((m) => m.isDefault) ?? models[0];
+  if (!defaultModel) return DEFAULT_LLM_CONFIG;
+  return {
+    provider: defaultModel.provider,
+    baseUrl: defaultModel.baseUrl,
+    apiKey: defaultModel.apiKey,
+    selectedModel: defaultModel.selectedModel,
+    availableModels: defaultModel.availableModels,
+  };
+}
+
+export function toLlmProviderConfig(entry: LlmModelEntry): LlmProviderConfig {
+  return {
+    provider: entry.provider,
+    baseUrl: entry.baseUrl,
+    apiKey: entry.apiKey,
+    selectedModel: entry.selectedModel,
+    availableModels: entry.availableModels,
+  };
 }
 
 export interface LlmHealth {

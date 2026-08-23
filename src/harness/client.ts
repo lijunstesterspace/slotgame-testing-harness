@@ -122,7 +122,7 @@ export class HarnessClient {
 
   streamExecution(eid: string, cb: HarnessStreamCallback): () => void {
     const token = readToken();
-    // EventSource 无法携带自定义 Header，通过 ?token= query 传 token（后端 SSE 已支持 query token 认证）
+    // EventSource cannot carry custom headers, pass token via ?token= query param (backend SSE already supports query token auth)
     const url = `${this.base}/api/executions/stream/${encodeURIComponent(eid)}?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url, { withCredentials: false });
 

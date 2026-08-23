@@ -17,7 +17,7 @@ interface Props {
 const TABS: LlmProviderType[] = ["OLLAMA", "OPENAI", "ANTHROPIC", "CUSTOM"];
 
 const COMPLIANCE_REMINDER =
-  "⚠️ 选择此外部 Provider 会把请求数据（包括 paytable、Case 名、验证结果摘要等）发送到第三方 API。选择前必须确认符合公司保密协议。";
+  "⚠️ Selecting an external Provider will send request data (including paytable, case names, verification results, etc.) to third-party APIs. Confirm compliance with company confidentiality agreements before proceeding.";
 
 export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSaveConfig }) => {
   const [activeTab, setActiveTab] = useState<LlmProviderType>(config.provider);
@@ -86,7 +86,7 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
 
   const onSave = () => {
     if (!canSave) return;
-    // 对外部 Provider：若 compliance 未勾选（理论已被 canSave 拦截），强制回退到 OLLAMA
+    // For external providers: if compliance not checked (should be blocked by canSave), force fallback to OLLAMA
     const finalRisky = !!PROVIDER_PRESETS[draft.provider].complianceRisk;
     if (finalRisky && !complianceChecked[draft.provider]) {
       onSaveConfig({ ...DEFAULT_LLM_CONFIG });
@@ -107,8 +107,8 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-bold text-white">LLM Provider · Planner 模型配置</h2>
-              <p className="text-xs text-slate-400">默认本机 Ollama · 外部 Provider 必须勾选合规确认</p>
+              <h2 className="font-bold text-white">LLM Provider · Planner Config</h2>
+              <p className="text-xs text-slate-400">Default: local Ollama · External providers require compliance confirmation</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200">
@@ -149,7 +149,7 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
               />
               <div className="leading-relaxed">
                 <div className="font-semibold mb-0.5">
-                  {riskLocked ? "外部 Provider 当前禁用 · 勾选后解锁（证明可扩展性 UI）" : "已确认合规 · 可输入配置并测试连接"}
+                  {riskLocked ? "External Provider disabled · Check to unlock (extensibility demo)" : "Compliance confirmed · Configuration enabled for testing"}
                 </div>
                 <div className="opacity-90">{COMPLIANCE_REMINDER}</div>
               </div>
@@ -172,13 +172,13 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
 
             {isRisky && (
               <label className="flex flex-col gap-1.5 text-xs">
-                <span className="font-semibold text-slate-300 flex items-center gap-1.5"><Key className="w-3.5 h-3.5" /> API Key 🔒 仅保存在本机 localStorage · 绝不发送到后端</span>
+                <span className="font-semibold text-slate-300 flex items-center gap-1.5"><Key className="w-3.5 h-3.5" /> API Key 🔒 Stored in browser localStorage only · Never sent to backend</span>
                 <input
                   type="password"
                   value={draft.apiKey ?? ""}
                   disabled={riskLocked}
                   onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-                  placeholder="sk-... （仅为扩展展示；启用前请确认合规）"
+                  placeholder="sk-... (extensibility demo; confirm compliance before use)"
                   className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-[11px] disabled:opacity-50"
                 />
               </label>
@@ -192,7 +192,7 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
                   disabled={riskLocked || pinging}
                   className="px-2.5 py-1 text-[11px] rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 flex items-center gap-1 disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-3 h-3 ${pinging ? "animate-spin" : ""}`} /> {pinging ? "检测中..." : "检测连接 / 拉取模型列表"}
+                  <RefreshCw className={`w-3 h-3 ${pinging ? "animate-spin" : ""}`} /> {pinging ? "Testing..." : "Test Connection / Fetch Models"}
                 </button>
               </div>
               <select
@@ -208,26 +208,26 @@ export const LlmConfigModal: React.FC<Props> = ({ isOpen, onClose, config, onSav
               {health && (
                 <div className={`rounded-lg p-2.5 border text-[11px] flex items-center gap-2 ${health.online ? "bg-emerald-950/25 border-emerald-800/50 text-emerald-200" : "bg-rose-950/25 border-rose-800/50 text-rose-200"}`}>
                   {health.online ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <WifiOff className="w-3.5 h-3.5 text-rose-400" />}
-                  <span className="font-semibold">{health.online ? `Online · ${health.models.length} 个模型 · 延迟 ${health.latencyMs}ms` : `Offline · ${health.error ?? "连接失败"}`}</span>
+                  <span className="font-semibold">{health.online ? `Online · ${health.models.length} models · ${health.latencyMs}ms latency` : `Offline · ${health.error ?? "Connection failed"}`}</span>
                 </div>
               )}
             </div>
           </div>
 
           <div className="rounded-xl bg-slate-950/50 border border-slate-800 p-3 text-[11px] text-slate-400 leading-relaxed space-y-1.5">
-            <p>🧩 <b className="text-slate-200">多 Provider 扩展性说明</b>：PlannerAgent 的 `PlannerProvider` 接口抽象了 Ollama / OpenAI / Anthropic / Custom 四种实现；健康检测、流式聊天、tokens 估算、合规锁逻辑共享。</p>
-            <p>🔒 <b className="text-slate-200">合规说明</b>：除 Ollama 外的三个 Provider 默认灰显并强制合规勾选锁。即使勾选，API Key 仅写入本机浏览器 localStorage，HARNESS 后端没有任何 LLM Key 变量，审计日志只记录 provider/model/tokens 元数据，不记录 prompt 内容。</p>
+            <p>🧩 <b className="text-slate-200">Multi-Provider Extensibility</b>: The PlannerAgent's `PlannerProvider` interface abstracts Ollama / OpenAI / Anthropic / Custom implementations; shared health check, streaming chat, token estimation, and compliance lock logic.</p>
+            <p>🔒 <b className="text-slate-200">Compliance Note</b>: External providers are greyed out by default with a mandatory compliance checkbox. API Key is stored in browser localStorage only — the HARNESS backend has no LLM key variables. Audit logs record only provider/model/token metadata, not prompt content.</p>
           </div>
         </div>
 
         <div className="px-5 py-3 border-t border-slate-800 flex justify-end gap-2 bg-slate-950/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800">取消</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
           <button
             onClick={onSave}
             disabled={!canSave}
             className="px-5 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 text-slate-950 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            保存 & 启用
+            Save & Activate
           </button>
         </div>
       </div>

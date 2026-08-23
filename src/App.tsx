@@ -1,17 +1,19 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Header } from "./components/Header";
-import { IntentPanel } from "./components/IntentPanel";
+import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
 import { TestDataPreview } from "./components/TestDataPreview";
 import { VerificationPanel } from "./components/VerificationPanel";
 import { VerificationReportModal } from "./components/VerificationReportModal";
 import { LlmConfigModal } from "./components/LlmConfigModal";
+import { LlmConfigPage } from "./pages/LlmConfigPage";
+import { PluginPage } from "./pages/PluginPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationConfig, VerificationReport, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { Sparkles, Bot, AlertCircle } from "lucide-react";
+import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
@@ -25,6 +27,14 @@ const STAGE1_TASKS: TaskItem[] = [
   { id: 't1-1', stage: 1, title: 'Intent Analysis', description: 'Parse natural language requirement and game constraints', status: 'pending' },
   { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
   { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
+];
+
+const MODEL_OPTIONS: { label: string; value: string }[] = [
+  { label: "Ollama · llama3:7b (local)", value: "llama3:7b" },
+  { label: "Ollama · qwen2.5:7b (local)", value: "qwen2.5:7b" },
+  { label: "DeepSeek · deepseek-chat", value: "deepseek-chat" },
+  { label: "OpenAI · gpt-4o-mini", value: "gpt-4o-mini" },
+  { label: "Anthropic · claude-3-haiku", value: "claude-3-haiku" },
 ];
 
 export const App: React.FC = () => {
@@ -48,7 +58,7 @@ export const App: React.FC = () => {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400 font-mono text-xs">
-        🔐 Validating session token...
+        Validating session token...
       </div>
     );
   }
@@ -66,7 +76,7 @@ export const App: React.FC = () => {
 
 const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const auth = useAuth();
-  const [selectedGame, setSelectedGame] = useState<SlotGameConfig>(MOCK_GAME_CONFIGS[0]);
+  const [selectedGame] = useState<SlotGameConfig>(MOCK_GAME_CONFIGS[0]);
   const [sheetUrl, setSheetUrl] = useState("");
   const [promptIntent, setPromptIntent] = useState("");
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>(1);
@@ -79,9 +89,11 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState<"workbench" | "llm-config" | "plugin">("workbench");
   const [showLlmConfig, setShowLlmConfig] = useState(false);
   const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(() => loadStoredLlmConfig());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
+  const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
 
   const chime = () => {
@@ -164,7 +176,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       if (planner.complianceRisk) {
         addLog({
           type: "HARNESS_EVENT",
-          content: `⚠️ 外部 Provider ${plannerCfg.provider} 已启用 — 请确认合规（API Key 仅存本机）`,
+          content: `External Provider ${plannerCfg.provider} enabled — verify compliance (API Key stored locally)`,
           status: "warning",
         });
       }
@@ -172,7 +184,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         intent: { prompt: promptIntent, sheetUrl, loginName, workflowStage: 1 },
         maxCycles: 14,
       });
-      if (!outcome.success) throw new Error(outcome.message ?? "Planner 未完成任务");
+      if (!outcome.success) throw new Error(outcome.message ?? "Planner did not complete the task");
       setWorkflowState("REVIEW");
       setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
     } catch (e: any) {
@@ -257,23 +269,45 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     setError(null);
   };
 
-  const errorBanner = (
-    <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
-      <AlertCircle className="w-4 h-4" />
-      <span>
-        <span className="font-bold mr-2">System Alert:</span>
-        {error}
-      </span>
-      <button onClick={() => setError(null)} className="ml-auto text-rose-400 hover:text-rose-200">✕</button>
-    </div>
-  );
-
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
     setLlmConfig(cfg);
     setSelectedModel(cfg.selectedModel);
     saveLlmConfig(cfg);
     addLog({ type: "HARNESS_EVENT", content: `LLM Provider switched to ${cfg.provider} · ${cfg.selectedModel}`, status: "success" });
   };
+
+  const handleOpenModelPage = () => setPage("llm-config");
+  const handleOpenPluginPage = () => setPage("plugin");
+  const handleConfigChanged = async () => {
+    // Reload config from the multi-model store
+    const { loadStoredModels, getActiveModelConfig } = await import("./utils/llmGateway");
+    const models = loadStoredModels();
+    const activeCfg = getActiveModelConfig(models);
+    setLlmConfig(activeCfg);
+    setSelectedModel(activeCfg.selectedModel);
+    saveLlmConfig(activeCfg);
+    addLog({ type: "HARNESS_EVENT", content: `Model config updated · Active: ${activeCfg.provider} · ${activeCfg.selectedModel}`, status: "success" });
+  };
+
+  const selectedModelLabel = MODEL_OPTIONS.find((m) => m.value === selectedModel)?.label ?? selectedModel;
+
+  const showCenterFooter = workflowStage >= 3;
+
+  const errorBanner = error ? (
+    <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
+      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+      <span className="flex-1"><span className="font-bold mr-2">System Alert:</span>{error}</span>
+      <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-200">✕</button>
+    </div>
+  ) : null;
+
+  if (page === "llm-config") {
+    return <LlmConfigPage onBack={() => setPage("workbench")} onConfigChanged={handleConfigChanged} />;
+  }
+
+  if (page === "plugin") {
+    return <PluginPage onBack={() => setPage("workbench")} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
@@ -283,46 +317,137 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         isMuted={isMuted}
         setIsMuted={setIsMuted}
         onReset={handleReset}
-        selectedModel={selectedModel}
-        setSelectedModel={setSelectedModel}
-        llmConfig={llmConfig}
-        onOpenConfigModal={() => setShowLlmConfig(true)}
+        onOpenConfig={() => handleOpenModelPage()}
         user={auth.user}
         onLogout={onLogout}
       />
-      {error && errorBanner}
+      {errorBanner}
 
       <main className="flex-1 flex overflow-hidden">
-        <div className="w-[380px] border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-y-auto">
-          <IntentPanel
-            selectedGame={selectedGame}
-            sheetUrl={sheetUrl}
-            setSheetUrl={setSheetUrl}
-            promptIntent={promptIntent}
-            setPromptIntent={setPromptIntent}
-            workflowStage={workflowStage}
-            workflowState={workflowState}
-            onStartGeneration={handleStartGeneration}
-            onRunTestSuite={() => {
-              setWorkflowState("VERIFYING");
-            }}
-            isGenerating={isGenerating}
-            isTesting={isTesting}
-          />
-          <VerificationPanel onStartVerification={handleStartVerification} isVerifying={isTesting} loginName={loginName} setLoginName={setLoginName} />
-        </div>
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <AgentCore tasks={tasks} logs={logs} workflowStage={workflowStage} isGenerating={isGenerating} isTesting={isTesting} />
-          <div className="h-[40%] border-t border-slate-800 bg-slate-900/30">
-            <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
+        {/* Left: Plugin + Task List */}
+        <Sidebar tasks={tasks} onOpenPlugin={handleOpenPluginPage} />
+
+        {/* Center: Input Dialog → Pipeline → Console → Preview */}
+        <div className="flex-1 flex flex-col overflow-y-auto p-4 gap-4 min-w-0">
+
+          {/* ── Input Dialog ── */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/50 text-emerald-400">
+                <PlusCircle className="w-4 h-4" />
+              </div>
+              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">New Task</span>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <input
+                type="text"
+                placeholder="Sheet URL (optional)"
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+                disabled={isGenerating}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono"
+              />
+
+              <textarea
+                placeholder="Describe your test task..."
+                value={promptIntent}
+                onChange={(e) => setPromptIntent(e.target.value)}
+                disabled={isGenerating}
+                rows={3}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
+              />
+
+              {/* Bottom row: Generate button (left) + Model selector (right) */}
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={handleStartGeneration}
+                  disabled={isGenerating || workflowState === 'GENERATING' || workflowState === 'VERIFYING'}
+                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    isGenerating
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 hover:shadow-lg hover:shadow-emerald-500/20 active:scale-[0.98]'
+                  }`}
+                >
+                  {isGenerating ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                  ) : (
+                    <><Sparkles className="w-4 h-4" /> Start Agent Generation</>
+                  )}
+                </button>
+
+                {/* Model selector */}
+                <div className="relative">
+                  <button
+                    onClick={() => setModelOpen(!modelOpen)}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-300 hover:border-slate-500 transition text-[11px] font-mono"
+                  >
+                    <span className="text-cyan-400">●</span>
+                    <span className="max-w-[160px] truncate">{selectedModelLabel}</span>
+                    <ChevronDown className="w-3 h-3 text-slate-400" />
+                  </button>
+                  {modelOpen && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setModelOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1 z-20 w-[220px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+                        {MODEL_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => { setSelectedModel(opt.value); setModelOpen(false); }}
+                            className={`w-full text-left px-3.5 py-2.5 text-[11px] font-mono transition hover:bg-slate-800 ${
+                              selectedModel === opt.value
+                                ? 'text-emerald-300 bg-emerald-950/30'
+                                : 'text-slate-300'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
+
+          {/* ── Pipeline + Console ── */}
+          <div className="flex-1 flex flex-col min-h-0">
+            <AgentCore
+              tasks={tasks}
+              logs={logs}
+              workflowStage={workflowStage}
+              workflowState={workflowState}
+              isGenerating={isGenerating}
+              isTesting={isTesting}
+            />
+          </div>
+
+          {/* ── TestData Preview ── */}
+          {showCenterFooter && (
+            <div className="flex-shrink-0 max-h-[40%] min-h-[200px] overflow-y-auto">
+              <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
+            </div>
+          )}
         </div>
       </main>
 
+      {/* Verification Panel (floating bottom) */}
+      {workflowState === 'REVIEW' && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-800 bg-slate-900/95 backdrop-blur">
+          <VerificationPanel
+            onStartVerification={handleStartVerification}
+            isVerifying={isTesting}
+            loginName={loginName}
+            setLoginName={setLoginName}
+          />
+        </div>
+      )}
+
       <footer className="px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <div className="flex items-center gap-2">
-          <Bot className="w-3.5 h-3.5 text-emerald-500" />
-          <span>HARNESS v2 · PlannerAgent + Tool Registry · 全链路审计</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          <span>HARNESS v2 · PlannerAgent + Tool Registry · Full Audit Trail</span>
         </div>
         <div className="flex items-center gap-4">
           <span className={`flex items-center gap-1.5 ${workflowState === "GENERATING" ? "text-cyan-400" : "text-emerald-400"}`}>

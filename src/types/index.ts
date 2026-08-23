@@ -94,3 +94,15 @@ export interface LlmProviderConfig {
   selectedModel: string;
   availableModels: string[];
 }
+
+export interface LlmModelEntry {
+  id: string;
+  name: string;
+  provider: LlmProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  selectedModel: string;
+  availableModels: string[];
+  isDefault: boolean;
+  createdAt: string;
+}

@@ -1,41 +1,51 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  CheckCircle2, 
-  Loader2, 
-  Circle, 
-  Terminal, 
-  Copy, 
-  Check, 
-  Wrench, 
-  Brain, 
-  ShieldAlert, 
-  Lock, 
-  Unlock,
-  Sparkles
+import {
+  CheckCircle2, Loader2, Terminal, Copy, Check, Brain,
+  Sparkles, Database, Shield, Zap, FileText, Wrench
 } from 'lucide-react';
-import { TaskItem, ToolCallLog, WorkflowStage } from '../types';
+import { TaskItem, ToolCallLog, WorkflowStage, WorkflowState } from '../types';
 
+// ── Props ──────────────────────────────────────────────────────
 interface AgentCoreProps {
   tasks: TaskItem[];
   logs: ToolCallLog[];
   workflowStage: WorkflowStage;
+  workflowState: WorkflowState;
   isGenerating: boolean;
   isTesting: boolean;
 }
 
+// ── Pipeline stages ────────────────────────────────────────────
+interface PipelineStage {
+  id: number;
+  label: string;
+  icon: React.ReactNode;
+  desc: string;
+}
+
+const PIPELINE_STAGES: PipelineStage[] = [
+  { id: 1, label: 'Intent',       icon: <Brain className="w-4 h-4" />,       desc: 'Parse requirements' },
+  { id: 2, label: 'Generate',     icon: <Zap className="w-4 h-4" />,        desc: 'AI data generation' },
+  { id: 3, label: 'Review',       icon: <FileText className="w-4 h-4" />,   desc: 'Preview results' },
+  { id: 4, label: 'Verify',       icon: <Wrench className="w-4 h-4" />,     desc: 'Game verification' },
+  { id: 5, label: 'Complete',     icon: <CheckCircle2 className="w-4 h-4" />, desc: 'Done' },
+];
+
+// ── Component ──────────────────────────────────────────────────
 export const AgentCore: React.FC<AgentCoreProps> = ({
   tasks,
   logs,
   workflowStage,
+  workflowState,
   isGenerating,
-  isTesting
+  isTesting,
 }) => {
   const [activeTab, setActiveTab] = useState<'COT' | 'RAW_TOOLS' | 'SYSTEM'>('COT');
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom inside terminal container ONLY (keeps browser page fixed)
+  // Auto-scroll
   useEffect(() => {
     if (autoScroll && terminalContainerRef.current) {
       terminalContainerRef.current.scrollTop = terminalContainerRef.current.scrollHeight;
@@ -49,127 +59,145 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  return (
-    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-4 h-full min-h-[520px]">
-      
-      {/* 1. Header & Section Badge */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-cyan-950/60 border border-cyan-800/50 text-cyan-400">
-            <Brain className="w-5 h-5 animate-pulse" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-white tracking-wide">Agent Core & Thought Trace</h2>
-            <p className="text-xs text-slate-400">Real-time COT reasoning, tool dispatching & self-healing</p>
-          </div>
-        </div>
+  const isRunning = isGenerating || isTesting;
 
-        <div className="flex items-center gap-2">
-          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
-            isGenerating || isTesting
-              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse'
-              : 'bg-slate-800 text-slate-400 border border-slate-700'
+  return (
+    <div className="flex flex-col gap-3 h-full">
+      {/* ── Pipeline Visualization ── */}
+      <div className="bg-slate-900/70 border border-slate-800 rounded-2xl px-5 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-indigo-950/60 border border-indigo-800/50 text-indigo-400">
+              <Database className="w-4 h-4" />
+            </div>
+            <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Pipeline</span>
+          </div>
+          <span className={`text-[10px] font-mono px-2 py-1 rounded-full ${
+            isRunning
+              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 animate-pulse'
+              : 'bg-slate-800 text-slate-500 border border-slate-700'
           }`}>
-            <span className={`w-2 h-2 rounded-full ${isGenerating || isTesting ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-            {isGenerating ? 'Stage 1 Generating...' : isTesting ? 'Stage 2 Executing...' : 'Agent Idle / Standing By'}
+            {isRunning ? 'RUNNING' : workflowState}
           </span>
         </div>
+
+        <div className="flex items-center gap-0">
+          {PIPELINE_STAGES.map((stage, i) => {
+            const isActive = workflowStage === stage.id;
+            const isPast = workflowStage > stage.id;
+            const isFuture = workflowStage < stage.id;
+
+            return (
+              <React.Fragment key={stage.id}>
+                {/* Node */}
+                <div className="flex flex-col items-center gap-1.5 flex-1">
+                  <div className={`p-2 rounded-xl border-2 transition-all duration-500 ${
+                    isActive
+                      ? 'bg-emerald-950/40 border-emerald-400 shadow-lg shadow-emerald-500/20 scale-110'
+                      : isPast
+                      ? 'bg-slate-800 border-emerald-700/50 text-emerald-400'
+                      : 'bg-slate-950 border-slate-700 text-slate-600'
+                  }`}>
+                    <span className={isActive ? 'text-emerald-400' : isPast ? 'text-emerald-400' : 'text-slate-600'}>
+                      {stage.icon}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] font-bold font-mono ${
+                    isActive ? 'text-emerald-300' : isPast ? 'text-slate-400' : 'text-slate-600'
+                  }`}>
+                    {stage.label}
+                  </span>
+                  <span className={`text-[9px] font-mono hidden sm:block ${
+                    isActive ? 'text-emerald-400/70' : 'text-slate-600'
+                  }`}>
+                    {stage.desc}
+                  </span>
+                </div>
+
+                {/* Connector line */}
+                {i < PIPELINE_STAGES.length - 1 && (
+                  <div className={`flex-1 h-px mb-6 ${
+                    isPast || (isActive && workflowState === 'GENERATING')
+                      ? 'bg-emerald-500/50'
+                      : isActive
+                      ? 'bg-gradient-to-r from-emerald-500/50 to-slate-700'
+                      : 'bg-slate-800'
+                  }`} />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
       </div>
 
-      {/* 2. Dynamic Task Checklist */}
-      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 flex flex-col gap-2">
-        <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-400 flex items-center justify-between">
-          <span>Task Planning & Execution Steps ({workflowStage === 1 ? 'Stage 1' : 'Stage 2'})</span>
-          <span className="text-emerald-400">{tasks.filter((t) => t.status === 'completed').length} / {tasks.length} Done</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 transition ${
-                task.status === 'completed'
-                  ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-200'
-                  : task.status === 'active'
-                  ? 'bg-amber-950/30 border-amber-500/50 text-amber-200 shadow-md glow-amber'
-                  : 'bg-slate-900/60 border-slate-800 text-slate-400 opacity-70'
-              }`}
-            >
-              {task.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
-              {task.status === 'active' && <Loader2 className="w-4 h-4 text-amber-400 animate-spin flex-shrink-0" />}
-              {task.status === 'pending' && <Circle className="w-4 h-4 text-slate-600 flex-shrink-0" />}
-              <span className="font-medium truncate">{task.title}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 3. Live Thought & Tool Console Terminal */}
-      <div className="flex-1 flex flex-col bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-2xl font-mono text-xs">
-        
-        {/* Terminal Header & Toolbar */}
-        <div className="bg-slate-900/90 px-3 py-2 border-b border-slate-800 flex items-center justify-between">
-          
-          {/* Tab Switcher */}
+      {/* ── Execution Console ── */}
+      <div className="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+        {/* Terminal Header */}
+        <div className="bg-slate-900/90 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setActiveTab('COT')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${
-                activeTab === 'COT'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Streaming COT Logs
-            </button>
-            <button
-              onClick={() => setActiveTab('RAW_TOOLS')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${
-                activeTab === 'RAW_TOOLS'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Tool Payloads
-            </button>
+            <div className="p-1.5 rounded-lg bg-cyan-950/60 border border-cyan-800/50 text-cyan-400">
+              <Terminal className="w-4 h-4" />
+            </div>
+            <span className="text-xs font-bold text-slate-300">Execution Console</span>
           </div>
 
-          {/* Terminal Actions */}
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setActiveTab('COT')}
+                className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition ${
+                  activeTab === 'COT'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                COT Logs
+              </button>
+              <button
+                onClick={() => setActiveTab('RAW_TOOLS')}
+                className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition ${
+                  activeTab === 'RAW_TOOLS'
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Tool Payloads
+              </button>
+            </div>
+
             <button
               onClick={() => setAutoScroll(!autoScroll)}
-              className={`p-1.5 rounded text-[11px] transition ${
+              className={`p-1.5 rounded text-[10px] transition ${
                 autoScroll ? 'text-emerald-400 bg-emerald-950/40' : 'text-slate-500 hover:text-slate-300'
               }`}
-              title={autoScroll ? 'Auto-scroll lock enabled' : 'Auto-scroll lock disabled'}
+              title={autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}
             >
-              {autoScroll ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+              <span className="font-mono">{autoScroll ? 'A⇣' : 'A⇢'}</span>
             </button>
 
             <button
               onClick={handleCopyLogs}
-              className="p-1.5 rounded text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1"
-              title="Copy terminal logs"
+              className="p-1.5 rounded text-[10px] text-slate-400 hover:text-slate-200 transition"
+              title="Copy logs"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
           </div>
-
         </div>
 
-        {/* Terminal Content Box */}
-        <div ref={terminalContainerRef} className="flex-1 p-3 overflow-y-auto max-h-[340px] flex flex-col gap-2 font-mono text-[11px] leading-relaxed">
+        {/* Terminal Content */}
+        <div ref={terminalContainerRef} className="flex-1 p-4 overflow-y-auto flex flex-col gap-2 font-mono text-[11px] leading-relaxed bg-slate-950">
           {logs.length === 0 ? (
             <div className="text-slate-600 italic p-4 text-center">
-              Terminal idle. Click "Start Agent Generation" to stream live reasoning & Python tool dispatches...
+              Execution console idle. Start a task to stream live AI reasoning &amp; tool dispatches...
             </div>
           ) : (
             logs.map((log) => {
               if (log.type === 'THOUGHT') {
                 return (
                   <div key={log.id} className="text-slate-300 flex items-start gap-2">
-                    <span className="text-slate-500 flex-shrink-0">[{log.timestamp}]</span>
-                    <span className="text-emerald-400 font-bold flex-shrink-0">🧠 [THOUGHT]</span>
+                    <span className="text-slate-600 flex-shrink-0 text-[10px]">[{log.timestamp}]</span>
+                    <span className="text-emerald-400 font-bold flex-shrink-0 text-[10px]">[THOUGHT]</span>
                     <span className="text-slate-200">{log.content}</span>
                   </div>
                 );
@@ -177,9 +205,9 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
 
               if (log.type === 'TOOL_CALL') {
                 return (
-                  <div key={log.id} className="text-cyan-300 flex items-start gap-2 bg-cyan-950/20 p-1.5 rounded border border-cyan-900/30">
-                    <span className="text-slate-500 flex-shrink-0">[{log.timestamp}]</span>
-                    <span className="text-cyan-400 font-bold flex-shrink-0">⚡ [TOOL CALL]</span>
+                  <div key={log.id} className="text-cyan-300 flex items-start gap-2 bg-cyan-950/20 p-2 rounded border border-cyan-900/30">
+                    <span className="text-slate-600 flex-shrink-0 text-[10px]">[{log.timestamp}]</span>
+                    <span className="text-cyan-400 font-bold flex-shrink-0 text-[10px]">[TOOL CALL]</span>
                     <span className="font-bold text-white">{log.toolName}</span>
                     <span className="text-cyan-200/90">{log.content}</span>
                   </div>
@@ -188,7 +216,7 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
 
               if (log.type === 'TOOL_RES') {
                 return (
-                  <div key={log.id} className="text-slate-400 pl-6 border-l-2 border-slate-700 my-0.5">
+                  <div key={log.id} className="text-slate-400 pl-4 border-l-2 border-slate-700 my-0.5">
                     <pre className="text-[10px] text-slate-400 font-mono overflow-x-auto whitespace-pre-wrap">
                       {log.content}
                     </pre>
@@ -199,11 +227,8 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
               if (log.type === 'SELF_HEAL') {
                 return (
                   <div key={log.id} className="text-amber-300 bg-amber-950/30 p-2 rounded border border-amber-700/50 flex items-start gap-2">
-                    <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold text-amber-400">🔧 [SELF-HEALING DETECTED]</span>
-                      <p className="mt-0.5 text-slate-200">{log.content}</p>
-                    </div>
+                    <span className="text-amber-400 font-bold text-[10px]">[SELF-HEAL]</span>
+                    <span className="text-slate-200">{log.content}</span>
                   </div>
                 );
               }
@@ -211,11 +236,8 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
               if (log.type === 'HARNESS_EVENT') {
                 return (
                   <div key={log.id} className="text-emerald-300 bg-emerald-950/30 p-2 rounded border border-emerald-700/50 flex items-start gap-2">
-                    <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold text-emerald-400">🧪 [HARNESS TEST EVENT]</span>
-                      <p className="mt-0.5 text-slate-200">{log.content}</p>
-                    </div>
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <span className="text-slate-200">{log.content}</span>
                   </div>
                 );
               }
@@ -224,9 +246,7 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
             })
           )}
         </div>
-
       </div>
-
     </div>
   );
 };

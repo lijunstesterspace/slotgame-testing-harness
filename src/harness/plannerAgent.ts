@@ -33,38 +33,38 @@ export interface PlannerRunOutcome {
   message?: string;
 }
 
-// ---- system prompts (from docs/) ----
+// ---- system prompts ----
 const SYSTEM_PROMPTS = {
-  stage1: `你是老虎机测试自动化的 TestData Generator Agent（Slot QA）。
+  stage1: `You are a Slot QA TestData Generator Agent for slot machine test automation.
 
-你的任务：把用户意图 + Google Sheets / paytable 原始文本 解析后，通过调用 HARNESS 提供的工具：
-  1) paytable_parser — 读原始文本 → 结构化 records + fileMap
-  2) testdata_generator — 写 .testdata XML 文件到服务器沙箱
-  3) zip_packager — 打包 outcome_testdata zip 供下载
+Your task: Parse user intent + Google Sheets / paytable raw text, then call HARNESS-provided tools:
+  1) paytable_parser — Read raw text → structured records + fileMap
+  2) testdata_generator — Write .testdata XML files to server sandbox
+  3) zip_packager — Package outcome_testdata zip for download
 
-【非常重要】工具调用输出格式（唯一合法格式）：
-当你要调用工具时，必须严格用 XML 标签输出：
-   <tool_call><name>工具名</name><params>{ json 对象 }</params></tool_call>
-注意：<params> 里放一个 JSON 对象（键是参数名，值要符合对应 ToolSchema）。不要在 <tool_call> 外面写任何与工具调度相关的话；COT 思考写在 <tool_call> 之前的自然语言里即可。
+【CRITICAL】Tool call output format (only valid format):
+When calling a tool, you MUST output strictly with XML tags:
+   <tool_call><name>tool_name</name><params>{ json object }</params></tool_call>
+Note: <params> contains a JSON object (keys are parameter names, values must match the corresponding ToolSchema). Do not write anything related to tool dispatch outside of <tool_call>; COT reasoning can be written in natural language before <tool_call>.
 
-任务完成（已经生成了 zip 且 records 准备好）之后，输出：
+After task completion (zip generated and records ready), output:
   <task_complete />
 
-要求：
-- 对于 stage=1（生成）：至少调用 paytable_parser → testdata_generator → zip_packager 三个工具。
-- 所有文件使用 gamePrefix=P5P，除非用户另行指定；module_id 从表格中解析，找不到时默认 105359。
-- 遇到任何解析错误，优先 self-heal：在 <tool_call> 之前写一段中文反思（SELF-HEAL），调整参数重试最多 2 次；超过次数输出 <task_complete success=false reason="..." />。
+Requirements:
+- For stage=1 (generation): call at least paytable_parser → testdata_generator → zip_packager.
+- Use gamePrefix=P5P for all files unless user specifies otherwise; parse module_id from the table, default to 105359 if not found.
+- On any parsing error, prefer self-heal: write a short reflection before <tool_call>, adjust parameters and retry up to 2 times; if exceeded, output <task_complete success=false reason="..." />.
 
-在思考过程中，你可以用自然语言展示 COT，不需要输出 HARNESS_EVENT、SELF_HEAL 等标签（这些标签由 UI 渲染）。但必须在真正需要时输出 <tool_call> 或 <task_complete />。
+During reasoning, you may use natural language for COT; do not output HARNESS_EVENT, SELF_HEAL etc. tags (these are rendered by UI). Only output <tool_call> or <task_complete /> when actually needed.
 `,
 
-  stage2: `你是老虎机测试自动化的 TestData Verifier Agent + UI/Log Diagnoser Agent。
-你的任务：对已经生成的 testdata，调用：
-  1) game_verifier — Selenium 真实验证 + 截图
-  2) log_diagnoser — 把每条验证结果输出根因诊断
+  stage2: `You are a Slot QA TestData Verifier Agent + UI/Log Diagnoser Agent for slot machine test automation.
+Your task: For already generated testdata, call:
+  1) game_verifier — Selenium real verification + screenshots
+  2) log_diagnoser — Output root cause diagnosis for each verification result
 
-【工具调用格式】同 Stage 1：调用用 <tool_call><name>xxx</name><params>{json}</params> 。</tool_call>
-完成：<task_complete />
+【Tool call format】Same as Stage 1: call with <tool_call><name>xxx</name><params>{json}</params></tool_call>
+Completion: <task_complete />
 `,
 };
 
@@ -99,11 +99,11 @@ export class PlannerAgent {
       },
     ];
 
-    // 先拉工具列表 + 创建执行记录（后端 audit）
+    // Fetch tool list + create execution record (backend audit)
     const { schema } = await this.client.listTools();
     const eid = await this._createExecution(opts);
 
-    // 保存上下文
+    // Save context
     let lastRecords: TestRecordDto[] = [];
     let lastFiles: string[] = [];
     let lastZipUrl: string | undefined;
@@ -114,14 +114,14 @@ export class PlannerAgent {
     try {
       for (let i = 0; i < maxCycles; i++) {
         opts.signal?.throwIfAborted();
-        this.callbacks.onHarnessEvent(`Cycle ${i + 1}/${maxCycles} — 调用 ${this.provider.displayName}`);
+        this.callbacks.onHarnessEvent(`Cycle ${i + 1}/${maxCycles} — invoking ${this.provider.displayName}`);
 
         let thoughtAccumulator = "";
         const streamed = await this.provider.streamChat(
           messages,
           (tok) => {
             thoughtAccumulator += tok;
-            // 增量 onThought：每个 chunk 直接刷新 UI 最后一条
+            // Incremental onThought: each chunk refreshes the last UI entry
             this.callbacks.onThought(thoughtAccumulator);
           },
           opts.signal,
@@ -130,7 +130,7 @@ export class PlannerAgent {
         totalOut += streamed.meta.tokensOutEstimate;
         const text = streamed.fullText;
 
-        // 解析 tool_call / task_complete
+        // Parse tool_call / task_complete
         const toolCall = this._parseToolCall(text);
         if (toolCall) {
           this.callbacks.onToolCall(toolCall.name, toolCall.params);
@@ -138,22 +138,22 @@ export class PlannerAgent {
           try {
             result = await this.client.executeTool(toolCall.name, {
               ...toolCall.params,
-              // 把 execution_id 附在 params 里，便于审计
+              // Attach execution_id to params for audit
               __execution_id: eid,
             } as any);
           } catch (err: any) {
-            this.callbacks.onSelfHeal(`执行工具 ${toolCall.name} 失败：${err?.message ?? err}，准备让模型反思后重试。`);
+            this.callbacks.onSelfHeal(`Tool ${toolCall.name} failed: ${err?.message ?? err}, letting model reflect and retry.`);
             messages.push({ role: "assistant", content: text });
             messages.push({
               role: "user",
-              content: `[TOOL ERROR] ${toolCall.name} 调用失败：${err?.message ?? err}\n请自我修正参数后重新调用，或如果任务已无法完成输出 <task_complete success=false reason="tool error" />。`,
+              content: `[TOOL ERROR] ${toolCall.name} call failed: ${err?.message ?? err}\nPlease self-correct parameters and retry, or if the task cannot be completed, output <task_complete success=false reason="tool error" />.`,
             });
             continue;
           }
           const snippet = this._snippetOf(result);
           this.callbacks.onToolResult(toolCall.name, snippet, result.success);
 
-          // side effects: 记录 records / zip url
+          // Side effects: record records / zip url
           if (toolCall.name === "paytable_parser" && result.success) {
             const content = (result.content as any) ?? {};
             const recs = this._coerceRecords(content.records ?? [], eid);
@@ -182,12 +182,12 @@ export class PlannerAgent {
         }
 
         if (/<task_complete\s*\/>|<task_complete\s+success\s*=\s*(["']?)true\1/.test(text)) {
-          this.callbacks.onHarnessEvent("Agent 输出 <task_complete />。");
+          this.callbacks.onHarnessEvent("Agent output <task_complete />.");
           break;
         }
         if (/<task_complete[^>]*success\s*=\s*(["']?)false\1/.test(text)) {
           const m = /reason\s*=\s*(["'])([^"']+)\1/.exec(text);
-          this.callbacks.onSelfHeal(`Agent 输出失败：${m?.[2] ?? "未知原因"}`);
+          this.callbacks.onSelfHeal(`Agent reported failure: ${m?.[2] ?? "Unknown reason"}`);
           return {
             success: false,
             executionId: eid,
@@ -197,20 +197,20 @@ export class PlannerAgent {
           };
         }
 
-        // 未解析到合法标签 → self-heal 让模型重新输出格式化
-        this.callbacks.onSelfHeal("模型输出未包含合法 <tool_call> 或 <task_complete /> 标签；要求其按规定格式重试。");
+        // No valid tag parsed → self-heal: ask model to re-output with correct format
+        this.callbacks.onSelfHeal("Model output does not contain valid <tool_call> or <task_complete /> tags; asking to retry with correct format.");
         messages.push({ role: "assistant", content: text });
         messages.push({
           role: "user",
           content:
-            ["请严格按照 system prompt 规定的格式输出：调用工具时输出 " +
-              "\u003ctool_call\u003e<name>…\u003c/name\u003e<params>{…}\u003c/params\u003e\u003c/tool_call\u003e，" +
-              "任务完成后输出 <task_complete />。现在请重新输出。",
+            ["Please strictly follow the output format specified in the system prompt: when calling a tool, output " +
+              "\u003ctool_call\u003e<name>…\u003c/name\u003e<params>{…}\u003c/params\u003e\u003c/tool_call\u003e, " +
+              "and after task completion, output <task_complete />. Please retry now.",
           ].join(""),
         });
       }
     } catch (err: any) {
-      this.callbacks.onSelfHeal(`运行中断：${err?.message ?? err}`);
+      this.callbacks.onSelfHeal(`Execution interrupted: ${err?.message ?? err}`);
       throw err;
     } finally {
       fetch(`${this.client.base}/api/executions/mine`, {
@@ -300,14 +300,14 @@ export class PlannerAgent {
 
   private _buildUserFirstMessage(intent: PlannerRunOptions["intent"]): string {
     const lines = [
-      `用户意图：${intent.prompt}`,
-      `工作流阶段：Stage ${intent.workflowStage}`,
-      intent.sheetUrl ? `Google Sheet URL：${intent.sheetUrl}` : "",
-      intent.targetUrl ? `目标客户端 URL：${intent.targetUrl}` : "",
-      intent.spinDelayMs ? `spin 间隔：${intent.spinDelayMs}ms` : "",
-      `登录账号：${intent.loginName}`,
+      `User intent: ${intent.prompt}`,
+      `Workflow stage: Stage ${intent.workflowStage}`,
+      intent.sheetUrl ? `Google Sheet URL: ${intent.sheetUrl}` : "",
+      intent.targetUrl ? `Target client URL: ${intent.targetUrl}` : "",
+      intent.spinDelayMs ? `Spin interval: ${intent.spinDelayMs}ms` : "",
+      `Login account: ${intent.loginName}`,
       "",
-      "【原始 paytable 文本（节选）】",
+      "[Raw paytable text (excerpt)]",
       "P5P\t500\t225\t120\t115\t100\t55\t40\t30\t25\t15\t10\t5\t2.5\t0",
       "P5P Wild\t2500\t1125\t600\t575\t500\t275\t200\t150\t125\t75\t50\t25\t12.5\t0",
       "…",

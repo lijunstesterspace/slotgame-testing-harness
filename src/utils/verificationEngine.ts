@@ -14,7 +14,7 @@ export async function runRealGameVerification(
   const spinDelayMs = config.spinDelayMs ?? 500;
   const maxWaitMs = config.timeoutSeconds ? config.timeoutSeconds * 1000 : 120_000;
 
-  // Step A：先调 testdata_generator 生成 game_verifier 需要的 testdataFile
+  // Step A: call testdata_generator to produce the testdataFile needed by game_verifier
   let testdataFile: string | null = null;
   try {
     const genRes = await harnessClient.executeTool("testdata_generator", {
@@ -26,10 +26,10 @@ export async function runRealGameVerification(
       testdataFile = (genRes.content as any[])[0] as string;
     }
   } catch {
-    // generator 失败不阻断，verifier 内部会用默认样本
+    // generator failure does not block; verifier uses default samples internally
   }
 
-  // Step B：异步启动 game_verifier（server.js 内部循环轮询）
+  // Step B: asynchronously launch game_verifier (server.js internally loops polling)
   const prepared = await harnessClient.executeToolAsync("game_verifier", {
     loginName,
     moduleID,
@@ -45,8 +45,8 @@ export async function runRealGameVerification(
         const p = payload as any;
         if (p.type === "TOOL_RES" && p.toolName === "game_verifier") {
           try {
-            // 从 result_snippet 提取 {passed, failed, total}；
-            // 若 SSE 尚未带出 result（后端旧实现），则降级走 Step B2 同步查询
+            // Extract {passed, failed, total} from result_snippet;
+            // If SSE hasn't produced a result (legacy backend), fall back to Step B2 sync query
           } catch {}
         }
       }
@@ -68,7 +68,7 @@ export async function runRealGameVerification(
     .reverse()
     .find((tc) => tc.tool_name === "game_verifier");
 
-  // 提取 verifier 输出
+  // Extract verifier output
   let summary: { passed: number; failed: number; total: number } | null = null;
   let parsed_cases: any[] = [];
   try {
@@ -89,7 +89,7 @@ export async function runRealGameVerification(
     }
   } catch {}
 
-  // Step C：把 cases 回填成 VerificationResult[]
+  // Step C: map cases back into VerificationResult[]
   parsed_cases.forEach((c, idx) => {
     const passed = !!(c.passed ?? c.status === "passed");
     results.push({
@@ -105,7 +105,7 @@ export async function runRealGameVerification(
     onProgress?.(results.length, results[results.length - 1]);
   });
 
-  // Fallback：SSE 没有解析出 cases，但 execution 已结束 → 用 summary + 单条汇总
+  // Fallback: SSE did not parse cases, but execution has ended → use summary + single aggregate entry
   if (results.length === 0 && summary) {
     const passed = summary.failed === 0;
     results.push({

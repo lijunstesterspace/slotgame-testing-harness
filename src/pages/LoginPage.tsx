@@ -34,14 +34,14 @@ export const LoginPage: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }) 
           </div>
           <div>
             <h1 className="text-xl font-bold">Slot AI HARNESS</h1>
-            <p className="text-xs text-slate-400">登录以进入 Agent 工作台</p>
+            <p className="text-xs text-slate-400">Login to access the Agent Workbench</p>
           </div>
         </div>
 
         <div className="rounded-xl bg-emerald-950/20 border border-emerald-800/40 p-3 flex gap-2 text-[11px] text-emerald-200">
           <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
           <span>
-            默认已内置 3 个测试账号 <b>qa-tester-1/2/3</b> + 1 个管理员 <b>admin</b>，密码见部署者 <code>.env</code>。LLM 默认通过您本机 <b>Ollama :11434</b> 处理，原始数据不会离开您的电脑。
+            Built-in accounts: <b>qa-tester-1/2/3</b> + admin <b>admin</b>, passwords in <code>.env</code>. LLM defaults to local <b>Ollama :11434</b> — raw data stays on your machine.
           </span>
         </div>
 
@@ -77,11 +77,11 @@ export const LoginPage: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }) 
           disabled={loading || !u || !p}
           className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 text-slate-950 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          <LogIn className="w-4 h-4" /> {loading ? "登录中..." : "进入 HARNESS 工作台"}
+          <LogIn className="w-4 h-4" /> {loading ? "Logging in..." : "Enter HARNESS Workbench"}
         </button>
 
         <p className="text-[10px] text-slate-500 text-center">
-          © Internal QA Tool · LLM 默认本地 Ollama，外部 Provider 需勾选合规确认
+          © Internal QA Tool · LLM defaults to local Ollama; external providers require compliance confirmation
         </p>
       </form>
     </div>

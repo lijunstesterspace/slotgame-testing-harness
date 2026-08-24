@@ -3,9 +3,11 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 
 from server.config import settings
 from server.infra.logger import log
@@ -13,6 +15,32 @@ from server.infra.storage import StorageAsync
 from server.services.execution_queue import SerialExecutionQueue
 from server.tools.base import ToolRegistry
 from server.tools.impl import BUILTIN_TOOLS
+
+
+# ---------------------------------------------------------------------------
+# 静态文件目录：Vite 构建产物位于 server/static（开发时可能不存在）
+# ---------------------------------------------------------------------------
+def _resolve_static_dir() -> Path | None:
+    """返回前端构建产物目录，不存在则返回 None。"""
+    import sys
+    if getattr(sys, 'frozen', False):
+        meipass = Path(sys._MEIPASS)
+        candidates = [
+            meipass / "server" / "static",
+            meipass / "static",
+            meipass,
+        ]
+        for c in candidates:
+            if c.is_dir() and (c / "index.html").exists():
+                return c
+    # 开发 / 源码模式
+    src = Path(__file__).resolve().parent / "static"
+    if src.is_dir() and (src / "index.html").exists():
+        return src
+    return None
+
+
+STATIC_DIR = _resolve_static_dir()
 
 
 # ---- SSE Hub (in-memory pub/sub for live execution events) --------
@@ -105,10 +133,51 @@ async def healthz():
     return {"ok": True, "app": settings.app_name, "ts": int(time.time() * 1000)}
 
 
-@app.get("/")
-async def index():
+@app.get("/api/status")
+async def api_status():
+    """API 状态接口（替代原 / 路由，避免与前端冲突）。"""
     return {"name": settings.app_name, "status": "ok",
             "docs": "/docs", "health": "/healthz"}
+
+
+# ---------------------------------------------------------------------------
+# 静态文件托管：使用 FileResponse（兼容 PyInstaller 打包环境）
+# ---------------------------------------------------------------------------
+def _serve_static(file_path: Path) -> FileResponse | None:
+    """安全地返回静态文件，防止路径遍历攻击。"""
+    if STATIC_DIR is None:
+        return None
+    resolved = (STATIC_DIR / file_path).resolve()
+    # 确保请求的文件在 STATIC_DIR 内
+    if not str(resolved).startswith(str(STATIC_DIR.resolve())):
+        return None
+    if resolved.is_file():
+        return FileResponse(resolved)
+    return None
+
+
+# 精确匹配前端构建产物中的文件
+@app.get("/assets/{filename:path}")
+async def _serve_assets(filename: str):
+    """服务 Vite 构建的 JS/CSS 资源文件。"""
+    resp = _serve_static(Path("assets") / filename)
+    if resp:
+        return resp
+    return JSONResponse({"error": "not_found"}, status_code=404)
+
+
+# SPA catch-all：所有未匹配的 GET 请求返回 index.html
+@app.get("/{path:path}")
+async def _spa_catch_all(path: str, request: Request):
+    """SPA 路由 fallback：将前端路由请求返回 index.html。"""
+    # 如果请求的是 API 或 docs，不拦截（FastAPI 会优先匹配具体路由）
+    if path.startswith("api/") or path.startswith("docs") or path.startswith("openapi"):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if STATIC_DIR is not None:
+        index = STATIC_DIR / "index.html"
+        if index.exists():
+            return FileResponse(index)
+    return JSONResponse({"error": "frontend_not_built", "hint": "Run 'npm run build'"}, status_code=404)
 
 
 if __name__ == "__main__":

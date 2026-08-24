@@ -1,10 +1,23 @@
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-load_dotenv()
+
+def _resolve_env_path() -> Path:
+    """解析 .env 文件路径：打包后从 exe 所在目录读取，开发时从项目根目录读取。"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后：exe 所在目录
+        return Path(sys.executable).parent / ".env"
+    else:
+        # 开发模式：项目根目录
+        return Path(__file__).resolve().parent.parent / ".env"
+
+
+_env_path = _resolve_env_path()
+load_dotenv(_env_path)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SERVER_DIR = Path(__file__).resolve().parent

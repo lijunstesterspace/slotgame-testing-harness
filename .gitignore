@@ -30,7 +30,8 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-*.spec
+# 但保留项目 spec 文件
+!slot_harness.spec
 
 # Installer logs
 pip-log.txt
@@ -180,7 +181,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# ----- AI HARNESS additions -----
+# ----- AI Harness additions -----
 server/__pycache__/
 server/**/__pycache__/
 server/*.pyc
@@ -193,3 +194,9 @@ server/data/artifacts/**
 server/.venv/
 venv/
 .venv/
+
+# EXE 打包产物
+server/static/
+build/
+dist/
+*.manifest

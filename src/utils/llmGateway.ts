@@ -22,7 +22,7 @@ export const PROVIDER_PRESETS: Record<
 > = {
   OLLAMA: {
     name: "Local Ollama Instance (Default · Compliant)",
-    defaultUrl: "/ollama",
+    defaultUrl: "http://localhost:11434",
     defaultModels: ["qwen2.5-coder:7b", "deepseek-r1:8b", "qwen3-vl:8b", "qwen3:latest"],
   },
   OPENAI: {

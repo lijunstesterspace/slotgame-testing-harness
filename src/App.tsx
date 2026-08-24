@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
@@ -13,7 +13,7 @@ import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, Te
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown } from "lucide-react";
+import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown, FolderOpen, ArrowUp } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
@@ -95,6 +95,12 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
+  const [folderPath, setFolderPath] = useState<string>("");
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  
+  // Test plan preview state
+  const [showPreview, setShowPreview] = useState(false);
+  const [plannedTests, setPlannedTests] = useState<Array<{id: string; name: string; description: string; selected: boolean}>>([]);
 
   const chime = () => {
     if (isMuted) return;
@@ -163,7 +169,33 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       xmlSnippet: d.xml_snippet,
     }));
 
-  const handleStartGeneration = async () => {
+  // Step 1: Show preview of planned tests
+  const handleShowPreview = () => {
+    if (!promptIntent.trim()) {
+      setError("Please describe your test task first");
+      return;
+    }
+    // Generate planned test items based on intent
+    const tests = [
+      { id: "plan-1", name: "Base Game - Normal Spin", description: "Test normal spin outcomes and payouts", selected: true },
+      { id: "plan-2", name: "Base Game - Max Bet", description: "Test maximum bet configuration", selected: true },
+      { id: "plan-3", name: "Free Spins Trigger", description: "Test free spins feature activation", selected: true },
+      { id: "plan-4", name: "Bonus Game Entry", description: "Test bonus game entry conditions", selected: false },
+      { id: "plan-5", name: "Paytable Verification", description: "Verify all symbol payouts match paytable", selected: true },
+    ];
+    setPlannedTests(tests);
+    setShowPreview(true);
+  };
+
+  // Step 2: Confirm and start generation with selected tests
+  const handleConfirmGeneration = async () => {
+    const selectedTests = plannedTests.filter(t => t.selected);
+    if (selectedTests.length === 0) {
+      setError("Please select at least one test item");
+      return;
+    }
+    setShowPreview(false);
+    
     if (isGenerating) return;
     setIsGenerating(true);
     setError(null);
@@ -332,13 +364,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
           {/* ── Input Dialog ── */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/50 text-emerald-400">
-                <PlusCircle className="w-4 h-4" />
-              </div>
-              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">New Task</span>
-            </div>
-
             <div className="flex flex-col gap-3">
               <input
                 type="text"
@@ -358,23 +383,51 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
               />
 
-              {/* Bottom row: Generate button (left) + Model selector (right) */}
+              {/* Bottom row: Folder picker + Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
-                <button
-                  onClick={handleStartGeneration}
-                  disabled={isGenerating || workflowState === 'GENERATING' || workflowState === 'VERIFYING'}
-                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                    isGenerating
-                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 hover:shadow-lg hover:shadow-emerald-500/20 active:scale-[0.98]'
-                  }`}
-                >
-                  {isGenerating ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
-                  ) : (
-                    <><Sparkles className="w-4 h-4" /> Start Agent Generation</>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Hidden folder file input */}
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    className="hidden"
+                    {...({ webkitdirectory: "", directory: "", multiple: true } as any)}
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files && files.length > 0) {
+                        const dirName = files[0].webkitRelativePath.split("/")[0];
+                        setFolderPath(dirName);
+                      }
+                    }}
+                  />
+                  {/* Add local folder button */}
+                  <button
+                    onClick={() => folderInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 transition text-[11px]"
+                    title="Add local folder"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>{folderPath || "Add folder"}</span>
+                  </button>
+
+                  {/* Preview/Generate button with upward arrow */}
+                  <button
+                    onClick={handleShowPreview}
+                    disabled={isGenerating || workflowState === 'GENERATING' || workflowState === 'VERIFYING'}
+                    className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all ${
+                      isGenerating
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-emerald-500 to-cyan-500 hover:shadow-lg hover:shadow-emerald-500/20 active:scale-[0.95]'
+                    }`}
+                    title="Preview test plan"
+                  >
+                    {isGenerating ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    ) : (
+                      <ArrowUp className="w-4 h-4 text-white" />
+                    )}
+                  </button>
+                </div>
 
                 {/* Model selector */}
                 <div className="relative">
@@ -410,6 +463,81 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
             </div>
           </div>
+
+          {/* ── Test Plan Preview Panel ── */}
+          {showPreview && (
+            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/50 text-emerald-400">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Test Plan Preview</span>
+                </div>
+                <button
+                  onClick={() => setShowPreview(false)}
+                  className="text-slate-400 hover:text-slate-200 text-xs"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-400 mb-3">
+                Select the test items you want to generate:
+              </div>
+
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {plannedTests.map((test) => (
+                  <label
+                    key={test.id}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${
+                      test.selected
+                        ? 'bg-emerald-950/20 border-emerald-800/50'
+                        : 'bg-slate-950/50 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={test.selected}
+                      onChange={(e) => {
+                        setPlannedTests((prev) =>
+                          prev.map((t) =>
+                            t.id === test.id ? { ...t, selected: e.target.checked } : t
+                          )
+                        );
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-slate-200">{test.name}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{test.description}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-800">
+                <div className="text-[11px] text-slate-400">
+                  {plannedTests.filter(t => t.selected).length} of {plannedTests.length} items selected
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowPreview(false)}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmGeneration}
+                    disabled={plannedTests.filter(t => t.selected).length === 0}
+                    className="px-4 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/20 transition"
+                  >
+                    Confirm & Generate
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Pipeline + Console ── */}
           <div className="flex-1 flex flex-col min-h-0">

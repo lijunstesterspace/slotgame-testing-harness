@@ -5,7 +5,7 @@ export const MODELS_LIST_KEY = "slot_harness_llm_models";
 
 export const DEFAULT_LLM_CONFIG: LlmProviderConfig = {
   provider: "OLLAMA",
-  baseUrl: "/ollama",
+  baseUrl: "http://localhost:11434",
   apiKey: "",
   selectedModel: "qwen2.5-coder:7b",
   availableModels: [
@@ -50,7 +50,15 @@ export const PROVIDER_PRESETS: Record<
 export function loadStoredLlmConfig(): LlmProviderConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_LLM_CONFIG, ...JSON.parse(raw) };
+    if (raw) {
+      const config = { ...DEFAULT_LLM_CONFIG, ...JSON.parse(raw) };
+      // Migrate old "/ollama" baseUrl to "http://localhost:11434"
+      if (config.provider === "OLLAMA" && config.baseUrl === "/ollama") {
+        config.baseUrl = "http://localhost:11434";
+        saveLlmConfig(config);
+      }
+      return config;
+    }
   } catch (e) {
     console.warn("[llmGateway] loadStoredLlmConfig failed", e);
   }
@@ -72,7 +80,7 @@ export function getDefaultModelEntry(): LlmModelEntry {
     id: "default-ollama",
     name: "Local Ollama",
     provider: "OLLAMA",
-    baseUrl: "/ollama",
+    baseUrl: "http://localhost:11434",
     apiKey: "",
     selectedModel: "qwen2.5-coder:7b",
     availableModels: ["qwen2.5-coder:7b", "deepseek-r1:8b", "qwen3-vl:8b", "qwen3:latest"],
@@ -86,7 +94,21 @@ export function loadStoredModels(): LlmModelEntry[] {
     const raw = localStorage.getItem(MODELS_LIST_KEY);
     if (raw) {
       const list: LlmModelEntry[] = JSON.parse(raw);
-      if (list.length > 0) return list;
+      if (list.length > 0) {
+        // Migrate old "/ollama" baseUrl to "http://localhost:11434"
+        let changed = false;
+        const migrated = list.map((m) => {
+          if (m.provider === "OLLAMA" && m.baseUrl === "/ollama") {
+            changed = true;
+            return { ...m, baseUrl: "http://localhost:11434" };
+          }
+          return m;
+        });
+        if (changed) {
+          saveStoredModels(migrated);
+        }
+        return migrated;
+      }
     }
   } catch (e) {
     console.warn("[llmGateway] loadStoredModels failed", e);

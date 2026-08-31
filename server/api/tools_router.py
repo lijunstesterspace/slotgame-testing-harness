@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+import os
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
@@ -18,6 +20,10 @@ class ExecuteAsyncReq(BaseModel):
     tool_name: str
     params: dict
     execution_id: str | None = None
+
+
+class ScanTestdataReq(BaseModel):
+    folder_path: str
 
 
 @router.get("/list")
@@ -95,3 +101,22 @@ async def execute_async(req: ExecuteAsyncReq, request: Request, user=Depends(req
 
     asyncio.create_task(_bg())
     return {"ok": True, "execution_id": eid}
+
+
+@router.post("/scan-testdata")
+async def scan_testdata_files(req: ScanTestdataReq, user=Depends(require_user())):
+    """Scan a folder for .testdata XML files and return their paths + basic info."""
+    folder = Path(req.folder_path)
+    if not folder.exists() or not folder.is_dir():
+        raise HTTPException(status_code=400, detail=f"Folder not found: {req.folder_path}")
+
+    files = []
+    for f in sorted(folder.glob("*.testdata")):
+        stat = f.stat()
+        files.append({
+            "name": f.name,
+            "path": str(f.resolve()),
+            "size_kb": round(stat.st_size / 1024, 1),
+            "modified": stat.st_mtime,
+        })
+    return {"folder": str(folder.resolve()), "count": len(files), "files": files}

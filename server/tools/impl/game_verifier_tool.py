@@ -491,7 +491,7 @@ class GameVerifierTool(ToolPlugin):
             passed_count = 0
 
             for i, rec in enumerate(records):
-                log.info("verifier.spin", index=i + 1, total=total,
+                log.info("verifier.spin", spin=i + 1, total=total,
                          batch=rec["batch"], index=rec["index"])
 
                 # Reset response counter before spin

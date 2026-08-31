@@ -13,7 +13,7 @@ import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, Te
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown, FolderOpen, ArrowUp } from "lucide-react";
+import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
@@ -97,6 +97,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
   const [folderPath, setFolderPath] = useState<string>("");
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   // Test plan preview state
   const [showPreview, setShowPreview] = useState(false);
@@ -202,6 +203,11 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     if (workflowStage >= 1) setWorkflowStage(2);
     setWorkflowState("GENERATING");
     setTasks((prev) => prev.map((t) => (t.id === "t1-1" ? { ...t, status: "active" } : t)));
+
+    // Create AbortController for this run
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const plannerCfg = { ...llmConfig, selectedModel };
       const planner = new PlannerAgent(plannerCfg, plannerCallbacks);
@@ -215,15 +221,29 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const outcome = await planner.run({
         intent: { prompt: promptIntent, sheetUrl, loginName, workflowStage: 1 },
         maxCycles: 14,
+        signal: controller.signal,
       });
       if (!outcome.success) throw new Error(outcome.message ?? "Planner did not complete the task");
       setWorkflowState("REVIEW");
       setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
     } catch (e: any) {
-      setError(e?.message ?? String(e));
+      if (e?.name === "AbortError") {
+        addLog({ type: "HARNESS_EVENT", content: " Execution stopped by user.", status: "warning" });
+      } else {
+        setError(e?.message ?? String(e));
+      }
       setWorkflowState("READY");
     } finally {
       setIsGenerating(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  // Stop the current execution
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
   };
 
@@ -241,6 +261,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         timeoutMs: config.timeoutMs,
         loginName: config.loginName,
         autoRetryServerError: config.autoRetryServerError,
+        folderPath: config.folderPath,
+        testdataFilePath: config.testdataFilePath,
       };
       const report = await runRealGameVerification(testRecords, cfg, (completedCount, currentResult) => {
         addLog({
@@ -421,19 +443,19 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     <span>{folderPath || "Add folder"}</span>
                   </button>
 
-                  {/* Preview/Generate button with upward arrow */}
+                  {/* Preview/Generate or Stop button */}
                   <button
-                    onClick={handleShowPreview}
-                    disabled={isGenerating || workflowState === 'GENERATING' || workflowState === 'VERIFYING'}
+                    onClick={isGenerating ? handleStop : handleShowPreview}
+                    disabled={!isGenerating && (workflowState === 'GENERATING' || workflowState === 'VERIFYING')}
                     className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all ${
                       isGenerating
-                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        ? 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/30 active:scale-[0.95]'
                         : 'bg-gradient-to-r from-emerald-500 to-cyan-500 hover:shadow-lg hover:shadow-emerald-500/20 active:scale-[0.95]'
                     }`}
-                    title="Preview test plan"
+                    title={isGenerating ? "Stop execution" : "Preview test plan"}
                   >
                     {isGenerating ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <Square className="w-4 h-4 fill-current" />
                     ) : (
                       <ArrowUp className="w-4 h-4 text-white" />
                     )}
@@ -579,6 +601,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             isVerifying={isTesting}
             loginName={loginName}
             setLoginName={setLoginName}
+            folderPath={folderPath}
+            setFolderPath={setFolderPath}
           />
         </div>
       )}

@@ -83,6 +83,24 @@ export interface VerificationReport {
   passRate: number;
   executedAt: string;
   results: VerificationResult[];
+  aiDiagnosis?: AIDiagnosisResult;
+}
+
+export interface AIDiagnosisResult {
+  summary: string;
+  failedDiagnoses: AIDiagnosis[];
+  recommendations: string[];
+  rawText?: string;
+}
+
+export interface AIDiagnosis {
+  caseName: string;
+  diagnosisType: string;
+  title: string;
+  severity: string;
+  evidenceLogs: string[];
+  recommendation: string;
+  aiAnalysis?: string;
 }
 
 export type LlmProviderType = 'OLLAMA' | 'OPENAI' | 'ANTHROPIC' | 'CUSTOM';

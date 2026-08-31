@@ -11,7 +11,11 @@ import {
   FileSearch,
   Sparkles,
   ShieldAlert,
-  Camera
+  Camera,
+  Brain,
+  Lightbulb,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { VerificationReport } from '../types';
 import { diagnoseVerificationResult } from '../utils/logVisionDiagnoser';
@@ -30,6 +34,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'PASSED' | 'FAILED'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [aiExpanded, setAiExpanded] = useState(true);
 
   const filteredResults = report.results.filter((res) => {
     const matchesSearch = 
@@ -111,6 +116,108 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
               </span>
             </div>
           </div>
+
+          {/* AI Diagnosis Summary Section */}
+          {report.aiDiagnosis && report.failedCount > 0 && (
+            <div className="bg-gradient-to-br from-violet-950/40 to-slate-900 border border-violet-500/30 rounded-xl overflow-hidden">
+              <button
+                onClick={() => setAiExpanded(!aiExpanded)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-violet-950/30 transition"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-1.5 rounded-lg bg-violet-500/20 border border-violet-500/40">
+                    <Brain className="w-4 h-4 text-violet-300" />
+                  </div>
+                  <div className="text-left">
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      AI 智能诊断分析
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-500/30 border border-violet-500/50 text-violet-200">
+                        {report.aiDiagnosis.failedDiagnoses.length} 条诊断
+                      </span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
+                      {report.aiDiagnosis.summary}
+                    </p>
+                  </div>
+                </div>
+                {aiExpanded ? (
+                  <ChevronUp className="w-4 h-4 text-slate-400" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                )}
+              </button>
+
+              {aiExpanded && (
+                <div className="px-4 pb-4 flex flex-col gap-3">
+                  {/* AI Summary */}
+                  <div className="p-3 rounded-lg bg-slate-950/60 border border-slate-800">
+                    <p className="text-xs text-slate-200 leading-relaxed">
+                      {report.aiDiagnosis.summary}
+                    </p>
+                  </div>
+
+                  {/* AI Diagnoses for Failed Cases */}
+                  {report.aiDiagnosis.failedDiagnoses.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                        失败案例根因分析
+                      </span>
+                      {report.aiDiagnosis.failedDiagnoses.map((diag, idx) => (
+                        <div key={idx} className="p-3 rounded-lg bg-slate-950/60 border border-slate-800 flex flex-col gap-2">
+                          <div className="flex items-center justify-between">
+                            <span className={`text-xs font-bold ${
+                              diag.severity === 'HIGH' ? 'text-rose-300' :
+                              diag.severity === 'MEDIUM' ? 'text-amber-300' : 'text-slate-300'
+                            }`}>
+                              {diag.title}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700 text-slate-400">
+                              {diag.diagnosisType}
+                            </span>
+                          </div>
+                          {diag.aiAnalysis && (
+                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                              {diag.aiAnalysis}
+                            </p>
+                          )}
+                          {diag.evidenceLogs.length > 0 && (
+                            <div className="flex flex-col gap-1">
+                              {diag.evidenceLogs.map((log, i) => (
+                                <span key={i} className="text-[10px] text-cyan-300 font-mono bg-slate-900/60 px-2 py-1 rounded">
+                                  {log}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1.5 text-[11px] text-emerald-300">
+                            <Lightbulb className="w-3 h-3" />
+                            <span>{diag.recommendation}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Recommendations */}
+                  {report.aiDiagnosis.recommendations.length > 0 && (
+                    <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-500/30">
+                      <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
+                        建议操作
+                      </span>
+                      <ul className="mt-1.5 flex flex-col gap-1">
+                        {report.aiDiagnosis.recommendations.map((rec, idx) => (
+                          <li key={idx} className="text-xs text-slate-200 flex items-start gap-1.5">
+                            <span className="text-emerald-400 mt-0.5">•</span>
+                            {rec}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Search & Filter Toolbar */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2">

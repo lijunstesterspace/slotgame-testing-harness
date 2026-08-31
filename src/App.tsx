@@ -263,12 +263,23 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       });
       chime();
       if (failedCount > 0) {
-        addLog({ type: "TOOL_CALL", toolName: "log_diagnoser", content: "Running Vision Analysis on Error Logs...", status: "running" });
+        addLog({ type: "TOOL_CALL", toolName: "log_diagnoser", content: "Running AI-Powered Diagnostic Analysis...", status: "running" });
         try {
           const diag = await harnessClient.executeTool("log_diagnoser", { results: report.results });
-          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: `Identified ${diag.content && typeof diag.content === "object" ? (diag.content as any)?.count ?? 0 : 0} root causes.`, status: "success" });
+          const diagCount = diag.content && typeof diag.content === "object" ? (diag.content as any)?.count ?? 0 : 0;
+          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: `Rule-based: Identified ${diagCount} root causes.`, status: "success" });
         } catch (e: any) {
-          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: "Local heuristic fallback used", detail: String(e?.message ?? e), status: "warning" });
+          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: "Rule-based diagnosis fallback", detail: String(e?.message ?? e), status: "warning" });
+        }
+        // AI diagnosis is now handled in verificationEngine.ts
+        if (report.aiDiagnosis) {
+          addLog({
+            type: "TOOL_RES",
+            toolName: "ai_diagnoser",
+            content: `AI Diagnosis: ${report.aiDiagnosis.failedDiagnoses.length} root causes analyzed`,
+            detail: report.aiDiagnosis.summary,
+            status: "success",
+          });
         }
       }
       setWorkflowStage(5);

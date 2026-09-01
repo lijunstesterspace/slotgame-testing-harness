@@ -3,7 +3,7 @@
 ## 1. 核心定位
 定义 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
 
-## 2. paytable_parser 接口契约
+## 2. testdata_parser 接口契约
 
 **功能：** 解析原始 paytable 文本 → 结构化记录
 
@@ -45,7 +45,7 @@
 **输入参数：**
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| `records` | array | 是 | paytable_parser 输出的结构化记录 |
+| `records` | array | 是 | testdata_parser 输出的结构化记录 |
 | `module_id` | string | 是 | 模块ID |
 | `game_prefix` | string | 否 | 游戏前缀，默认 `P5P_` |
 

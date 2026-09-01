@@ -148,7 +148,7 @@ hidden_imports = [
     "server.tools.impl",
     "server.tools.impl.game_verifier_tool",
     "server.tools.impl.log_diagnoser_tool",
-    "server.tools.impl.paytable_parser_tool",
+    "server.tools.impl.testdata_parser_tool",
     "server.tools.impl.testdata_generator_tool",
     "server.tools.impl.zip_packager_tool",
 ]
@@ -161,6 +161,13 @@ from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 bcrypt_datas, bcrypt_binaries, _ = collect_all("bcrypt")
 cffi_datas, cffi_binaries, _ = collect_all("_cffi_backend")
 aiosqlite_datas, aiosqlite_binaries, _ = collect_all("aiosqlite")
+
+# 收集 server.tools.impl 包的所有子模块（PyInstaller 静态分析可能遗漏）
+try:
+    impl_datas, impl_binaries, impl_hidden = collect_all("server.tools.impl")
+except Exception:
+    impl_datas, impl_binaries, impl_hidden = [], [], []
+    print("[spec] WARNING: Could not collect_all server.tools.impl")
 
 # ---------------------------------------------------------------------------
 # 前端静态文件：server/static（Vite 构建产物）
@@ -208,9 +215,9 @@ for script_name in ("verify_testdata.py", "generate_testdata.py"):
 a = Analysis(
     [os.path.join(ROOT, "build.py")],
     pathex=[ROOT],
-    binaries=bcrypt_binaries + cffi_binaries + aiosqlite_binaries,
-    datas=bcrypt_datas + cffi_datas + aiosqlite_datas + static_datas + env_datas + script_datas,
-    hiddenimports=hidden_imports,
+    binaries=bcrypt_binaries + cffi_binaries + aiosqlite_binaries + impl_binaries,
+    datas=bcrypt_datas + cffi_datas + aiosqlite_datas + impl_datas + static_datas + env_datas + script_datas,
+    hiddenimports=hidden_imports + impl_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

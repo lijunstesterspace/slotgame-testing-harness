@@ -59,6 +59,15 @@ export interface VerificationConfig {
   authToken?: string;
   loginName?: string;
   timeoutSeconds?: number;
+  folderPath?: string;
+  testdataFilePath?: string;
+}
+
+export interface TestdataFileInfo {
+  name: string;
+  path: string;
+  size_kb: number;
+  modified: number;
 }
 
 export interface VerificationResult {

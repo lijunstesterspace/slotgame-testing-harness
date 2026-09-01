@@ -326,4 +326,419 @@ UI无需重构，仅增量新增功能模块，始终保持极简高效，不会
 
 当前仅完成「基础数据生成与验证」最小闭环，依托Hermes式分层约束架构与插件化设计，未来可**零重构、低成本、增量式**拓展为覆盖「数据生成、智能校验、异常测试、回归测试、风险巡检、自动报告」的全站SLOT游戏AI自动化测试平台，具备极强的长期工程扩展性与业务迭代能力。
 
+---
+
+## 10\. HARNESS框架扩展设计（多场景流水线架构）
+
+### 10\.1 当前架构局限性分析
+
+现有HARNESS采用**单一流水线硬编码**模式：
+
+```
+固定流程：用户输入 → PlannerAgent(stage1) → testdata_parser → testdata_generator → zip_packager
+```
+
+**问题**：新增测试场景（如翻译文件验证、数值校验）需修改代码、Prompt、前端stage枚举，无法实现真正的插拔式扩展。
+
+### 10\.2 HARNESS三层核心模块升级
+
+将HARNESS从"单一流水线调度员"升级为"多场景交通指挥中心"：
+
+#### 模块一：意图路由器（Intent Router）
+
+**职责**：解析用户自然语言，匹配测试场景，自动加载对应的Agent+Skill+Pipeline+Plugin组合。
+
+```typescript
+interface TestScenario {
+  id: string;                    // 场景唯一标识
+  label: string;                 // 前端显示名称
+  keywords: string[];            // 关键词匹配规则
+  agentFile: string;             // 对应的Agent .md文件
+  skills: string[];              // 需要的Skill文件列表
+  pipeline: string;              // 流水线ID
+  requiredPlugins: string[];     // 依赖的Plugin列表
+}
+
+const SCENARIOS: TestScenario[] = [
+  {
+    id: "testdata_generation",
+    label: "TestData生成",
+    keywords: ["testdata", "生成", "paytable", "sheet"],
+    agentFile: "testdata_generator_agent.md",
+    skills: ["skill-sheet-data-clean.md"],
+    pipeline: "testdata-gen-pipeline",
+    requiredPlugins: ["testdata_parser", "testdata_generator", "zip_packager"],
+  },
+  {
+    id: "translation_verification",
+    label: "翻译文件验证",
+    keywords: ["翻译", "translation", "多语言", "本地化"],
+    agentFile: "translation_verifier_agent.md",
+    skills: ["skill-translation-check.md"],
+    pipeline: "translation-verify-pipeline",
+    requiredPlugins: ["file_scanner", "translation_checker"],
+  },
+  {
+    id: "game_verification",
+    label: "游戏环境验证",
+    keywords: ["验证", "verify", "game", "spin"],
+    agentFile: "testdata_verifier_agent.md",
+    skills: [],
+    pipeline: "game-verify-pipeline",
+    requiredPlugins: ["game_verifier", "log_diagnoser"],
+  },
+];
+```
+
+**路由策略**：关键词规则匹配 + 用户显式选择双保险，不依赖AI做路由判断（规避小模型不可靠性）。
+
+#### 模块二：流水线编排器（Pipeline Orchestrator）
+
+**职责**：声明式定义每个场景的执行步骤、依赖关系、异常处理策略。
+
+```typescript
+interface PipelineStep {
+  id: string;
+  plugin: string;              // 调用的Plugin名称
+  label: string;               // 前端显示名
+  dependsOn: string[];         // 依赖的前置步骤
+  retryOnFail: boolean;        // 失败是否重试
+  maxRetries: number;
+}
+
+interface Pipeline {
+  id: string;
+  name: string;
+  stages: PipelineStep[][];    // 二维数组：外层=阶段(串行)，内层=并行步骤
+}
+
+const PIPELINES: Record<string, Pipeline> = {
+  "testdata-gen-pipeline": {
+    id: "testdata-gen-pipeline",
+    name: "TestData生成流水线",
+    stages: [
+      [{ id: "parse", plugin: "testdata_parser", label: "解析表格数据", dependsOn: [], retryOnFail: true, maxRetries: 2 }],
+      [{ id: "generate", plugin: "testdata_generator", label: "生成测试数据", dependsOn: ["parse"], retryOnFail: true, maxRetries: 2 }],
+      [{ id: "package", plugin: "zip_packager", label: "打包产物", dependsOn: ["generate"], retryOnFail: false, maxRetries: 1 }],
+    ],
+  },
+  "translation-verify-pipeline": {
+    id: "translation-verify-pipeline",
+    name: "翻译验证流水线",
+    stages: [
+      [{ id: "scan", plugin: "file_scanner", label: "扫描翻译文件", dependsOn: [], retryOnFail: true, maxRetries: 1 }],
+      [{ id: "check", plugin: "translation_checker", label: "逐文件校验翻译", dependsOn: ["scan"], retryOnFail: false, maxRetries: 1 }],
+      [{ id: "report", plugin: "report_generator", label: "生成差异报告", dependsOn: ["check"], retryOnFail: false, maxRetries: 1 }],
+    ],
+  },
+};
+```
+
+#### 模块三：执行引擎 + 状态机（Execution Engine）
+
+**职责**：按流水线定义逐步执行，管理状态流转，处理异常。
+
+```
+执行引擎（代码控制，AI不参与）：
+  for each stage in pipeline.stages:
+    for each step in stage:
+      1. 检查依赖步骤是否全部完成
+      2. 调用对应Plugin
+      3. 记录执行结果到状态机
+      4. 失败 → 重试 or 上报
+
+AI Agent（仅做语义判断）：
+  - 解析用户输入 → 结构化参数
+  - 判断Plugin返回结果是否合理
+  - 生成诊断报告
+```
+
+### 10\.3 新增测试场景完整示例：翻译文件验证
+
+**用户需求**："验证Phoenix5游戏名在33个翻译文件中的翻译是否正确"
+
+```
+┌─ HARNESS意图路由器 ─────────────────────────────
+│  匹配关键词"翻译" → 场景: translation_verification  │
+│  加载Agent: translation_verifier_agent.md          │
+│  加载Skill: skill-translation-check.md             │
+│  加载Pipeline: translation-verify-pipeline         │
+│  检查Plugin: file_scanner, translation_checker     │
+──────────────────────────────────────────────────┘
+         ↓
+┌─ 流水线执行 ─────────────────────────────────────
+│  Stage 1: file_scanner                            │
+│    → 扫描指定目录下33个翻译文件                      │
+│    → 提取每个文件中"Phoenix5"对应的翻译文本          │
+│    → 输出: [{file: "zh-CN.json", value: "凤凰5"},  │
+│             {file: "ja-JP.json", value: "フェニックス5"}, ...] │
+│                                                    │
+│  Stage 2: translation_checker                      │
+│    → AI判断每个翻译是否合理（语义校验）               │
+│    → 检查术语一致性、格式规范性                       │
+│    → 输出: 通过/不通过 + 原因                        │
+│                                                    │
+│  Stage 3: report_generator                         │
+│    → 汇总结果，生成差异报告                           │
+│    → 输出: JSON报告 + 前端可视化                     │
+└──────────────────────────────────────────────────┘
+```
+
+### 10\.4 前端适配方案
+
+左侧导航栏升级为**场景选择器**：
+
+```
+Sidebar:
+├──  测试场景（新增）
+│   ├── TestData生成
+│   ├── 翻译文件验证
+│   ├── 游戏环境验证
+│   ── ...（未来新增）
+├──  Plugin
+├── 🤖 Agents
+└── 📋 Task List
+```
+
+用户先选场景，再输入具体任务描述。HARNESS根据场景自动加载对应的Agent/Skill/Pipeline/Plugin组合。
+
+### 10\.5 HARNESS目录结构升级
+
+```
+src/harness/
+├── intentRouter.ts        # 意图路由（场景匹配）
+├── pipelineRegistry.ts    # 流水线定义（声明式）
+├── executionEngine.ts     # 执行引擎（状态机 + 步骤调度）
+├── plannerAgent.ts        # AI Agent（仅做语义推理，不再控制流程）
+├── plannerProvider.ts     # LLM调用适配
+├── client.ts              # 后端API客户端
+└── sharedTypes.ts         # 类型定义
+```
+
+### 10\.6 关键设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **场景驱动，非流程驱动** | 用户选场景 → HARNESS自动组装Agent+Skill+Pipeline+Plugin，而非让用户理解流程步骤 |
+| **流水线声明式定义** | 新增测试类型只需在`pipelineRegistry.ts`加一条定义 + 写对应Plugin，不改执行引擎代码 |
+| **AI只做语义，代码做流程** | Agent不再决定"下一步调什么工具"，而是"这个翻译结果是否合理"。流程由`executionEngine`代码硬控 |
+| **Plugin即插即用** | 每个新测试能力 = 一个Plugin文件，注册到`ToolRegistry`即可被任何流水线调用 |
+| **Agent/Skill配置化** | 新增场景只需加`.md`文件，不改代码 |
+
+---
+
+## 11\. 本地AI模型（4B）功能定位与使用规范
+
+### 11\.1 4B模型能力边界
+
+| 能做好 | 做不好 |
+|--------|--------|
+| 理解一段自然语言的意思 | 记住很长的上下文（>4K tokens容易丢） |
+| 判断文本A和文本B是否语义一致 | 复杂的多步逻辑推理 |
+| 按固定模板输出JSON | 自由发挥时格式容易乱 |
+| 从文本中提取结构化信息 | 数学计算、精确数值比较 |
+| 识别明显的翻译错误 | 细微的文化语境差异 |
+
+**核心定位**：4B模型是HARNESS的"语义传感器"，负责看和听（语义理解），但"手脚"和"大脑"（流程控制、决策、执行）全是代码。
+
+### 11\.2 AI在各环节的具体职责
+
+#### 场景1：TestData生成（现有）
+
+```
+┌─ 代码层（HARNESS执行引擎）─────────────────────────┐
+│  1. 读取Google Sheet原始文本                        │
+│  2. 正则提取Module ID: /Module\s*ID\s*(\d+)/        │
+│  3. 清洗Batch/Index: /^\d+,\d+$/                    │
+│  4. 按规则分组文件（Regular Wins / Big Wins / ...）    │
+│  5. 生成XML结构（代码模板拼接）                       │
+│  6. 打包ZIP                                          │
+└────────────────────────────────────────────────────
+         ↑ 这些全是代码，AI不参与
+         
+┌─ AI层（4B模型）──────────────────────────────────┐
+│  输入: 用户自然语言 + Sheet原始文本片段               │
+│  任务: 判断某行数据属于哪个分类                         │
+│  Prompt: "以下数据属于哪个分类？[Regular/BigWin/Bonus] │
+│         数据: {row_content}"                          │
+│  输出: {"category": "Regular Wins"}                   │
+│                                                      │
+│  输入: 清洗后的结构化数据                              │
+│  任务: 检查数据合理性（如batch是否异常大）             │
+│  输出: {"valid": true, "note": ""}                    │
+└────────────────────────────────────────────────────┘
+```
+
+**AI占比：约10%**。90%的机械工作由代码完成，AI只做分类判断和异常检测。
+
+#### 场景2：翻译文件验证（新增）
+
+```
+┌─ 代码层（HARNESS执行引擎）─────────────────────────┐
+│  1. 扫描目录下所有.json/.xml翻译文件                  │
+│  2. 正则提取每个文件中"Phoenix5"对应的翻译值           │
+│  3. 构建对照表: {file: "zh-CN.json", value: "凤凰5"}  │
+│  4. 检查格式规范性（编码、特殊字符、长度限制）            │
+│  5. 统计通过率、生成报告框架                            │
+└────────────────────────────────────────────────────┘
+
+┌─ AI层（4B模型）──────────────────────────────────┐
+│                                                      │
+│  任务A: 语义一致性判断                                │
+│  输入: [{lang: "zh-CN", value: "凤凰5"},             │
+│         {lang: "ja-JP", value: "フェニックス5"},     │
+│         {lang: "ko-KR", value: "피닉스5"}]           │
+│  Prompt: "以下翻译是否都指向同一游戏名'Phoenix5'？    │
+│         输出JSON: {consistent: bool, issues: []}"    │
+│  输出: {"consistent": true, "issues": []}             │
+│                                                      │
+│  任务B: 翻译质量评估                                  │
+│  输入: {lang: "de-DE", value: "Phönix Fünf"}         │
+│  Prompt: "这个德语翻译是否准确传达了'Phoenix5'的含义？ │
+│         评分1-5，给出理由"                             │
+│  输出: {"score": 4, "reason": "Fünf是5的德语，       │
+│          但游戏名通常保留原文或音译"}                    │
+│                                                      │
+│  任务C: 术语一致性检查                                │
+│  输入: 33个文件中所有翻译值的列表                      │
+│  Prompt: "检查以下翻译列表中是否有不一致的术语使用"      │
+│  输出: {"inconsistencies": [                          │
+│    {file: "fr-FR.json", issue: "使用了'Phoenix Cinq'  │
+│     而非'Phoenix 5'，数字应保留阿拉伯数字"}            │
+│  ]}                                                    │
+────────────────────────────────────────────────────┘
+```
+
+**AI占比：约30%**。代码做文件扫描和格式检查，AI做语义判断和质量评估。
+
+### 11\.3 4B模型Prompt设计要点
+
+因为模型小，Prompt必须**极度收敛**：
+
+```typescript
+// ❌ 错误：让模型自由发挥
+const badPrompt = `
+  你是一个翻译专家，请检查这些翻译文件的质量...
+  （模型可能输出任意格式，甚至开始闲聊）
+`;
+
+// ✅ 正确：强制结构化输出
+const goodPrompt = `
+  你是翻译一致性检查器。
+  
+  输入：33个翻译文件中"Phoenix5"的翻译值列表
+  
+  任务：判断是否有不一致的翻译
+  
+  输出格式（严格JSON，不要输出其他内容）：
+  {
+    "consistent": true/false,
+    "issues": [
+      {"file": "文件名", "value": "翻译值", "reason": "原因"}
+    ]
+  }
+  
+  开始检查：
+  [数据列表]
+`;
+```
+
+**关键技巧**：
+1. **角色限定**：不是"翻译专家"，而是"翻译一致性检查器"（缩小行为空间）
+2. **输出格式锁定**：给JSON Schema，不让模型自由组织语言
+3. **任务单一**：一次Prompt只做一个判断，不堆叠多个任务
+4. **Few-shot示例**：给1-2个输入输出示例，4B模型模仿能力强
+
+### 11\.4 代码兜底策略
+
+```typescript
+// harness/executionEngine.ts
+async function runTranslationCheck(files: TranslationFile[]) {
+  // 1. 代码做确定性工作
+  const extracted = files.map(f => ({
+    file: f.name,
+    value: f.content.match(/"Phoenix5":\s*"([^"]+)"/)?.[1] ?? "",
+  }));
+  
+  // 2. AI做语义判断
+  const aiResult = await callLocalLLM({
+    prompt: buildConsistencyCheckPrompt(extracted),
+    temperature: 0.2,  // 低温，减少随机性
+    maxTokens: 500,    // 限制输出长度
+  });
+  
+  // 3. 代码校验AI输出格式
+  let parsed: CheckResult;
+  try {
+    parsed = JSON.parse(aiResult);
+    if (!('consistent' in parsed)) throw new Error("格式错误");
+  } catch {
+    // AI输出格式错误 → 重试一次
+    aiResult = await callLocalLLM({ ...retryPrompt });
+    parsed = JSON.parse(aiResult);  // 再失败就上报异常
+  }
+  
+  // 4. 代码做最终决策
+  const report = {
+    totalFiles: files.length,
+    aiJudgment: parsed,
+    autoFixable: parsed.issues.filter(i => isAutoFixable(i)),  // 代码判断能否自动修复
+    manualReview: parsed.issues.filter(i => !isAutoFixable(i)),
+  };
+  
+  return report;
+}
+```
+
+**兜底策略**：
+- AI输出格式错误 → 自动重试1次
+- AI判断矛盾（如说consistent=true但issues非空）→ 代码标记为"需人工复核"
+- AI超时/失败 → 降级为纯规则检查（代码正则匹配）
+
+### 11\.5 4B模型 vs 云端大模型分工
+
+| 任务类型 | 4B本地模型 | 云端大模型（如DeepSeek） |
+|----------|------------|--------------------------|
+| 简单分类判断 | ✅ 胜任 | ✅ 胜任（浪费） |
+| 格式结构化输出 | ✅ 胜任（需严格Prompt） | ✅ 胜任 |
+| 复杂语义推理（如文化语境） | ⚠️ 勉强，需人工复核 | ✅ 胜任 |
+| 长文本摘要（>2K tokens） | ❌ 容易丢失信息 | ✅ 胜任 |
+| 批量处理（100+文件） | ✅ 免费，可并行 | ⚠️ 成本高 |
+
+**推荐策略**：
+- **开发调试阶段**：全用4B本地模型，快速迭代
+- **批量生产阶段**：简单任务用4B，复杂语义判断（如翻译质量评分）用云端大模型
+- **HARNESS自动路由**：代码根据任务复杂度自动选择模型
+
+```typescript
+// 代码自动判断用哪个模型
+function selectModel(task: TestTask): "local" | "cloud" {
+  if (task.complexity === "simple") return "local";  // 分类、格式检查
+  if (task.complexity === "complex") return "cloud"; // 语义推理、质量评估
+  return "local";  // 默认本地
+}
+```
+
+### 11\.6 4B模型在HARNESS中的定位总结
+
+```
+┌──────────────────────────────────────────────────┐
+│  HARNESS执行引擎（代码）                           │
+│  ┌────────────────────────────────────────────┐  │
+│  │  流程控制 · 数据清洗 · 格式校验 · 文件操作    │  │
+│  │  · 异常重试 · 报告生成 · 状态管理            │  │
+│  └────────────────────────────────────────────┘  │
+│                      ↑↓ 调用                       │
+│  ┌────────────────────────────────────────────┐  │
+│  │  4B本地模型（语义传感器）                    │  │
+│  │  · 文本分类判断                              │  │
+│  │  · 语义一致性检查                            │  │
+│  │  · 简单质量评分                              │  │
+│  │  · 结构化信息提取                            │  │
+│  └────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┘
+```
+
+**一句话总结**：4B模型是HARNESS的"眼睛"和"耳朵"，负责看和听（语义理解），但"手脚"和"大脑"（流程控制、决策、执行）全是代码。这样既发挥了AI的语义能力，又规避了小模型的不可靠性。
+
 > （注：部分内容可能由 AI 生成）

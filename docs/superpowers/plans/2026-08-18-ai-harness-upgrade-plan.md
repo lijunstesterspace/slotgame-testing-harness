@@ -4,7 +4,7 @@
 
 **Goal:** Transform the existing slot testdata tool (mock-Agent React UI + two Python CLI scripts) into a real AI HARNESS platform: 4-Provider Planner Agent (LLM on user machine → local Ollama by default + 3 external Providers grayed, compliance-check gated) + ToolPlugin Registry/Executor (FastAPI backend, process-runner bridged to existing Python `.py` scripts, SQLite persistence, per-user sessions, SSE streaming) + Stage-1/Stage-2 DAG workflows, all Windows double-click startable.
 
-**Architecture:** Frontend PlannerAgent runs ReAct loop locally, calling LLM via 4 PlannerProviders. It dispatches ToolCalls to FastAPI backend via `HarnessClient` (REST + SSE). Backend: auth → ExecutionQueue (serial first, parallel later) → ToolRegistry → ToolPlugin (MCP-compatible interface). 5 built-in tools: paytable_parser, testdata_generator, zip_packager, game_verifier (process_runner Selenium bridge), log_diagnoser. Sessions + audit stored in SQLite. `start-dev.cmd` launches Vite+FastAPI+auto-open-browser.
+**Architecture:** Frontend PlannerAgent runs ReAct loop locally, calling LLM via 4 PlannerProviders. It dispatches ToolCalls to FastAPI backend via `HarnessClient` (REST + SSE). Backend: auth → ExecutionQueue (serial first, parallel later) → ToolRegistry → ToolPlugin (MCP-compatible interface). 5 built-in tools: testdata_parser, testdata_generator, zip_packager, game_verifier (process_runner Selenium bridge), log_diagnoser. Sessions + audit stored in SQLite. `start-dev.cmd` launches Vite+FastAPI+auto-open-browser.
 
 **Tech Stack:** Python 3.11+, FastAPI, Uvicorn, Pydantic v2, aiofiles, bcrypt, SQL-schema via sqlite3 stdlib; React 19 + Vite + TS 5.7 + Tailwind 4; existing JSZip/canvas-confetti/lucide-react/framer-motion deps kept; Python stdlib for process_runner; Selenium for verify_testdata.py (existing).
 
@@ -815,7 +815,7 @@ Expected: `parse-ok`
 
 **Files:**
 - Create: `server/tools/impl/__init__.py`
-- Create: `server/tools/impl/paytable_parser_tool.py`
+- Create: `server/tools/impl/testdata_parser_tool.py`
 - Create: `server/tools/impl/testdata_generator_tool.py`
 - Create: `server/tools/impl/zip_packager_tool.py`
 - Create: `server/tools/impl/game_verifier_tool.py`
@@ -823,7 +823,7 @@ Expected: `parse-ok`
 
 - [ ] **Step 1: Write `server/tools/impl/__init__.py`**
 ```python
-from server.tools.impl.paytable_parser_tool import PaytableParserTool
+from server.tools.impl.testdata_parser_tool import TestdataParserTool
 from server.tools.impl.testdata_generator_tool import TestdataGeneratorTool
 from server.tools.impl.zip_packager_tool import ZipPackagerTool
 from server.tools.impl.game_verifier_tool import GameVerifierTool
@@ -837,11 +837,11 @@ BUILTIN_TOOLS: list = [
     LogDiagnoserTool(),
 ]
 __all__ = ["BUILTIN_TOOLS",
-           "PaytableParserTool", "TestdataGeneratorTool", "ZipPackagerTool",
+           "TestdataParserTool", "TestdataGeneratorTool", "ZipPackagerTool",
            "GameVerifierTool", "LogDiagnoserTool"]
 ```
 
-- [ ] **Step 2: Write `server/tools/impl/paytable_parser_tool.py`**
+- [ ] **Step 2: Write `server/tools/impl/testdata_parser_tool.py`**
 ```python
 from __future__ import annotations
 import re
@@ -851,11 +851,11 @@ from server.tools.base import (
     ToolResult, HarnessContext,
 )
 
-class PaytableParserTool(ToolPlugin):
+class TestdataParserTool(ToolPlugin):
     @property
     def info(self) -> ToolInfo:
         return ToolInfo(
-            name="paytable_parser",
+            name="testdata_parser",
             description="Parses raw Google Sheets / CSV / pasted paytable text with case names, Bet Lines ID blocks, and (batch,index) pairs. Emits structured records + fileMap grouped by game prefix.",
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(name="raw_text", type="string", required=True,
@@ -1048,10 +1048,10 @@ class TestdataGeneratorTool(ToolPlugin):
     def info(self) -> ToolInfo:
         return ToolInfo(
             name="testdata_generator",
-            description="Writes a structured list of test records (from paytable_parser) into one or more .testdata XML files, grouped by record.file_name. Returns created file paths.",
+            description="Writes a structured list of test records (from testdata_parser) into one or more .testdata XML files, grouped by record.file_name. Returns created file paths.",
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(name="records", type="object", required=True,
-                              description="Records array from paytable_parser output: [{case_name, format_type, module_id, base_batch, base_index, bonus_batch?, bonus_index?, file_name, xml_snippet}]"),
+                              description="Records array from testdata_parser output: [{case_name, format_type, module_id, base_batch, base_index, bonus_batch?, bonus_index?, file_name, xml_snippet}]"),
                 ToolParameter(name="login_name", type="string", default="",
                               description="loginName attribute on the output XML <Key> tag."),
             ]),
@@ -1331,9 +1331,9 @@ class LogDiagnoserTool(ToolPlugin):
 - [ ] **Step 7: Parse check for 5 tools**
 ```powershell
 cd c:\Users\lijun\Documents\trae\testdata-tool-main
-python -c "import ast, pathlib; files = ['server/tools/impl/__init__.py','server/tools/impl/paytable_parser_tool.py','server/tools/impl/testdata_generator_tool.py','server/tools/impl/zip_packager_tool.py','server/tools/impl/game_verifier_tool.py','server/tools/impl/log_diagnoser_tool.py']; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in files]; print('parse-ok')"
+python -c "import ast, pathlib; files = ['server/tools/impl/__init__.py','server/tools/impl/testdata_parser_tool.py','server/tools/impl/testdata_generator_tool.py','server/tools/impl/zip_packager_tool.py','server/tools/impl/game_verifier_tool.py','server/tools/impl/log_diagnoser_tool.py']; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in files]; print('parse-ok')"
 ```
-Expected: `parse-ok`. If `PaytableParserTool` has a syntax bug from the deprecated `result_snippet` line, fix it first.
+Expected: `parse-ok`. If `TestdataParserTool` has a syntax bug from the deprecated `result_snippet` line, fix it first.
 
 ---
 
@@ -2666,7 +2666,7 @@ const SYSTEM_PROMPTS = {
   stage1: `你是老虎机测试自动化的 TestData Generator Agent（Slot QA）。
 
 你的任务：把用户意图 + Google Sheets / paytable 原始文本 解析后，通过调用 HARNESS 提供的工具：
-  1) paytable_parser — 读原始文本 → 结构化 records + fileMap
+  1) testdata_parser — 读原始文本 → 结构化 records + fileMap
   2) testdata_generator — 写 .testdata XML 文件到服务器沙箱
   3) zip_packager — 打包 outcome_testdata zip 供下载
 
@@ -2679,7 +2679,7 @@ const SYSTEM_PROMPTS = {
   <task_complete />
 
 要求：
-- 对于 stage=1（生成）：至少调用 paytable_parser → testdata_generator → zip_packager 三个工具。
+- 对于 stage=1（生成）：至少调用 testdata_parser → testdata_generator → zip_packager 三个工具。
 - 所有文件使用 gamePrefix=P5P，除非用户另行指定；module_id 从表格中解析，找不到时默认 105359。
 - 遇到任何解析错误，优先 self-heal：在 <tool_call> 之前写一段中文反思（SELF-HEAL），调整参数重试最多 2 次；超过次数输出 <task_complete success=false reason="..." />。
 
@@ -2782,7 +2782,7 @@ export class PlannerAgent {
           this.callbacks.onToolResult(toolCall.name, snippet, result.success);
 
           // side effects: 记录 records / zip url
-          if (toolCall.name === "paytable_parser" && result.success) {
+          if (toolCall.name === "testdata_parser" && result.success) {
             const content = (result.content as any) ?? {};
             const recs = this._coerceRecords(content.records ?? [], eid);
             lastRecords = recs;
@@ -2880,14 +2880,14 @@ export class PlannerAgent {
     lines.push(`【用户意图 / User Intent】`);
     lines.push(intent.prompt || "请生成标准 testdata");
     if (intent.loginName) lines.push(`loginName（XML Key 标签属性）: ${intent.loginName}`);
-    if (intent.sheetUrl) lines.push(`Google Sheet URL（请用 paytable_parser 的 raw_text 参数填入占位样例即可，当前 HARNESS 暂不做真实网络拉取）: ${intent.sheetUrl}`);
+    if (intent.sheetUrl) lines.push(`Google Sheet URL（请用 testdata_parser 的 raw_text 参数填入占位样例即可，当前 HARNESS 暂不做真实网络拉取）: ${intent.sheetUrl}`);
     lines.push(`workflowStage = ${intent.workflowStage}`);
     if (intent.workflowStage === 2) {
       if (intent.targetUrl) lines.push(`目标游戏 URL: ${intent.targetUrl}`);
       lines.push(`spinDelay = ${intent.spinDelayMs ?? 5000}ms`);
     }
     lines.push("");
-    lines.push("【Demo 用内置 P5P paytable 原始文本（若 raw_text 传这个给 paytable_parser 就能生成默认 22 文件结构）】");
+    lines.push("【Demo 用内置 P5P paytable 原始文本（若 raw_text 传这个给 testdata_parser 就能生成默认 22 文件结构）】");
     lines.push(this._demoPaytableRawText());
     return lines.join("\n");
   }
@@ -4083,7 +4083,7 @@ const Workbench: React.FC = () => {
           <span>Slot AI HARNESS · Planner（本地 LLM + 合规外部 Provider 扩展） + ToolRegistry 后端</span>
         </div>
         <div className="flex items-center gap-4 text-slate-400">
-          <span>Tools: paytable_parser / testdata_generator / zip_packager / game_verifier / log_diagnoser</span>
+          <span>Tools: testdata_parser / testdata_generator / zip_packager / game_verifier / log_diagnoser</span>
         </div>
       </footer>
     </div>
@@ -4268,9 +4268,9 @@ endlocal
 
 ---
 
-### Task 5.2: `paytable_parser_tool.py` 修掉 Pydantic ToolResult.success 类型不兼容的多余位置参数 & import `time` 未用；以及 parse 成功后返回 content 再检查一次
+### Task 5.2: `testdata_parser_tool.py` 修掉 Pydantic ToolResult.success 类型不兼容的多余位置参数 & import `time` 未用；以及 parse 成功后返回 content 再检查一次
 
-- [ ] **Step 1: Fix `paytable_parser_tool.py` — remove deprecated `result_snippet := None` line**
+- [ ] **Step 1: Fix `testdata_parser_tool.py` — remove deprecated `result_snippet := None` line**
 (已在 Task 1.2 说明过；实施时确保最终文件里无 `:=` 残留或单独 return ToolResult)
 
 ---

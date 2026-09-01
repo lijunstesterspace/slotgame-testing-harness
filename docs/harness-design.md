@@ -1,4 +1,4 @@
-
+﻿
 # AI HARNESS 架构升级设计 Spec (P0–P2)
 
 > 日期：2026-08-18
@@ -59,7 +59,7 @@ testdata-tool-main/
 │   │       ├── testdata_generator_tool.py    ← 🆕 封装 generate_testdata.py (process_runner)
 │   │       ├── game_verifier_tool.py         ← 🆕 封装 verify_testdata.py (process_runner + Selenium)
 │   │       ├── zip_packager_tool.py          ← 🆕 多文件 ZIP 打包（后端版）
-│   │       ├── paytable_parser_tool.py       ← 🆕 解析 CSV / Google Sheet 导出文本
+│   │       ├── testdata_parser_tool.py       ← 🆕 解析 CSV / Google Sheet 导出文本
 │   │       └── log_diagnoser_tool.py         ← 🆕 规则引擎诊断（诊断类型枚举匹配）
 │   ├── infra/
 │   │   ├── __init__.py
@@ -175,7 +175,7 @@ class ToolRegistry:
 
 | Tool Name | 功能 | 对应现有实现 |
 |---|---|---|
-| `paytable_parser` | 解析 CSV / 粘贴文本 → 结构化 records + fileMap | `src/utils/paytableSheetParser.ts` 逻辑改写 Python |
+| `testdata_parser` | 解析 CSV / 粘贴文本 → 结构化 records + fileMap | `src/utils/paytableSheetParser.ts` 逻辑改写 Python |
 | `testdata_generator` | 给定 records 列表 → 写 .testdata XML 文件到沙箱目录 | 封装 `generate_testdata.py` 核心逻辑 |
 | `zip_packager` | 把 .testdata + manifest.json → ZIP 产物 | 对应 `src/utils/zipGenerator.ts` 后端版 |
 | `game_verifier` | 给定 .testdata 文件 + 游戏 URL → Selenium 跑验证 + HTML 报告 + 截图 | 封装 `verify_testdata.py` |

@@ -354,11 +354,11 @@ def _generate_html_report(
 # Plugin
 # ---------------------------------------------------------------------------
 
-class GameVerifierTool(ToolPlugin):
+class TestdataVerifierTool(ToolPlugin):
     @property
     def info(self) -> ToolInfo:
         return ToolInfo(
-            name="game_verifier",
+            name="testdata_verifier",
             description=(
                 "Uploads .testdata to the game admin panel, opens the game in Chrome, "
                 "auto-spins and intercepts responseLogger via console.log. "
@@ -491,7 +491,7 @@ class GameVerifierTool(ToolPlugin):
             passed_count = 0
 
             for i, rec in enumerate(records):
-                log.info("verifier.spin", index=i + 1, total=total,
+                log.info("verifier.spin", spin=i + 1, total=total,
                          batch=rec["batch"], index=rec["index"])
 
                 # Reset response counter before spin

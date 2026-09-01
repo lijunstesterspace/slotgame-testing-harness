@@ -17,29 +17,20 @@ export async function runRealGameVerification(
   const startTime = Date.now();
   const results: VerificationResult[] = [];
 
-  const moduleID = records[0]?.moduleID ?? "105359";
   const loginName = config.loginName ?? "tester1";
   const spinDelayMs = config.spinDelayMs ?? 500;
   const maxWaitMs = config.timeoutSeconds ? config.timeoutSeconds * 1000 : 120_000;
 
-  // Step A: call testdata_generator to produce the testdataFile needed by game_verifier
-  let testdataFile: string | null = null;
-  try {
-    const genRes = await harnessClient.executeTool("testdata_generator", {
-      action: "convert",
-      records,
-      loginName,
-    });
-    if (Array.isArray(genRes.content)) {
-      testdataFile = (genRes.content as any[])[0] as string;
-    }
-  } catch {
-    // generator failure does not block; verifier uses default samples internally
+  // Step A: Use testdata file from folder (skip testdata_generator)
+  // The user has already selected the folder and file in VerificationPanel
+  const testdataFile = config.testdataFilePath;
+  if (!testdataFile) {
+    throw new Error("No testdata file selected. Please select a folder with .testdata files.");
   }
 
-  // Step B: asynchronously launch game_verifier
-  const prepared = await harnessClient.executeToolAsync("game_verifier", {
-    testdata_file: testdataFile ?? undefined,
+  // Step B: launch testdata_verifier with the selected testdata file
+  const prepared = await harnessClient.executeToolAsync("testdata_verifier", {
+    testdata_file: testdataFile,
     target_url: config.targetUrl,
     spin_delay_sec: spinDelayMs / 1000,
   });
@@ -49,7 +40,7 @@ export async function runRealGameVerification(
     const unsub = harnessClient.streamExecution(eid, (evt, payload) => {
       if (evt === "harness_event") {
         const p = payload as any;
-        if (p.type === "TOOL_RES" && p.toolName === "game_verifier") {
+        if (p.type === "TOOL_RES" && p.toolName === "testdata_verifier") {
           try {
             // Extract {passed, failed, total} from result_snippet
           } catch {}
@@ -71,7 +62,7 @@ export async function runRealGameVerification(
   const lastCall = detail.tool_calls
     .slice()
     .reverse()
-    .find((tc) => tc.tool_name === "game_verifier");
+    .find((tc) => tc.tool_name === "testdata_verifier");
 
   // Extract verifier output
   let summary: { passed: number; failed: number; total: number } | null = null;

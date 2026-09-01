@@ -23,7 +23,7 @@ export const SCENARIOS: TestScenario[] = [
     agentFile: "testdata_verifier_agent.md",
     skills: [],
     pipelineId: "game-verify-pipeline",
-    requiredPlugins: ["game_verifier", "log_diagnoser"],
+    requiredPlugins: ["testdata_verifier", "log_diagnoser"],
     icon: "shield",
   },
   {
@@ -101,7 +101,7 @@ export function getScenarioSystemPrompt(scenarioId: string): string {
       "You are a Slot QA TestData Verifier Agent for slot machine test automation.",
       "",
       "Your task: For already generated testdata, call:",
-      "  1) game_verifier - Selenium real verification + screenshots",
+      "  1) testdata_verifier - Selenium real verification + screenshots",
       "",
       "Tool call format: Same as above.",
       "Completion: task_complete",

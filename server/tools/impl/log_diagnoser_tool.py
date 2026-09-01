@@ -11,7 +11,7 @@ class LogDiagnoserTool(ToolPlugin):
             name="log_diagnoser",
             description=(
                 "Diagnoses verification results. Accepts both legacy format (status/httpStatus) "
-                "and new game_verifier format (passed/actualBatch/issues). "
+                "and new testdata_verifier format (passed/actualBatch/issues). "
                 "Emits one DiagnosticProof per record with root-cause classification."
             ),
             inputSchema=ToolInputSchema(properties=[
@@ -32,7 +32,7 @@ class LogDiagnoserTool(ToolPlugin):
         for r in results:
             name = str(r.get("caseName", ""))
 
-            # ── Detect format: new game_verifier format has "passed" key ──
+            # ── Detect format: new testdata_verifier format has "passed" key ──
             if "passed" in r:
                 diag = self._diagnose_new_format(r, name)
             else:
@@ -43,7 +43,7 @@ class LogDiagnoserTool(ToolPlugin):
         return ToolResult(success=True, content={"count": len(diagnostics), "diagnostics": diagnostics})
 
     # ------------------------------------------------------------------
-    # New format: from game_verifier (Selenium + responseLogger)
+    # New format: from testdata_verifier (Selenium + responseLogger)
     # ------------------------------------------------------------------
     @staticmethod
     def _diagnose_new_format(r: dict, name: str) -> dict:

@@ -28,8 +28,8 @@ export async function runRealGameVerification(
     throw new Error("No testdata file selected. Please select a folder with .testdata files.");
   }
 
-  // Step B: launch game_verifier with the selected testdata file
-  const prepared = await harnessClient.executeToolAsync("game_verifier", {
+  // Step B: launch testdata_verifier with the selected testdata file
+  const prepared = await harnessClient.executeToolAsync("testdata_verifier", {
     testdata_file: testdataFile,
     target_url: config.targetUrl,
     spin_delay_sec: spinDelayMs / 1000,
@@ -40,7 +40,7 @@ export async function runRealGameVerification(
     const unsub = harnessClient.streamExecution(eid, (evt, payload) => {
       if (evt === "harness_event") {
         const p = payload as any;
-        if (p.type === "TOOL_RES" && p.toolName === "game_verifier") {
+        if (p.type === "TOOL_RES" && p.toolName === "testdata_verifier") {
           try {
             // Extract {passed, failed, total} from result_snippet
           } catch {}
@@ -62,7 +62,7 @@ export async function runRealGameVerification(
   const lastCall = detail.tool_calls
     .slice()
     .reverse()
-    .find((tc) => tc.tool_name === "game_verifier");
+    .find((tc) => tc.tool_name === "testdata_verifier");
 
   // Extract verifier output
   let summary: { passed: number; failed: number; total: number } | null = null;

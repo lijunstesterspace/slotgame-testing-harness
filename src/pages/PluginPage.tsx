@@ -16,7 +16,7 @@ const PLUGIN_ICONS: Record<string, React.ReactNode> = {
   testdata_parser: <Table2 className="w-4 h-4" />,
   testdata_generator: <Zap className="w-4 h-4" />,
   zip_packager: <Package className="w-4 h-4" />,
-  game_verifier: <Wrench className="w-4 h-4" />,
+  testdata_verifier: <Wrench className="w-4 h-4" />,
   log_diagnoser: <FileText className="w-4 h-4" />,
 };
 
@@ -25,6 +25,31 @@ const SKILL_ICONS: Record<string, React.ReactNode> = {
   "skill-sheet-data-clean": <Table2 className="w-5 h-5" />,
   "skill-task-dispatch-rule": <Zap className="w-5 h-5" />,
 };
+
+// ── Hardcoded skill data (from skills/*.md) ─────────────────────
+const HARDCODED_SKILLS: SkillInfoDto[] = [
+  {
+    id: "skill-generator-plugin-contract",
+    name: "测试生成插件接口契约规范",
+    description: "定义 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。涵盖 testdata_parser、testdata_generator、zip_packager、game_verifier、log_diagnoser 五大工具的输入输出规范。",
+    file: "skill-generator-plugin-contract.md",
+    size_kb: 2.8,
+  },
+  {
+    id: "skill-sheet-data-clean",
+    name: "SLOT 测试表格数据清洗规则",
+    description: "SLOT 测试表格专属清洗、过滤、标准化技能，为数据生成 Agent 提供约束规范。包括 Module ID 提取、Batch & Index 清理、文件分类命名规则等。",
+    file: "skill-sheet-data-clean.md",
+    size_kb: 1.2,
+  },
+  {
+    id: "skill-task-dispatch-rule",
+    name: "SLOT 测试任务封装派发规则",
+    description: "SLOT 测试任务封装、派发、格式约束规则，保障 AI 输出格式稳定。定义两阶段工作流（数据生成 + 验证诊断）及工具调用格式强制约束。",
+    file: "skill-task-dispatch-rule.md",
+    size_kb: 1.4,
+  },
+];
 
 export const PluginPage: React.FC<Props> = ({ onBack }) => {
   const [activeTab, setActiveTab] = useState<TabId>("plugins");
@@ -35,8 +60,8 @@ export const PluginPage: React.FC<Props> = ({ onBack }) => {
   const [pluginsLoading, setPluginsLoading] = useState(true);
 
   // ── Skills state ──
-  const [skills, setSkills] = useState<SkillInfoDto[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(true);
+  const [skills] = useState<SkillInfoDto[]>(HARDCODED_SKILLS);
+  const [skillsLoading] = useState(false);
 
   useEffect(() => {
     harnessClient.listTools().then((res) => {
@@ -45,10 +70,6 @@ export const PluginPage: React.FC<Props> = ({ onBack }) => {
         setSelected(res.tools[0].name);
       }
     }).catch(() => {}).finally(() => setPluginsLoading(false));
-
-    harnessClient.listSkills().then((res) => {
-      setSkills(res);
-    }).catch(() => {}).finally(() => setSkillsLoading(false));
   }, []);
 
   const selectedPlugin = plugins.find((p) => p.name === selected);

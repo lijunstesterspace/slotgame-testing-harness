@@ -129,8 +129,13 @@ async def scan_testdata_files(req: ScanTestdataReq, user=Depends(require_user())
 
 def _resolve_skills_dir() -> Path:
     """Return the project-level skills/ directory."""
-    # server/api/tools_router.py → project root is 3 levels up
-    return Path(__file__).resolve().parent.parent.parent / "skills"
+    import sys
+    if getattr(sys, 'frozen', False):
+        # PyInstaller exe: skills/ is external, next to the exe
+        return Path(sys.executable).parent / "skills"
+    else:
+        # Development: server/api/tools_router.py → project root is 3 levels up
+        return Path(__file__).resolve().parent.parent.parent / "skills"
 
 
 def _parse_skill_frontmatter(text: str) -> dict:

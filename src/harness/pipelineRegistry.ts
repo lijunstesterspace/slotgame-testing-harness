@@ -60,7 +60,7 @@ export const PIPELINES: PipelineDef[] = [
       [
         {
           id: "verify",
-          plugin: "game_verifier",
+          plugin: "testdata_verifier",
           label: "Run Verification",
           description: "Connect to real game environment via Selenium and run verification",
           dependsOn: [],

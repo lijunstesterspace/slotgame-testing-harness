@@ -354,11 +354,11 @@ def _generate_html_report(
 # Plugin
 # ---------------------------------------------------------------------------
 
-class GameVerifierTool(ToolPlugin):
+class TestdataVerifierTool(ToolPlugin):
     @property
     def info(self) -> ToolInfo:
         return ToolInfo(
-            name="game_verifier",
+            name="testdata_verifier",
             description=(
                 "Uploads .testdata to the game admin panel, opens the game in Chrome, "
                 "auto-spins and intercepts responseLogger via console.log. "

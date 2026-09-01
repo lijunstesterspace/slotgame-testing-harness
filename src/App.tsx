@@ -268,7 +268,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     setWorkflowStage(4);
     setWorkflowState("VERIFYING");
     setVerificationReport(null);
-    addLog({ type: "TOOL_CALL", toolName: "game_verifier", content: "Connecting to Real Game Environment via Backend Harness...", detail: JSON.stringify(config, null, 2), status: "running" });
+    addLog({ type: "TOOL_CALL", toolName: "testdata_verifier", content: "Connecting to Real Game Environment via Backend Harness...", detail: JSON.stringify(config, null, 2), status: "running" });
     try {
       const cfg: VerificationConfig = {
         targetUrl: config.targetUrl,
@@ -282,7 +282,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const report = await runRealGameVerification(testRecords, cfg, (completedCount, currentResult) => {
         addLog({
           type: currentResult.status === "PASSED" ? "TOOL_RES" : "SELF_HEAL",
-          toolName: "game_verifier",
+          toolName: "testdata_verifier",
           content: `Verifying Case: ${currentResult.caseName} (${completedCount}/${testRecords.length})`,
           detail: currentResult.status === "PASSED" ? `Server Payout Match. Response: ${currentResult.responseTimeMs}ms` : `Discrepancy Detected: ${currentResult.errorMessage}`,
           status: currentResult.status === "PASSED" ? "success" : "error",
@@ -293,7 +293,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const failedCount = results.filter((r) => !r.passed).length;
       addLog({
         type: "TOOL_RES",
-        toolName: "game_verifier",
+        toolName: "testdata_verifier",
         content: `Verification Complete: ${report.passedCount}/${report.totalCases} Passed`,
         detail: failedCount > 0 ? `${failedCount} discrepancies found. Generating Diagnostic Report...` : "All server payouts matched expected values.",
         status: failedCount > 0 ? "warning" : "success",

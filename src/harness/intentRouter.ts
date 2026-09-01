@@ -1,14 +1,14 @@
 import type { TestScenario } from "./sharedTypes";
 
-// ── 测试场景注册表 ─────────────────────────────────────────────
-// 新增场景只需在此数组中添加一条定义，HARNESS 自动识别
+// ── Test Scenario Registry ─────────────────────────────────────────────
+// Add a new scenario by appending an entry to this array; HARNESS auto-discovers it
 
 export const SCENARIOS: TestScenario[] = [
   {
     id: "testdata_generation",
-    label: "TestData 生成",
-    description: "从 Google Sheet 解析 Paytable，生成 .testdata XML 文件并打包 ZIP",
-    keywords: ["testdata", "生成", "paytable", "sheet", "表格", "生成测试数据"],
+    label: "TestData Generation",
+    description: "Parse Paytable from Google Sheet, generate .testdata XML files and package as ZIP",
+    keywords: ["testdata", "generate", "paytable", "sheet", "表格", "生成测试数据"],
     agentFile: "testdata_generator_agent.md",
     skills: ["skill-sheet-data-clean.md", "skill-generator-plugin-contract.md"],
     pipelineId: "testdata-gen-pipeline",
@@ -17,9 +17,9 @@ export const SCENARIOS: TestScenario[] = [
   },
   {
     id: "game_verification",
-    label: "游戏环境验证",
-    description: "将生成的 testdata 发送到真实游戏环境，验证种子接受和派彩一致性",
-    keywords: ["验证", "verify", "game", "spin", "游戏", "真实环境"],
+    label: "Game Environment Verification",
+    description: "Send generated testdata to real game environment, verify seed acceptance and payout consistency",
+    keywords: ["verify", "game", "spin", "游戏", "真实环境"],
     agentFile: "testdata_verifier_agent.md",
     skills: [],
     pipelineId: "game-verify-pipeline",
@@ -28,9 +28,9 @@ export const SCENARIOS: TestScenario[] = [
   },
   {
     id: "log_diagnosis",
-    label: "日志诊断",
-    description: "分析验证失败的日志和截图，自动生成根因归责报告",
-    keywords: ["诊断", "diagnose", "日志", "log", "根因", "分析"],
+    label: "Log Diagnosis",
+    description: "Analyze verification failure logs and screenshots, auto-generate root cause attribution report",
+    keywords: ["diagnose", "log", "根因", "分析"],
     agentFile: "ui_log_diagnoser_agent.md",
     skills: [],
     pipelineId: "log-diagnose-pipeline",
@@ -39,17 +39,17 @@ export const SCENARIOS: TestScenario[] = [
   },
 ];
 
-// ── 意图路由器 ────────────────────────────────────────────────
+// ── Intent Router ────────────────────────────────────────────────
 
 export interface RouteResult {
   scenario: TestScenario;
-  matchScore: number;   // 0-100，关键词命中得分
+  matchScore: number;   // 0-100, keyword match score
   matchedKeywords: string[];
 }
 
 /**
- * 根据用户输入的自然语言，匹配最合适的测试场景。
- * 使用关键词规则匹配（不依赖 AI，规避小模型不可靠性）。
+ * Match the most suitable test scenario based on user's natural language input.
+ * Uses keyword rule matching (no AI dependency, avoids small model unreliability).
  */
 export function routeIntent(userInput: string): RouteResult | null {
   const input = userInput.toLowerCase();
@@ -62,7 +62,7 @@ export function routeIntent(userInput: string): RouteResult | null {
     for (const kw of scenario.keywords) {
       if (input.includes(kw.toLowerCase())) {
         matched.push(kw);
-        // 长关键词权重更高
+        // Longer keywords get higher weight
         score += kw.length * 10;
       }
     }
@@ -76,8 +76,8 @@ export function routeIntent(userInput: string): RouteResult | null {
 }
 
 /**
- * 获取场景对应的 System Prompt 前缀。
- * 从 agents/*.md 文件中读取，此处提供内嵌默认值。
+ * Get the System Prompt prefix for a scenario.
+ * Read from agents/*.md files; inline defaults provided here.
  */
 export function getScenarioSystemPrompt(scenarioId: string): string {
   const prompts: Record<string, string> = {

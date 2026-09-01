@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import {
   ArrowLeft, Bot, Zap, Shield, Search,
   FileText, CheckCircle2, AlertTriangle, Bug,
-  Sparkles, Database, Eye,
+  Sparkles, Database, Eye, BrainCircuit,
 } from "lucide-react";
 
 // ── Agent data (embedded from agents/*.md) ───────────────────
@@ -22,9 +22,48 @@ interface AgentInfo {
 
 const AGENTS: AgentInfo[] = [
   {
+    id: "planner",
+    name: "Planner Agent",
+    shortDesc: "Semantic reasoning unit — drives AI conversation loop and tool orchestration",
+    icon: <BrainCircuit className="w-4 h-4" />,
+    color: "text-violet-400",
+    borderColor: "border-violet-800/40",
+    bgColor: "bg-violet-950/60",
+    mission:
+      "Acts as the semantic reasoning core of the HARNESS. Receives scenario-specific System Prompts from the Intent Router, drives the AI conversation loop (streaming output, parse tool_call, execute tool, feed back results), and performs self-healing when outputs are malformed. The 4B model serves as a 'semantic sensor' — parsing user intent into structured tool calls and performing basic semantic understanding of tool results. All flow control, retry logic, and state machines are handled by code, not the model.",
+    rules: [
+      {
+        title: "Tool Call Parsing and Execution",
+        items: [
+          "Parses tool_call XML tags from model output: name + JSON params.",
+          "Calls the corresponding HARNESS tool via executeTool and feeds the result back into the conversation.",
+          "Maximum 12 cycles per run; each cycle streams LLM output then parses for tool_call or task_complete tags.",
+        ],
+      },
+      {
+        title: "Self-Healing Protocol",
+        items: [
+          "Tool call fails: push error message back to model, let it reflect and retry with corrected parameters.",
+          "No valid tags in output: instruct model to strictly follow the tool_call or task_complete format and retry.",
+          "Task reports failure: capture reason, abort execution, return failure outcome with partial records.",
+        ],
+      },
+      {
+        title: "Side-Effect Collection",
+        items: [
+          "testdata_parser: auto-saves parsed records to database and updates progress.",
+          "testdata_generator: collects generated file list for downstream packaging.",
+          "zip_packager: captures download URL for user access.",
+        ],
+      },
+    ],
+    outputSpec: "PlannerRunOutcome: { success, executionId, records[], zipUrl?, message? }",
+    systemPrompt: "Planner Agent does not have a fixed system prompt — it dynamically loads the scenario-specific prompt from intentRouter (testdata_generation, game_verification, or log_diagnosis). Each scenario prompt defines the agent's role, required tool call sequence, and completion criteria.",
+  },
+  {
     id: "testdata_generator",
     name: "TestData Generator Agent",
-    shortDesc: "Parse Google Sheet paytable → generate .testdata XML files",
+    shortDesc: "Parse Google Sheet paytable to generate .testdata XML files",
     icon: <Zap className="w-4 h-4" />,
     color: "text-emerald-400",
     borderColor: "border-emerald-800/40",
@@ -72,7 +111,7 @@ Your objective is to:
   {
     id: "testdata_verifier",
     name: "TestData Verifier Agent",
-    shortDesc: "Dispatch testdata against real game environment & verify payouts",
+    shortDesc: "Dispatch testdata against real game environment and verify payouts",
     icon: <Shield className="w-4 h-4" />,
     color: "text-cyan-400",
     borderColor: "border-cyan-800/40",
@@ -127,7 +166,7 @@ Your objective is to:
   {
     id: "ui_log_diagnoser",
     name: "UI & Log Diagnoser Agent",
-    shortDesc: "Analyze failures & generate root-cause attribution reports",
+    shortDesc: "Analyze failures and generate root-cause attribution reports",
     icon: <Bug className="w-4 h-4" />,
     color: "text-amber-400",
     borderColor: "border-amber-800/40",

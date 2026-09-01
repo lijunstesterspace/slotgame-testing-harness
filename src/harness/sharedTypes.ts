@@ -40,6 +40,18 @@ export interface ToolListResponse {
   function_calling_schema: FunctionCallingSchema[];
 }
 
+export interface SkillInfoDto {
+  id: string;
+  name: string;
+  description: string;
+  file: string;
+  size_kb: number;
+}
+
+export interface SkillListResponse {
+  skills: SkillInfoDto[];
+}
+
 export interface ToolResultDto {
   success: boolean;
   content: unknown;

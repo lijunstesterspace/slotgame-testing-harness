@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import os
+import re
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -120,3 +121,64 @@ async def scan_testdata_files(req: ScanTestdataReq, user=Depends(require_user())
             "modified": stat.st_mtime,
         })
     return {"folder": str(folder.resolve()), "count": len(files), "files": files}
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+def _resolve_skills_dir() -> Path:
+    """Return the project-level skills/ directory."""
+    # server/api/tools_router.py → project root is 3 levels up
+    return Path(__file__).resolve().parent.parent.parent / "skills"
+
+
+def _parse_skill_frontmatter(text: str) -> dict:
+    """Extract title and first heading/description from a skill markdown file."""
+    title = ""
+    description = ""
+    # Try to get title from "# SKILL: ..." or first "# ..." heading
+    m = re.search(r"^#\s*SKILL:\s*(.+)$", text, re.MULTILINE)
+    if m:
+        title = m.group(1).strip()
+    else:
+        m = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+        if m:
+            title = m.group(1).strip()
+    # Get description from "## 1. 核心定位" or first paragraph after title
+    m = re.search(r"##\s*\d+\.\s*核心定位\s*\n+(.+)", text)
+    if m:
+        description = m.group(1).strip()
+    else:
+        # Fallback: first non-empty line after title
+        lines = text.split("\n")
+        skip = True
+        for line in lines:
+            if skip and line.startswith("#"):
+                skip = False
+                continue
+            if not skip and line.strip():
+                description = line.strip()
+                break
+    return {"title": title, "description": description}
+
+
+@router.get("/skills/list")
+async def list_skills(user=Depends(require_user())):
+    """List all skill markdown files in the skills/ directory."""
+    skills_dir = _resolve_skills_dir()
+    if not skills_dir.is_dir():
+        return {"skills": []}
+
+    skills = []
+    for f in sorted(skills_dir.glob("*.md")):
+        text = f.read_text(encoding="utf-8", errors="replace")
+        info = _parse_skill_frontmatter(text)
+        skills.append({
+            "id": f.stem,
+            "name": info["title"] or f.stem,
+            "description": info["description"],
+            "file": f.name,
+            "size_kb": round(f.stat().st_size / 1024, 1),
+        })
+    return {"skills": skills}

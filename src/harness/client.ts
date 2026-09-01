@@ -3,6 +3,7 @@ import type {
   HarnessSseEvent,
   LLMAuditReq,
   LoginResponse,
+  SkillInfoDto,
   ToolInfoDto,
   ToolListResponse,
   ToolResultDto,
@@ -91,6 +92,12 @@ export class HarnessClient {
   async listTools(): Promise<{ tools: ToolInfoDto[]; schema: FunctionCallingSchema[] }> {
     const r = await jsonFetch<ToolListResponse>("/api/tools/list");
     return { tools: r.tools, schema: r.function_calling_schema };
+  }
+
+  // ---- skills ----
+  async listSkills(): Promise<SkillInfoDto[]> {
+    const r = await jsonFetch<{ skills: SkillInfoDto[] }>("/api/tools/skills/list");
+    return r.skills;
   }
 
   async executeTool(tool_name: string, params: Record<string, unknown>): Promise<ToolResultDto> {

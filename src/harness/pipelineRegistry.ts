@@ -1,47 +1,47 @@
 import type { PipelineDef } from "./sharedTypes";
 
-// ── 流水线注册表 ─────────────────────────────────────────────
-// 每条流水线定义一组有序的 stage，每个 stage 内的步骤可并行执行
-// 新增流水线只需在 PIPELINES 数组中添加一条定义
+// ── Pipeline Registry ─────────────────────────────────────────────
+// Each pipeline defines an ordered set of stages; steps within a stage can run in parallel.
+// Add a new pipeline by appending an entry to the PIPELINES array.
 
 export const PIPELINES: PipelineDef[] = [
-  // ─── TestData 生成流水线 ───
+  // ─── TestData Generation Pipeline ───
   {
     id: "testdata-gen-pipeline",
-    name: "TestData 生成",
-    description: "解析 Paytable → 生成 XML → 打包 ZIP",
+    name: "TestData Generation",
+    description: "Parse Paytable → Generate XML → Package ZIP",
     stages: [
-      // Stage 0: 解析
+      // Stage 0: Parse
       [
         {
           id: "parse",
           plugin: "testdata_parser",
-          label: "解析 Paytable",
-          description: "从原始文本/Sheet URL 解析出结构化记录",
+          label: "Parse Paytable",
+          description: "Parse structured records from raw text / Sheet URL",
           dependsOn: [],
           retryOnFail: true,
           maxRetries: 2,
         },
       ],
-      // Stage 1: 生成
+      // Stage 1: Generate
       [
         {
           id: "generate",
           plugin: "testdata_generator",
-          label: "生成 .testdata",
-          description: "将结构化记录写入 .testdata XML 文件",
+          label: "Generate .testdata",
+          description: "Write structured records into .testdata XML files",
           dependsOn: ["parse"],
           retryOnFail: true,
           maxRetries: 2,
         },
       ],
-      // Stage 2: 打包
+      // Stage 2: Package
       [
         {
           id: "package",
           plugin: "zip_packager",
-          label: "打包 ZIP",
-          description: "将所有 .testdata 文件打包为 outcome_testdata.zip",
+          label: "Package ZIP",
+          description: "Package all .testdata files into outcome_testdata.zip",
           dependsOn: ["generate"],
           retryOnFail: false,
           maxRetries: 0,
@@ -50,31 +50,31 @@ export const PIPELINES: PipelineDef[] = [
     ],
   },
 
-  // ─── 游戏验证流水线 ───
+  // ─── Game Verification Pipeline ───
   {
     id: "game-verify-pipeline",
-    name: "游戏环境验证",
-    description: "发送 testdata 到真实游戏 → 验证派彩一致性",
+    name: "Game Environment Verification",
+    description: "Send testdata to real game → Verify payout consistency",
     stages: [
-      // Stage 0: 验证
+      // Stage 0: Verify
       [
         {
           id: "verify",
           plugin: "game_verifier",
-          label: "执行验证",
-          description: "通过 Selenium 连接真实游戏环境执行验证",
+          label: "Run Verification",
+          description: "Connect to real game environment via Selenium and run verification",
           dependsOn: [],
           retryOnFail: false,
           maxRetries: 0,
         },
       ],
-      // Stage 1: 诊断（仅对失败用例）
+      // Stage 1: Diagnose (only for failed cases)
       [
         {
           id: "diagnose",
           plugin: "log_diagnoser",
-          label: "根因诊断",
-          description: "分析失败用例的日志和截图，归责根因",
+          label: "Root Cause Diagnosis",
+          description: "Analyze logs and screenshots of failed cases, attribute root cause",
           dependsOn: ["verify"],
           retryOnFail: false,
           maxRetries: 0,
@@ -83,18 +83,18 @@ export const PIPELINES: PipelineDef[] = [
     ],
   },
 
-  // ─── 日志诊断流水线 ───
+  // ── Log Diagnosis Pipeline ───
   {
     id: "log-diagnose-pipeline",
-    name: "日志诊断",
-    description: "分析验证失败日志，生成根因归责报告",
+    name: "Log Diagnosis",
+    description: "Analyze verification failure logs, generate root cause attribution report",
     stages: [
       [
         {
           id: "diagnose",
           plugin: "log_diagnoser",
-          label: "日志分析",
-          description: "分析失败日志和截图，输出根因报告",
+          label: "Log Analysis",
+          description: "Analyze failure logs and screenshots, output root cause report",
           dependsOn: [],
           retryOnFail: false,
           maxRetries: 0,
@@ -104,14 +104,14 @@ export const PIPELINES: PipelineDef[] = [
   },
 ];
 
-// ── 查询工具函数 ──────────────────────────────────────────────
+// ── Query Utility Functions ─────────────────────────────────────────────
 
-/** 根据 ID 获取流水线定义，未找到返回 undefined */
+/** Get pipeline definition by ID; returns undefined if not found */
 export function getPipeline(pipelineId: string): PipelineDef | undefined {
   return PIPELINES.find((p) => p.id === pipelineId);
 }
 
-/** 获取所有流水线摘要（用于 UI 展示） */
+/** Get summary of all pipelines (for UI display) */
 export function listPipelines(): Array<{ id: string; name: string; stageCount: number }> {
   return PIPELINES.map((p) => ({
     id: p.id,

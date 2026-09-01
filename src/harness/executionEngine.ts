@@ -4,7 +4,6 @@ import type {
   PipelineExecutionContext,
   PipelineExecutionStatus,
   StepExecutionRecord,
-  StepStatus,
   ToolResultDto,
 } from "./sharedTypes";
 import type { HarnessClient } from "./client";
@@ -25,6 +24,9 @@ export interface EngineCallbacks {
 }
 
 // ── 执行引擎 ──────────────────────────────────────────────────
+// TODO: 集成到 App.tsx 的 handleConfirmGeneration 中，
+//       根据 selectedScenarioId 查找 pipeline 并创建 ExecutionEngine 实例编排执行。
+//       当前 PlannerAgent.run() 直接驱动执行，后续应由 ExecutionEngine 统一编排。
 
 export class ExecutionEngine {
   private ctx: PipelineExecutionContext | null = null;
@@ -115,15 +117,15 @@ export class ExecutionEngine {
         this.callbacks.onLog(`Pipeline "${pipeline.name}" completed successfully`);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg === "AbortError" || (err instanceof Error && err.name === "AbortError")) {
+      if (err instanceof Error && err.name === "AbortError") {
         this.ctx.status = "aborted";
         this.callbacks.onStatusChange("aborted");
         this.callbacks.onLog("Pipeline aborted by user");
       } else {
         this.ctx.status = "failed";
         this.callbacks.onStatusChange("failed");
-        this.callbacks.onLog(`Pipeline error: ${msg}`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.callbacks.onLog(`Pipeline error: ${errMsg}`);
       }
       this.ctx.finishedAt = Date.now();
     }
@@ -180,6 +182,14 @@ export class ExecutionEngine {
           return;
         }
       } catch (err: unknown) {
+        // AbortError 必须向上传播，不能被重试逻辑吞没
+        if (err instanceof DOMException && err.name === "AbortError") {
+          stepRecord.status = "failed";
+          stepRecord.error = "Aborted by user";
+          stepRecord.finishedAt = Date.now();
+          this.callbacks.onStepChange(this.ctx!);
+          throw err;
+        }
         const errMsg = err instanceof Error ? err.message : String(err);
         if (attempt < maxAttempts - 1) {
           this.callbacks.onStepFail(stepDef.id, errMsg);

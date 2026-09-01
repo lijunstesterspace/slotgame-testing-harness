@@ -14,7 +14,7 @@ import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, Te
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
+import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";

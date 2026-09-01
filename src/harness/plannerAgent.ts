@@ -205,9 +205,7 @@ export class PlannerAgent {
     await this.client
       .auditLlm({
         provider: this.provider.providerType,
-        model: (this.provider as unknown as Record<string, unknown>).config
-          ? ((this.provider as unknown as Record<string, Record<string, string>>).config.selectedModel ?? "")
-          : "",
+        model: this.provider.config.selectedModel ?? "",
         tokens_in: totalIn,
         tokens_out: totalOut,
         duration_ms: durationMs,
@@ -281,7 +279,7 @@ export class PlannerAgent {
         intent: opts.intent,
         workflow_stage: 1,
         llm_provider: this.providerType,
-        llm_model: (this.provider as unknown as Record<string, Record<string, string>>).config?.selectedModel ?? "",
+        llm_model: this.provider.config.selectedModel ?? "",
       }),
     });
     if (!res.ok) throw new Error(`create execution failed: HTTP ${res.status}`);

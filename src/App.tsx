@@ -8,6 +8,7 @@ import { VerificationReportModal } from "./components/VerificationReportModal";
 import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
+import { AgentPage } from "./pages/AgentPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationConfig, VerificationReport, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
@@ -17,6 +18,7 @@ import { AlertCircle, Sparkles, PlusCircle, Loader2, ChevronDown, FolderOpen, Ar
 import { harnessClient, clearAuth } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
+import { routeIntent, SCENARIOS } from "./harness/intentRouter";
 
 // --- Auth Context ---
 interface AuthUser { id: string; username: string; role: string; isAdmin: boolean; }
@@ -89,7 +91,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<"workbench" | "llm-config" | "plugin">("workbench");
+  const [page, setPage] = useState<"workbench" | "llm-config" | "plugin" | "agent">("workbench");
   const [showLlmConfig, setShowLlmConfig] = useState(false);
   const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(() => loadStoredLlmConfig());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
@@ -98,6 +100,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [folderPath, setFolderPath] = useState<string>("");
   const folderInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
   // Test plan preview state
   const [showPreview, setShowPreview] = useState(false);
@@ -176,6 +179,15 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setError("Please describe your test task first");
       return;
     }
+    // 自动意图路由：根据用户输入匹配场景
+    const routeResult = routeIntent(promptIntent);
+    if (routeResult && routeResult.scenario.id !== selectedScenarioId) {
+      setSelectedScenarioId(routeResult.scenario.id);
+      addLog({
+        type: "HARNESS_EVENT",
+        content: `Auto-routed to scenario: ${routeResult.scenario.label} (keywords: ${routeResult.matchedKeywords.join(", ")})`,
+      });
+    }
     // Generate planned test items based on intent
     const tests = [
       { id: "plan-1", name: "Base Game - Normal Spin", description: "Test normal spin outcomes and payouts", selected: true },
@@ -219,7 +231,10 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         });
       }
       const outcome = await planner.run({
-        intent: { prompt: promptIntent, sheetUrl, loginName, workflowStage: 1 },
+        scenarioId: selectedScenarioId,
+        intent: promptIntent,
+        sheetUrl,
+        loginName,
         maxCycles: 14,
         signal: controller.signal,
       });
@@ -332,6 +347,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     setPromptIntent("");
     setSheetUrl("");
     setError(null);
+    setSelectedScenarioId("testdata_generation");
   };
 
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
@@ -343,6 +359,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
+  const handleOpenAgentPage = () => setPage("agent");
   const handleConfigChanged = async () => {
     // Reload config from the multi-model store
     const { loadStoredModels, getActiveModelConfig } = await import("./utils/llmGateway");
@@ -374,6 +391,10 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     return <PluginPage onBack={() => setPage("workbench")} />;
   }
 
+  if (page === "agent") {
+    return <AgentPage onBack={() => setPage("workbench")} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
       <Header
@@ -390,7 +411,13 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
       <main className="flex-1 flex overflow-hidden">
         {/* Left: Plugin + Task List */}
-        <Sidebar tasks={tasks} onOpenPlugin={handleOpenPluginPage} />
+        <Sidebar
+          tasks={tasks}
+          onOpenPlugin={handleOpenPluginPage}
+          onOpenAgent={handleOpenAgentPage}
+          selectedScenarioId={selectedScenarioId}
+          onSelectScenario={setSelectedScenarioId}
+        />
 
         {/* Center: Input Dialog → Pipeline → Console → Preview */}
         <div className="flex-1 flex flex-col overflow-y-auto p-4 gap-4 min-w-0">
@@ -610,7 +637,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       <footer className="px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-          <span>HARNESS v2 · PlannerAgent + Tool Registry · Full Audit Trail</span>
+          <span>HARNESS v2 · Scenario: {SCENARIOS.find(s => s.id === selectedScenarioId)?.label ?? "—"}</span>
         </div>
         <div className="flex items-center gap-4">
           <span className={`flex items-center gap-1.5 ${workflowState === "GENERATING" ? "text-cyan-400" : "text-emerald-400"}`}>

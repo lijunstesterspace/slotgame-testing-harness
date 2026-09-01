@@ -143,3 +143,82 @@ export interface LLMAuditReq {
   duration_ms?: number;
   success?: boolean;
 }
+
+// ─ HARNESS v2: Scenario / Pipeline / Execution Engine types ──
+
+/** 测试场景定义 */
+export interface TestScenario {
+  id: string;
+  label: string;
+  description: string;
+  keywords: string[];
+  agentFile: string;
+  skills: string[];
+  pipelineId: string;
+  requiredPlugins: string[];
+  icon: "zap" | "shield" | "bug" | "file-text" | "globe";
+}
+
+/** 流水线步骤定义 */
+export interface PipelineStepDef {
+  id: string;
+  plugin: string;
+  label: string;
+  description?: string;
+  dependsOn: string[];
+  retryOnFail: boolean;
+  maxRetries: number;
+}
+
+/** 流水线定义 */
+export interface PipelineDef {
+  id: string;
+  name: string;
+  description?: string;
+  stages: PipelineStepDef[][];
+}
+
+/** 步骤执行状态 */
+export type StepStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "retrying"
+  | "skipped";
+
+/** 步骤执行记录 */
+export interface StepExecutionRecord {
+  stepId: string;
+  plugin: string;
+  label: string;
+  status: StepStatus;
+  retryCount: number;
+  startedAt?: number;
+  finishedAt?: number;
+  resultSnippet?: string;
+  error?: string;
+}
+
+/** 流水线执行状态 */
+export type PipelineExecutionStatus =
+  | "idle"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "aborted";
+
+/** 完整流水线执行上下文 */
+export interface PipelineExecutionContext {
+  scenarioId: string;
+  pipelineId: string;
+  status: PipelineExecutionStatus;
+  currentStageIndex: number;
+  currentStepIndex: number;
+  steps: StepExecutionRecord[];
+  startedAt?: number;
+  finishedAt?: number;
+  userIntent: string;
+  extraParams: Record<string, unknown>;
+}

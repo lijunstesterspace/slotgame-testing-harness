@@ -11,7 +11,7 @@ interface Props {
 }
 
 const PLUGIN_ICONS: Record<string, React.ReactNode> = {
-  paytable_parser: <Table2 className="w-4 h-4" />,
+  testdata_parser: <Table2 className="w-4 h-4" />,
   testdata_generator: <Zap className="w-4 h-4" />,
   zip_packager: <Package className="w-4 h-4" />,
   game_verifier: <Wrench className="w-4 h-4" />,

@@ -148,7 +148,7 @@ hidden_imports = [
     "server.tools.impl",
     "server.tools.impl.game_verifier_tool",
     "server.tools.impl.log_diagnoser_tool",
-    "server.tools.impl.paytable_parser_tool",
+    "server.tools.impl.testdata_parser_tool",
     "server.tools.impl.testdata_generator_tool",
     "server.tools.impl.zip_packager_tool",
 ]

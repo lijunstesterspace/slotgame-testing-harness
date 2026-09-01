@@ -7,7 +7,7 @@ SLOT测试任务封装、派发、格式约束规则，保障AI输出格式稳�
 
 ### Stage 1（测试数据生成）
 必须按顺序调用工具：
-1. `paytable_parser` → 解析原始文本 → 结构化 records
+1. `testdata_parser` → 解析原始文本 → 结构化 records
 2. `testdata_generator` → 生成 .testdata XML 文件
 3. `zip_packager` → 打包 ZIP 供下载
 

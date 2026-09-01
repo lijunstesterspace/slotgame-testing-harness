@@ -6,11 +6,11 @@ from server.tools.base import (
     ToolResult, HarnessContext,
 )
 
-class PaytableParserTool(ToolPlugin):
+class TestdataParserTool(ToolPlugin):
     @property
     def info(self) -> ToolInfo:
         return ToolInfo(
-            name="paytable_parser",
+            name="testdata_parser",
             description="Parses raw Google Sheets / CSV / pasted paytable text with case names, Bet Lines ID blocks, and (batch,index) pairs. Emits structured records + fileMap grouped by game prefix.",
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(name="raw_text", type="string", required=True,

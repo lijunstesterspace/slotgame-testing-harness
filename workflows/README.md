@@ -22,7 +22,7 @@ P2 阶段计划支持：
 name: slot-test-full-pipeline
 steps:
   - id: parse
-    tool: paytable_parser
+    tool: testdata_parser
     params:
       raw_text: "{{input.raw_text}}"
   - id: generate

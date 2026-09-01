@@ -38,10 +38,10 @@ class TestdataGeneratorTool(ToolPlugin):
     def info(self) -> ToolInfo:
         return ToolInfo(
             name="testdata_generator",
-            description="Writes a structured list of test records (from paytable_parser) into one or more .testdata XML files, grouped by record.file_name. Returns created file paths.",
+            description="Writes a structured list of test records (from testdata_parser) into one or more .testdata XML files, grouped by record.file_name. Returns created file paths.",
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(name="records", type="object", required=True,
-                              description="Records array from paytable_parser output: [{case_name, format_type, module_id, base_batch, base_index, bonus_batch?, bonus_index?, file_name, xml_snippet}]"),
+                              description="Records array from testdata_parser output: [{case_name, format_type, module_id, base_batch, base_index, bonus_batch?, bonus_index?, file_name, xml_snippet}]"),
                 ToolParameter(name="login_name", type="string", default="",
                               description="loginName attribute on the output XML <Key> tag."),
             ]),

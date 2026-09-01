@@ -8,7 +8,7 @@
 
 - `server/tools/base.py` - 定义 `ToolPlugin` 接口和 `ToolRegistry`
 - `server/tools/impl/` - 内置插件实现：
-  - `paytable_parser_tool.py` - Google Sheets 解析插件
+  - `testdata_parser_tool.py` - Google Sheets 解析插件
   - `testdata_generator_tool.py` - 测试数据生成插件
   - `zip_packager_tool.py` - ZIP打包插件
   - `game_verifier_tool.py` - 游戏验证插件

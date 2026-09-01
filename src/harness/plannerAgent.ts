@@ -1,7 +1,8 @@
 import type { LlmProviderConfig } from "../types";
 import { createPlannerProvider, PlannerProvider, ChatMessage } from "./plannerProvider";
 import { harnessClient, HarnessClient } from "./client";
-import type { FunctionCallingSchema, ToolInfoDto, TestRecordDto } from "./sharedTypes";
+import type { TestRecordDto } from "./sharedTypes";
+import { getScenarioSystemPrompt } from "./intentRouter";
 
 export interface PlannerCallbacks {
   onThought: (content: string) => void;
@@ -13,16 +14,18 @@ export interface PlannerCallbacks {
 }
 
 export interface PlannerRunOptions {
-  intent: {
-    prompt: string;
-    sheetUrl?: string;
-    loginName: string;
-    workflowStage: 1 | 2;
-    targetUrl?: string;
-    spinDelayMs?: number;
-  };
+  /** 场景 ID，用于获取对应的 System Prompt */
+  scenarioId: string;
+  /** 用户意图描述 */
+  intent: string;
+  sheetUrl?: string;
+  targetUrl?: string;
+  loginName: string;
+  spinDelayMs?: number;
   maxCycles?: number;
   signal?: AbortSignal;
+  /** 可选：自定义 System Prompt（覆盖场景默认值） */
+  customSystemPrompt?: string;
 }
 
 export interface PlannerRunOutcome {
@@ -33,41 +36,36 @@ export interface PlannerRunOutcome {
   message?: string;
 }
 
-// ---- system prompts ----
-const SYSTEM_PROMPTS = {
-  stage1: `You are a Slot QA TestData Generator Agent for slot machine test automation.
+// ── XML 标签常量（避免字面量被工具解析） ──
+const TC_OPEN = "<tool_call>";
+const TC_CLOSE = "</tool_call>";
+const TC_NAME = "<name>";
+const TC_NAME_CLOSE = "</name>";
+const TC_PARAMS = "<params>";
+const TC_PARAMS_CLOSE = "</params>";
+const TASK_DONE = "<task_complete />";
+const TOOL_CALL_REGEX_SRC = [
+  /<tool_call\s*<name>\s*([\w-]+)\s*<\/name>\s*/,
+  /<params>\s*(\{[\s\S]*?\})\s*<\/params>\s*/,
+  /<\/tool_call>/,
+];
+const TASK_COMPLETE_RE = /<task_complete\s*\/>|<task_complete\s+success\s*=\s*(["']?)true\1/;
+const TASK_FAIL_RE = /<task_complete[^>]*success\s*=\s*(["']?)false\1/;
+const TASK_FAIL_REASON_RE = /reason\s*=\s*(["'])([^"']+)\1/;
 
-Your task: Parse user intent + Google Sheets / paytable raw text, then call HARNESS-provided tools:
-  1) paytable_parser — Read raw text → structured records + fileMap
-  2) testdata_generator — Write .testdata XML files to server sandbox
-  3) zip_packager — Package outcome_testdata zip for download
-
-【CRITICAL】Tool call output format (only valid format):
-When calling a tool, you MUST output strictly with XML tags:
-   <tool_call><name>tool_name</name><params>{ json object }</params></tool_call>
-Note: <params> contains a JSON object (keys are parameter names, values must match the corresponding ToolSchema). Do not write anything related to tool dispatch outside of <tool_call>; COT reasoning can be written in natural language before <tool_call>.
-
-After task completion (zip generated and records ready), output:
-  <task_complete />
-
-Requirements:
-- For stage=1 (generation): call at least paytable_parser → testdata_generator → zip_packager.
-- Use gamePrefix=P5P for all files unless user specifies otherwise; parse module_id from the table, default to 105359 if not found.
-- On any parsing error, prefer self-heal: write a short reflection before <tool_call>, adjust parameters and retry up to 2 times; if exceeded, output <task_complete success=false reason="..." />.
-
-During reasoning, you may use natural language for COT; do not output HARNESS_EVENT, SELF_HEAL etc. tags (these are rendered by UI). Only output <tool_call> or <task_complete /> when actually needed.
-`,
-
-  stage2: `You are a Slot QA TestData Verifier Agent + UI/Log Diagnoser Agent for slot machine test automation.
-Your task: For already generated testdata, call:
-  1) game_verifier — Selenium real verification + screenshots
-  2) log_diagnoser — Output root cause diagnosis for each verification result
-
-【Tool call format】Same as Stage 1: call with <tool_call><name>xxx</name><params>{json}</params></tool_call>
-Completion: <task_complete />
-`,
-};
-
+/**
+ * PlannerAgent — 语义推理单元
+ *
+ * 职责：
+ *   - 接收场景化 System Prompt（来自 intentRouter）
+ *   - 驱动 AI 对话循环（流式输出 → 解析 tool_call → 执行 → 反馈）
+ *   - 不控制业务流程（流程由 ExecutionEngine 编排）
+ *
+ * 4B 模型在此的角色是"语义传感器"：
+ *   - 解析用户意图 → 输出结构化的工具调用
+ *   - 对工具返回结果做简单语义理解
+ *   - 所有流程控制、重试、状态机均由代码处理
+ */
 export class PlannerAgent {
   private readonly provider: PlannerProvider;
   private readonly client: HarnessClient;
@@ -90,20 +88,16 @@ export class PlannerAgent {
 
   async run(opts: PlannerRunOptions): Promise<PlannerRunOutcome> {
     const maxCycles = opts.maxCycles ?? 12;
-    const sys = SYSTEM_PROMPTS[opts.intent.workflowStage === 2 ? "stage2" : "stage1"];
+    const sys = opts.customSystemPrompt ?? getScenarioSystemPrompt(opts.scenarioId);
+
     const messages: ChatMessage[] = [
       { role: "system", content: sys },
-      {
-        role: "user",
-        content: this._buildUserFirstMessage(opts.intent),
-      },
+      { role: "user", content: this._buildUserMessage(opts) },
     ];
 
-    // Fetch tool list + create execution record (backend audit)
-    const { schema } = await this.client.listTools();
+    await this.client.listTools();
     const eid = await this._createExecution(opts);
 
-    // Save context
     let lastRecords: TestRecordDto[] = [];
     let lastFiles: string[] = [];
     let lastZipUrl: string | undefined;
@@ -114,14 +108,15 @@ export class PlannerAgent {
     try {
       for (let i = 0; i < maxCycles; i++) {
         opts.signal?.throwIfAborted();
-        this.callbacks.onHarnessEvent(`Cycle ${i + 1}/${maxCycles} — invoking ${this.provider.displayName}`);
+        this.callbacks.onHarnessEvent(
+          `Cycle ${i + 1}/${maxCycles} — invoking ${this.provider.displayName}`,
+        );
 
         let thoughtAccumulator = "";
         const streamed = await this.provider.streamChat(
           messages,
           (tok) => {
             thoughtAccumulator += tok;
-            // Incremental onThought: each chunk refreshes the last UI entry
             this.callbacks.onThought(thoughtAccumulator);
           },
           opts.signal,
@@ -130,7 +125,7 @@ export class PlannerAgent {
         totalOut += streamed.meta.tokensOutEstimate;
         const text = streamed.fullText;
 
-        // Parse tool_call / task_complete
+        // 解析 tool_call
         const toolCall = this._parseToolCall(text);
         if (toolCall) {
           this.callbacks.onToolCall(toolCall.name, toolCall.params);
@@ -138,41 +133,29 @@ export class PlannerAgent {
           try {
             result = await this.client.executeTool(toolCall.name, {
               ...toolCall.params,
-              // Attach execution_id to params for audit
               __execution_id: eid,
-            } as any);
-          } catch (err: any) {
-            this.callbacks.onSelfHeal(`Tool ${toolCall.name} failed: ${err?.message ?? err}, letting model reflect and retry.`);
+            } as Record<string, unknown>);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            this.callbacks.onSelfHeal(
+              `Tool ${toolCall.name} failed: ${errMsg}, letting model reflect and retry.`,
+            );
             messages.push({ role: "assistant", content: text });
             messages.push({
               role: "user",
-              content: `[TOOL ERROR] ${toolCall.name} call failed: ${err?.message ?? err}\nPlease self-correct parameters and retry, or if the task cannot be completed, output <task_complete success=false reason="tool error" />.`,
+              content: `[TOOL ERROR] ${toolCall.name} call failed: ${errMsg}\nPlease self-correct parameters and retry, or output ${TASK_DONE} with success=false.`,
             });
             continue;
           }
           const snippet = this._snippetOf(result);
           this.callbacks.onToolResult(toolCall.name, snippet, result.success);
-
-          // Side effects: record records / zip url
-          if (toolCall.name === "paytable_parser" && result.success) {
-            const content = (result.content as any) ?? {};
-            const recs = this._coerceRecords(content.records ?? [], eid);
-            lastRecords = recs;
-            await this.client.saveRecords(recs as any);
-            this.callbacks.onProgress?.(recs, {});
-          }
-          if (toolCall.name === "testdata_generator" && result.success) {
-            const files = (result.content as any)?.files as string[] | undefined;
+          this._collectSideEffects(toolCall.name, result, eid, (recs, files, zipUrl) => {
+            if (recs) lastRecords = recs;
             if (files) lastFiles = files;
-            this.callbacks.onProgress?.(lastRecords, { files });
-          }
-          if (toolCall.name === "zip_packager" && result.success) {
-            const url = (result.content as any)?.download_url as string | undefined;
-            if (url) lastZipUrl = `${this.client.base}${url}`;
+            if (zipUrl) lastZipUrl = zipUrl;
             this.callbacks.onProgress?.(lastRecords, { zipUrl: lastZipUrl, files: lastFiles });
-          }
+          });
 
-          // push conversation
           messages.push({ role: "assistant", content: text });
           messages.push({
             role: "user",
@@ -181,12 +164,13 @@ export class PlannerAgent {
           continue;
         }
 
-        if (/<task_complete\s*\/>|<task_complete\s+success\s*=\s*(["']?)true\1/.test(text)) {
+        // 检查 task_complete
+        if (TASK_COMPLETE_RE.test(text)) {
           this.callbacks.onHarnessEvent("Agent output <task_complete />.");
           break;
         }
-        if (/<task_complete[^>]*success\s*=\s*(["']?)false\1/.test(text)) {
-          const m = /reason\s*=\s*(["'])([^"']+)\1/.exec(text);
+        if (TASK_FAIL_RE.test(text)) {
+          const m = TASK_FAIL_REASON_RE.exec(text);
           this.callbacks.onSelfHeal(`Agent reported failure: ${m?.[2] ?? "Unknown reason"}`);
           return {
             success: false,
@@ -197,20 +181,19 @@ export class PlannerAgent {
           };
         }
 
-        // No valid tag parsed → self-heal: ask model to re-output with correct format
-        this.callbacks.onSelfHeal("Model output does not contain valid <tool_call> or <task_complete /> tags; asking to retry with correct format.");
+        // 无有效标签 → self-heal
+        this.callbacks.onSelfHeal(
+          `Model output does not contain valid ${TC_OPEN} or ${TASK_DONE} tags; asking to retry.`,
+        );
         messages.push({ role: "assistant", content: text });
         messages.push({
           role: "user",
-          content:
-            ["Please strictly follow the output format specified in the system prompt: when calling a tool, output " +
-              "\u003ctool_call\u003e<name>…\u003c/name\u003e<params>{…}\u003c/params\u003e\u003c/tool_call\u003e, " +
-              "and after task completion, output <task_complete />. Please retry now.",
-          ].join(""),
+          content: `Please strictly follow the output format: when calling a tool, output ${TC_OPEN}${TC_NAME}...${TC_NAME_CLOSE}${TC_PARAMS}{...}${TC_PARAMS_CLOSE}${TC_CLOSE}, and after task completion, output ${TASK_DONE}. Please retry now.`,
         });
       }
-    } catch (err: any) {
-      this.callbacks.onSelfHeal(`Execution interrupted: ${err?.message ?? err}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.callbacks.onSelfHeal(`Execution interrupted: ${errMsg}`);
       throw err;
     } finally {
       fetch(`${this.client.base}/api/executions/mine`, {
@@ -222,7 +205,9 @@ export class PlannerAgent {
     await this.client
       .auditLlm({
         provider: this.provider.providerType,
-        model: (this.provider as any).config.selectedModel,
+        model: (this.provider as unknown as Record<string, unknown>).config
+          ? ((this.provider as unknown as Record<string, Record<string, string>>).config.selectedModel ?? "")
+          : "",
         tokens_in: totalIn,
         tokens_out: totalOut,
         duration_ms: durationMs,
@@ -238,12 +223,11 @@ export class PlannerAgent {
       message: `Completed in ${maxCycles} cycles or earlier.`,
     };
   }
+
+  // ── 私有方法 ──────────────────────────────────────────────
+
   private _parseToolCall(text: string): { name: string; params: Record<string, unknown> } | null {
-    const re = [
-      /<tool_call\s*<name>\s*([\w-]+)\s*<\/name>\s*/,
-      /<params>\s*(\{[\s\S]*?\})\s*<\/params>\s*/,
-      /<\/tool_call>/,
-    ];
+    const re = TOOL_CALL_REGEX_SRC;
     const m = text.match(new RegExp(re.map((r) => r.source).join("")));
     if (!m) return null;
     const name = m[1];
@@ -256,10 +240,34 @@ export class PlannerAgent {
     return { name, params };
   }
 
-  private _snippetOf(result: any): string {
+  private _snippetOf(result: { content: unknown }): string {
     const raw = JSON.stringify(result.content);
     if (raw.length <= 4000) return raw;
     return raw.slice(0, 2000) + `\n…[truncated ${raw.length - 4000} chars]…\n` + raw.slice(-2000);
+  }
+
+  private _collectSideEffects(
+    toolName: string,
+    result: { success: boolean; content: unknown },
+    eid: string,
+    collect: (recs: TestRecordDto[] | null, files: string[] | null, zipUrl: string | null) => void,
+  ): void {
+    if (!result.success) return;
+    const content = (result.content as Record<string, unknown>) ?? {};
+
+    if (toolName === "testdata_parser") {
+      const recs = this._coerceRecords((content.records as Record<string, unknown>[]) ?? [], eid);
+      void this.client.saveRecords(recs as unknown as Parameters<HarnessClient["saveRecords"]>[0]);
+      collect(recs, null, null);
+    }
+    if (toolName === "testdata_generator") {
+      const files = content.files as string[] | undefined;
+      collect(null, files ?? null, null);
+    }
+    if (toolName === "zip_packager") {
+      const url = content.download_url as string | undefined;
+      collect(null, null, url ? `${this.client.base}${url}` : null);
+    }
   }
 
   private async _createExecution(opts: PlannerRunOptions): Promise<string> {
@@ -270,42 +278,43 @@ export class PlannerAgent {
         Authorization: `Bearer ${sessionStorage.getItem("harness_token") ?? ""}`,
       },
       body: JSON.stringify({
-        intent: opts.intent.prompt,
-        workflow_stage: opts.intent.workflowStage,
+        intent: opts.intent,
+        workflow_stage: 1,
         llm_provider: this.providerType,
-        llm_model: (this.provider as any).config.selectedModel,
+        llm_model: (this.provider as unknown as Record<string, Record<string, string>>).config?.selectedModel ?? "",
       }),
     });
     if (!res.ok) throw new Error(`create execution failed: HTTP ${res.status}`);
     const data = await res.json();
-    return data.execution_id;
+    return data.execution_id as string;
   }
-  private _coerceRecords(arr: any[], eid: string): TestRecordDto[] {
+
+  private _coerceRecords(arr: Record<string, unknown>[], eid: string): TestRecordDto[] {
     return arr.map((r, i) => ({
-      id: r.id ?? `rec-${eid}-${i}`,
-      execution_id: r.execution_id ?? eid,
-      user_id: r.user_id ?? null,
+      id: (r.id as string) ?? `rec-${eid}-${i}`,
+      execution_id: (r.execution_id as string) ?? eid,
+      user_id: (r.user_id as string) ?? null,
       case_name: String(r.case_name ?? `Case ${i + 1}`),
-      format_type: (r.format_type === "DOUBLE_PREGEN" ? "DOUBLE_PREGEN" : "SINGLE") as any,
+      format_type: (r.format_type === "DOUBLE_PREGEN" ? "DOUBLE_PREGEN" : "SINGLE") as "SINGLE" | "DOUBLE_PREGEN",
       module_id: String(r.module_id ?? "105359"),
       base_batch: Number(r.base_batch ?? 1),
       base_index: Number(r.base_index ?? 1),
       bonus_batch: r.bonus_batch != null ? Number(r.bonus_batch) : null,
       bonus_index: r.bonus_index != null ? Number(r.bonus_index) : null,
-      file_name: r.file_name ?? null,
+      file_name: (r.file_name as string) ?? null,
       xml_snippet: String(r.xml_snippet ?? r.xml ?? ""),
-      created_at: r.created_at ?? Date.now(),
+      created_at: (r.created_at as number) ?? Date.now(),
     }));
   }
 
-  private _buildUserFirstMessage(intent: PlannerRunOptions["intent"]): string {
+  private _buildUserMessage(opts: PlannerRunOptions): string {
     const lines = [
-      `User intent: ${intent.prompt}`,
-      `Workflow stage: Stage ${intent.workflowStage}`,
-      intent.sheetUrl ? `Google Sheet URL: ${intent.sheetUrl}` : "",
-      intent.targetUrl ? `Target client URL: ${intent.targetUrl}` : "",
-      intent.spinDelayMs ? `Spin interval: ${intent.spinDelayMs}ms` : "",
-      `Login account: ${intent.loginName}`,
+      `User intent: ${opts.intent}`,
+      `Scenario: ${opts.scenarioId}`,
+      opts.sheetUrl ? `Google Sheet URL: ${opts.sheetUrl}` : "",
+      opts.targetUrl ? `Target client URL: ${opts.targetUrl}` : "",
+      opts.spinDelayMs ? `Spin interval: ${opts.spinDelayMs}ms` : "",
+      `Login account: ${opts.loginName}`,
       "",
       "[Raw paytable text (excerpt)]",
       "P5P\t500\t225\t120\t115\t100\t55\t40\t30\t25\t15\t10\t5\t2.5\t0",

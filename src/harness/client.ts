@@ -89,8 +89,9 @@ export class HarnessClient {
   }
 
   // ---- tools ----
-  async listTools(): Promise<{ tools: ToolInfoDto[]; schema: FunctionCallingSchema[] }> {
-    const r = await jsonFetch<ToolListResponse>("/api/tools/list");
+  async listTools(scenarioId?: string): Promise<{ tools: ToolInfoDto[]; schema: FunctionCallingSchema[] }> {
+    const qs = scenarioId ? `?scenario_id=${encodeURIComponent(scenarioId)}` : "";
+    const r = await jsonFetch<ToolListResponse>(`/api/tools/list${qs}`);
     return { tools: r.tools, schema: r.function_calling_schema };
   }
 

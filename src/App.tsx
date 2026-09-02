@@ -16,7 +16,7 @@ import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
 import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
-import type { TestRecordDto } from "./harness/sharedTypes";
+import type { FunctionCallingSchema, TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
 import { routeIntent, SCENARIOS } from "./harness/intentRouter";
 
@@ -30,6 +30,37 @@ const STAGE1_TASKS: TaskItem[] = [
   { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
   { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
 ];
+
+// ── Scenario-specific Test Plan Items ──────────────────────────────────
+const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; description: string; selected: boolean }>> = {
+  testdata_generation: [
+    { id: "plan-1", name: "Base Game - Normal Spin", description: "Test normal spin outcomes and payouts", selected: true },
+    { id: "plan-2", name: "Base Game - Max Bet", description: "Test maximum bet configuration", selected: true },
+    { id: "plan-3", name: "Free Spins Trigger", description: "Test free spins feature activation", selected: true },
+    { id: "plan-4", name: "Bonus Game Entry", description: "Test bonus game entry conditions", selected: false },
+    { id: "plan-5", name: "Paytable Verification", description: "Verify all symbol payouts match paytable", selected: true },
+  ],
+  game_verification: [
+    { id: "plan-1", name: "Seed Acceptance Check", description: "Verify game server accepts all generated test seeds", selected: true },
+    { id: "plan-2", name: "Base Game Payout Consistency", description: "Verify base game payouts match expected values", selected: true },
+    { id: "plan-3", name: "Free Spins Payout Check", description: "Verify free spins feature payouts are correct", selected: true },
+    { id: "plan-4", name: "Bonus Game Verification", description: "Verify bonus game outcomes and payouts", selected: false },
+    { id: "plan-5", name: "RTP Consistency Check", description: "Verify overall RTP matches theoretical value", selected: true },
+  ],
+  log_diagnosis: [
+    { id: "plan-1", name: "Failed Case Log Analysis", description: "Analyze logs from failed verification cases", selected: true },
+    { id: "plan-2", name: "Screenshot Comparison", description: "Compare actual vs expected game screenshots", selected: true },
+    { id: "plan-3", name: "Root Cause Attribution", description: "Attribute failures to game server, client UI, or test data", selected: true },
+    { id: "plan-4", name: "Pattern Detection", description: "Detect recurring failure patterns across cases", selected: false },
+  ],
+  easyhelp_checking: [
+    { id: "plan-1", name: "HTML to Text Conversion", description: "Batch convert HTML help files to clean plain text", selected: true },
+    { id: "plan-2", name: "Version Diff Comparison", description: "Compare help file versions and highlight keyword differences", selected: true },
+    { id: "plan-3", name: "Keyword Extraction", description: "Extract and highlight key terms from help files", selected: true },
+    { id: "plan-4", name: "AI Analysis Report", description: "Generate AI-powered analysis report using local model", selected: true },
+    { id: "plan-5", name: "Excel Report Generation", description: "Package diff results into formatted Excel report", selected: false },
+  ],
+};
 
 const MODEL_OPTIONS: { label: string; value: string }[] = [
   { label: "Ollama · llama3:7b (local)", value: "llama3:7b" },
@@ -180,23 +211,19 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       return;
     }
     // 自动意图路由：根据用户输入匹配场景
+    let effectiveScenarioId = selectedScenarioId;
     const routeResult = routeIntent(promptIntent);
     if (routeResult && routeResult.scenario.id !== selectedScenarioId) {
-      setSelectedScenarioId(routeResult.scenario.id);
+      effectiveScenarioId = routeResult.scenario.id;
+      setSelectedScenarioId(effectiveScenarioId);
       addLog({
         type: "HARNESS_EVENT",
         content: `Auto-routed to scenario: ${routeResult.scenario.label} (keywords: ${routeResult.matchedKeywords.join(", ")})`,
       });
     }
-    // Generate planned test items based on intent
-    const tests = [
-      { id: "plan-1", name: "Base Game - Normal Spin", description: "Test normal spin outcomes and payouts", selected: true },
-      { id: "plan-2", name: "Base Game - Max Bet", description: "Test maximum bet configuration", selected: true },
-      { id: "plan-3", name: "Free Spins Trigger", description: "Test free spins feature activation", selected: true },
-      { id: "plan-4", name: "Bonus Game Entry", description: "Test bonus game entry conditions", selected: false },
-      { id: "plan-5", name: "Paytable Verification", description: "Verify all symbol payouts match paytable", selected: true },
-    ];
-    setPlannedTests(tests);
+    // Generate planned test items based on selected scenario
+    const tests = SCENARIO_TEST_ITEMS[effectiveScenarioId] ?? SCENARIO_TEST_ITEMS["testdata_generation"];
+    setPlannedTests(tests.map(t => ({ ...t })));
     setShowPreview(true);
   };
 
@@ -230,6 +257,20 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           status: "warning",
         });
       }
+
+      // Fetch tools filtered by scenario's requiredPlugins (backend does the filtering)
+      let availableTools: FunctionCallingSchema[] | undefined;
+      try {
+        const listRes = await harnessClient.listTools(selectedScenarioId);
+        availableTools = listRes.schema;
+        addLog({
+          type: "HARNESS_EVENT",
+          content: `Tools loaded for scenario: ${availableTools.length} tool(s) available`,
+        });
+      } catch (e: any) {
+        addLog({ type: "SELF_HEAL", content: `Failed to fetch tool list: ${e?.message ?? e}`, status: "warning" });
+      }
+
       const outcome = await planner.run({
         scenarioId: selectedScenarioId,
         intent: promptIntent,
@@ -237,6 +278,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         loginName,
         maxCycles: 14,
         signal: controller.signal,
+        availableTools,
       });
       if (!outcome.success) throw new Error(outcome.message ?? "Planner did not complete the task");
       setWorkflowState("REVIEW");

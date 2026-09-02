@@ -1,6 +1,18 @@
 import type { TestScenario } from "./sharedTypes";
 
-// ── Test Scenario Registry ─────────────────────────────────────────────
+// ── Agent files (Vite ?raw → build-time string inlining) ────────────
+import agent_testdata_gen from "../../agents/testdata_generator_agent.md?raw";
+import agent_testdata_verifier from "../../agents/testdata_verifier_agent.md?raw";
+import agent_log_diagnoser from "../../agents/ui_log_diagnoser_agent.md?raw";
+import agent_helpfile from "../../agents/helpfile_conversion_agent.md?raw";
+
+// ── Skill files (Vite ?raw → build-time string inlining) ────────────
+import skill_sheet_clean from "../../skills/skill-sheet-data-clean.md?raw";
+import skill_generator_contract from "../../skills/skill-generator-plugin-contract.md?raw";
+import skill_helpfile_conversion from "../../skills/skill-helpfile-conversion.md?raw";
+import skill_helpfile_plugin from "../../skills/skill-helpfile-plugin-contract.md?raw";
+
+// ─ Test Scenario Registry ─────────────────────────────────────────────
 // Add a new scenario by appending an entry to this array; HARNESS auto-discovers it
 
 export const SCENARIOS: TestScenario[] = [
@@ -38,8 +50,8 @@ export const SCENARIOS: TestScenario[] = [
     icon: "bug",
   },
   {
-    id: "helpfile_conversion",
-    label: "Helpfile Conversion & Analysis",
+    id: "easyhelp_checking",
+    label: "EasyHelp Checking",
     description: "Batch convert HTML help files to text, perform diff comparison with keyword highlighting, and generate AI-powered analysis report",
     keywords: ["helpfile", "help", "conversion", "convert", "diff", "keyword", "帮助文件", "转换", "差异", "关键词"],
     agentFile: "helpfile_conversion_agent.md",
@@ -49,6 +61,22 @@ export const SCENARIOS: TestScenario[] = [
     icon: "file-text",
   },
 ];
+
+// ── Agent content map (scenarioId → raw markdown) ─────────────────────
+const AGENT_CONTENT: Record<string, string> = {
+  testdata_generation: agent_testdata_gen,
+  game_verification: agent_testdata_verifier,
+  log_diagnosis: agent_log_diagnoser,
+  easyhelp_checking: agent_helpfile,
+};
+
+// ── Skill content map (filename → raw markdown) ───────────────────────
+const SKILL_CONTENT: Record<string, string> = {
+  "skill-sheet-data-clean.md": skill_sheet_clean,
+  "skill-generator-plugin-contract.md": skill_generator_contract,
+  "skill-helpfile-conversion.md": skill_helpfile_conversion,
+  "skill-helpfile-plugin-contract.md": skill_helpfile_plugin,
+};
 
 // ── Intent Router ────────────────────────────────────────────────
 
@@ -87,75 +115,49 @@ export function routeIntent(userInput: string): RouteResult | null {
 }
 
 /**
- * Get the System Prompt prefix for a scenario.
- * Read from agents/*.md files; inline defaults provided here.
+ * Compose the full System Prompt for a scenario:
+ *   1. Agent role definition (from agents/*.md)
+ *   2. Skill rules (from skills/*.md) — behavior constraints for the small model
+ *   3. Tool call format instructions
  */
 export function getScenarioSystemPrompt(scenarioId: string): string {
-  const prompts: Record<string, string> = {
-    testdata_generation: [
-      "You are a Slot QA TestData Generator Agent for slot machine test automation.",
-      "",
-      "Your task: Parse user intent + Google Sheets / paytable raw text, then call HARNESS-provided tools:",
-      "  1) testdata_parser - Read raw text into structured records + fileMap",
-      "  2) testdata_generator - Write .testdata XML files to server sandbox",
-      "  3) zip_packager - Package outcome_testdata zip for download",
-      "",
-      "Tool call format: Use XML tags tool_call with name and params.",
-      "After task completion, output: task_complete",
-      "",
-      "Requirements:",
-      "- For stage=1 (generation): call at least testdata_parser then testdata_generator then zip_packager.",
-      "- Use gamePrefix=P5P for all files unless user specifies otherwise.",
-    ].join("\n"),
+  const parts: string[] = [];
 
-    game_verification: [
-      "You are a Slot QA TestData Verifier Agent for slot machine test automation.",
-      "",
-      "Your task: For already generated testdata, call:",
-      "  1) testdata_verifier - Selenium real verification + screenshots",
-      "",
-      "Tool call format: Same as above.",
-      "Completion: task_complete",
-      "",
-      "Requirements:",
-      "- Verify each test record against the real game server.",
-      "- Report any discrepancies in payout or seed acceptance.",
-    ].join("\n"),
+  // ─ Part 1: Agent role & rules ──
+  const agentMd = AGENT_CONTENT[scenarioId];
+  if (agentMd) {
+    parts.push("=== AGENT ROLE & RULES ===");
+    parts.push(agentMd.trim());
+    parts.push("");
+  }
 
-    log_diagnosis: [
-      "You are a Slot QA UI/Log Diagnoser Agent for slot machine test automation.",
-      "",
-      "Your task: Analyze verification failure logs and screenshots, then generate root cause attribution reports.",
-      "Call HARNESS-provided tools:",
-      "  1) log_diagnoser - Output root cause diagnosis for each verification result",
-      "",
-      "Tool call format: Same as above.",
-      "Completion: task_complete",
-      "",
-      "Requirements:",
-      "- Analyze each failed verification case.",
-      "- Attribute root cause to game server, client UI, or test data.",
-    ].join("\n"),
+  // ── Part 2: Skill constraints ──
+  const scenario = SCENARIOS.find(s => s.id === scenarioId);
+  if (scenario?.skills?.length) {
+    parts.push("=== SKILL RULES (must follow strictly) ===");
+    for (const skillFile of scenario.skills) {
+      const content = SKILL_CONTENT[skillFile];
+      if (content) {
+        parts.push(`--- ${skillFile} ---`);
+        parts.push(content.trim());
+        parts.push("");
+      }
+    }
+  }
 
-    helpfile_conversion: [
-      "You are the Helpfile Conversion & Analysis Agent for Help Files QA Automation.",
-      "",
-      "Your task: Batch convert HTML help files to text, compare versions, and generate AI analysis.",
-      "Call HARNESS-provided tools in order:",
-      "  1) html_to_text_converter - Convert HTML files to clean plain text",
-      "  2) diff_comparator - Compare files, highlight keywords, generate Excel report",
-      "  3) helpfile_analyzer - Invoke local AI model to generate intelligent analysis report",
-      "",
-      "Tool call format: Use XML tags tool_call with name and params.",
-      "After task completion, output: task_complete",
-      "",
-      "Requirements:",
-      "- Always call tools in the order: converter → comparator → analyzer.",
-      "- Pass the converted file list from step 1 to step 2 and step 3.",
-      "- Pass comparison results from step 2 to step 3 for richer AI analysis.",
-      "- The helpfile_analyzer tool invokes a LOCAL AI model (Ollama) for intelligent reporting.",
-    ].join("\n"),
-  };
+  // ── Part 3: Tool call format (universal) ──
+  parts.push("=== TOOL CALL FORMAT ===");
+  parts.push("When calling a tool, output exactly:");
+  parts.push('<tool_call><name>tool_name</name><params>{"key": "value"}</params></tool_call>');
+  parts.push("After all tasks are complete, output: <task_complete />");
+  parts.push("If the task fails, output: <task_complete success=\"false\" reason=\"...\" />");
 
-  return prompts[scenarioId] ?? "You are a HARNESS test agent. Follow the scenario instructions.";
+  const prompt = parts.join("\n\n");
+
+  // Fallback for unknown scenario
+  if (!prompt.trim()) {
+    return "You are a HARNESS test agent. Follow the scenario instructions.";
+  }
+
+  return prompt;
 }

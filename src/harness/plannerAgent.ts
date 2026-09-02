@@ -1,7 +1,7 @@
 import type { LlmProviderConfig } from "../types";
 import { createPlannerProvider, PlannerProvider, ChatMessage } from "./plannerProvider";
 import { harnessClient, HarnessClient } from "./client";
-import type { TestRecordDto } from "./sharedTypes";
+import type { FunctionCallingSchema, TestRecordDto } from "./sharedTypes";
 import { getScenarioSystemPrompt } from "./intentRouter";
 
 export interface PlannerCallbacks {
@@ -26,6 +26,8 @@ export interface PlannerRunOptions {
   signal?: AbortSignal;
   /** 可选：自定义 System Prompt（覆盖场景默认值） */
   customSystemPrompt?: string;
+  /** 可选：预过滤的工具列表（按 scenario 的 requiredPlugins 过滤） */
+  availableTools?: FunctionCallingSchema[];
 }
 
 export interface PlannerRunOutcome {
@@ -88,14 +90,25 @@ export class PlannerAgent {
 
   async run(opts: PlannerRunOptions): Promise<PlannerRunOutcome> {
     const maxCycles = opts.maxCycles ?? 12;
-    const sys = opts.customSystemPrompt ?? getScenarioSystemPrompt(opts.scenarioId);
+    const basePrompt = opts.customSystemPrompt ?? getScenarioSystemPrompt(opts.scenarioId);
+
+    // Resolve available tools: use pre-filtered list or fetch all from backend
+    let tools: FunctionCallingSchema[];
+    if (opts.availableTools) {
+      tools = opts.availableTools;
+    } else {
+      const listRes = await this.client.listTools();
+      tools = listRes.schema;
+    }
+
+    // Compose full system prompt: agent+skills + tool schemas + format
+    const sys = this._composeSystemPrompt(basePrompt, tools);
 
     const messages: ChatMessage[] = [
       { role: "system", content: sys },
       { role: "user", content: this._buildUserMessage(opts) },
     ];
 
-    await this.client.listTools();
     const eid = await this._createExecution(opts);
 
     let lastRecords: TestRecordDto[] = [];
@@ -223,6 +236,32 @@ export class PlannerAgent {
   }
 
   // ── 私有方法 ──────────────────────────────────────────────
+
+  /**
+   * Compose the full system prompt: base prompt (agent+skills) + tool schemas + format reminder.
+   * The tool schema section tells the LLM exactly which tools are available and their parameters.
+   */
+  private _composeSystemPrompt(basePrompt: string, tools: FunctionCallingSchema[]): string {
+    const toolSection = tools.map((t) => {
+      const fn = t.function;
+      const params = Object.entries(fn.parameters.properties)
+        .map(([k, v]) => `  - ${k} (${v.type}): ${v.description}`)
+        .join("\n");
+      const required = fn.parameters.required.length
+        ? `\n  Required: ${fn.parameters.required.join(", ")}`
+        : "";
+      return `### ${fn.name}\n${fn.description}\nParameters:\n${params}${required}`;
+    }).join("\n\n");
+
+    return [
+      basePrompt,
+      "",
+      "=== AVAILABLE TOOLS ===",
+      `You have access to the following ${tools.length} tool(s). Only use these tools:`,
+      "",
+      toolSection,
+    ].join("\n");
+  }
 
   private _parseToolCall(text: string): { name: string; params: Record<string, unknown> } | null {
     const re = TOOL_CALL_REGEX_SRC;

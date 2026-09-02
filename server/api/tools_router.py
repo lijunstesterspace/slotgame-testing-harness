@@ -3,13 +3,21 @@ import asyncio
 import os
 import re
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from server.infra.security import require_user
 from server.main import shared  # type: ignore # will be defined below
 
 router = APIRouter(prefix="/api/tools", tags=["Tools"])
+
+# ── Scenario → required plugins mapping (mirrors frontend intentRouter.ts) ──
+SCENARIO_PLUGINS: dict[str, list[str]] = {
+    "testdata_generation": ["testdata_parser", "testdata_generator", "zip_packager"],
+    "game_verification": ["testdata_verifier", "log_diagnoser"],
+    "log_diagnosis": ["log_diagnoser"],
+    "easyhelp_checking": ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
+}
 
 
 class ExecuteReq(BaseModel):
@@ -28,10 +36,22 @@ class ScanTestdataReq(BaseModel):
 
 
 @router.get("/list")
-async def list_tools(user=Depends(require_user())):
+async def list_tools(
+    scenario_id: str | None = Query(None, description="Filter tools by scenario's requiredPlugins"),
+    user=Depends(require_user()),
+):
     registry = shared.tool_registry
-    return {"tools": [i.model_dump() for i in registry.list_info()],
-            "function_calling_schema": registry.as_function_calling_schema()}
+    all_tools = registry.list_info()
+    all_schema = registry.as_function_calling_schema()
+
+    # Filter by scenario if specified
+    if scenario_id and scenario_id in SCENARIO_PLUGINS:
+        allowed = set(SCENARIO_PLUGINS[scenario_id])
+        all_tools = [t for t in all_tools if t.name in allowed]
+        all_schema = [s for s in all_schema if s["function"]["name"] in allowed]
+
+    return {"tools": [i.model_dump() for i in all_tools],
+            "function_calling_schema": all_schema}
 
 
 @router.post("/execute")

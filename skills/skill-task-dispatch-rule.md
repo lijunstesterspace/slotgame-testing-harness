@@ -16,6 +16,12 @@ SLOT测试任务封装、派发、格式约束规则，保障AI输出格式稳�
 1. `game_verifier` → Selenium 真实环境执行验证
 2. `log_diagnoser` → 诊断结果根因分析
 
+### Stage 3（Helpfile转换分析）
+必须按顺序调用工具：
+1. `html_to_text_converter` → 批量转换 HTML 帮助文件为 TXT
+2. `diff_comparator` → 差异比较 + 关键词高亮 + Excel 统计
+3. `helpfile_analyzer` → 调用本地 AI 模型生成智能分析报告
+
 ## 3. 工具调用格式强制约束
 
 **唯一合法格式（必须严格遵守）：**

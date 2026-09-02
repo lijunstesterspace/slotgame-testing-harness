@@ -13,6 +13,9 @@
   - `zip_packager_tool.py` - ZIP打包插件
   - `game_verifier_tool.py` - 游戏验证插件
   - `log_diagnoser_tool.py` - 日志诊断插件
+  - `html_to_text_converter_tool.py` - HTML帮助文件转文本插件
+  - `diff_comparator_tool.py` - 差异比较与关键词高亮插件
+  - `helpfile_analyzer_tool.py` - AI智能分析报告插件（调用本地Ollama）
 
 ## 新增插件方式
 

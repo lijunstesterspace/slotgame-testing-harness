@@ -37,6 +37,17 @@ export const SCENARIOS: TestScenario[] = [
     requiredPlugins: ["log_diagnoser"],
     icon: "bug",
   },
+  {
+    id: "helpfile_conversion",
+    label: "Helpfile Conversion & Analysis",
+    description: "Batch convert HTML help files to text, perform diff comparison with keyword highlighting, and generate AI-powered analysis report",
+    keywords: ["helpfile", "help", "conversion", "convert", "diff", "keyword", "帮助文件", "转换", "差异", "关键词"],
+    agentFile: "helpfile_conversion_agent.md",
+    skills: ["skill-helpfile-conversion.md", "skill-helpfile-plugin-contract.md"],
+    pipelineId: "helpfile-conversion-pipeline",
+    requiredPlugins: ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
+    icon: "file-text",
+  },
 ];
 
 // ── Intent Router ────────────────────────────────────────────────
@@ -124,6 +135,25 @@ export function getScenarioSystemPrompt(scenarioId: string): string {
       "Requirements:",
       "- Analyze each failed verification case.",
       "- Attribute root cause to game server, client UI, or test data.",
+    ].join("\n"),
+
+    helpfile_conversion: [
+      "You are the Helpfile Conversion & Analysis Agent for Help Files QA Automation.",
+      "",
+      "Your task: Batch convert HTML help files to text, compare versions, and generate AI analysis.",
+      "Call HARNESS-provided tools in order:",
+      "  1) html_to_text_converter - Convert HTML files to clean plain text",
+      "  2) diff_comparator - Compare files, highlight keywords, generate Excel report",
+      "  3) helpfile_analyzer - Invoke local AI model to generate intelligent analysis report",
+      "",
+      "Tool call format: Use XML tags tool_call with name and params.",
+      "After task completion, output: task_complete",
+      "",
+      "Requirements:",
+      "- Always call tools in the order: converter → comparator → analyzer.",
+      "- Pass the converted file list from step 1 to step 2 and step 3.",
+      "- Pass comparison results from step 2 to step 3 for richer AI analysis.",
+      "- The helpfile_analyzer tool invokes a LOCAL AI model (Ollama) for intelligent reporting.",
     ].join("\n"),
   };
 

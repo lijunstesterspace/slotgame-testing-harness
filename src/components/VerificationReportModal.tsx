@@ -62,7 +62,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
             </div>
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                Real Game Environment Verification & Log/Vision Diagnostic Report
+                TestData Verification & Log/Vision Diagnostic Report
               </h3>
               <p className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
                 <Globe className="w-3.5 h-3.5 text-cyan-400" />

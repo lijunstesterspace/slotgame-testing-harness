@@ -53,7 +53,7 @@ export const PIPELINES: PipelineDef[] = [
   // ─── Game Verification Pipeline ───
   {
     id: "game-verify-pipeline",
-    name: "Game Environment Verification",
+    name: "TestData Verification",
     description: "Send testdata to real game → Verify payout consistency",
     stages: [
       // Stage 0: Verify

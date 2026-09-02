@@ -29,7 +29,7 @@ export const SCENARIOS: TestScenario[] = [
   },
   {
     id: "game_verification",
-    label: "Game Environment Verification",
+    label: "TestData Verification",
     description: "Send generated testdata to real game environment, verify seed acceptance and payout consistency",
     keywords: ["verify", "game", "spin", "游戏", "真实环境"],
     agentFile: "testdata_verifier_agent.md",

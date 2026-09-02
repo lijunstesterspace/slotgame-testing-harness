@@ -25,11 +25,31 @@ interface AuthUser { id: string; username: string; role: string; isAdmin: boolea
 const AuthContext = createContext<{ user: AuthUser | null; refresh: () => Promise<void> }>({ user: null, refresh: async () => {} });
 const useAuth = () => useContext(AuthContext);
 
-const STAGE1_TASKS: TaskItem[] = [
-  { id: 't1-1', stage: 1, title: 'Intent Analysis', description: 'Parse natural language requirement and game constraints', status: 'pending' },
-  { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
-  { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
-];
+const STAGE1_TASKS: Record<string, TaskItem[]> = {
+  testdata_generation: [
+    { id: 't1-1', stage: 1, title: 'Intent Analysis', description: 'Parse natural language requirement and game constraints', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
+  ],
+  game_verification: [
+    { id: 't1-1', stage: 1, title: 'Seed Validation', description: 'Verify all generated test seeds are accepted by game server', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Payout Consistency', description: 'Verify base game and feature payouts match expected values', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'RTP Verification', description: 'Verify overall RTP matches theoretical value', status: 'pending' },
+  ],
+  log_diagnosis: [
+    { id: 't1-1', stage: 1, title: 'Log Collection', description: 'Collect and parse verification failure logs', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Screenshot Analysis', description: 'Compare actual vs expected game screenshots', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'Root Cause Attribution', description: 'Attribute failures to game server, client UI, or test data', status: 'pending' },
+  ],
+  easyhelp_checking: [
+    { id: 't1-1', stage: 1, title: 'HTML to Text Conversion', description: 'Batch convert HTML help files to clean plain text', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Version Diff Comparison', description: 'Compare help file versions and highlight keyword differences', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'AI Analysis Report', description: 'Generate AI-powered analysis report with quality issues', status: 'pending' },
+  ],
+};
+
+// Scenarios that require real game environment verification (Stage 2)
+const NEEDS_VERIFICATION_SCENARIOS = new Set(['testdata_generation', 'game_verification']);
 
 // ── Scenario-specific Test Plan Items ──────────────────────────────────
 const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; description: string; selected: boolean }>> = {
@@ -114,7 +134,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [promptIntent, setPromptIntent] = useState("");
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>(1);
   const [workflowState, setWorkflowState] = useState<WorkflowState>("READY");
-  const [tasks, setTasks] = useState<TaskItem[]>(STAGE1_TASKS);
+  const [tasks, setTasks] = useState<TaskItem[]>(STAGE1_TASKS["testdata_generation"] ?? []);
   const [logs, setLogs] = useState<ToolCallLog[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -382,7 +402,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const handleReset = () => {
     setWorkflowStage(1);
     setWorkflowState("READY");
-    setTasks(STAGE1_TASKS);
+    setTasks((STAGE1_TASKS["testdata_generation"] ?? []).map(t => ({ ...t })));
     setLogs([]);
     setTestRecords(INITIAL_TEST_RECORDS);
     setVerificationReport(null);
@@ -415,7 +435,13 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const selectedModelLabel = MODEL_OPTIONS.find((m) => m.value === selectedModel)?.label ?? selectedModel;
 
+  // Sync task list when scenario changes
+  useEffect(() => {
+    setTasks((STAGE1_TASKS[selectedScenarioId] ?? STAGE1_TASKS["testdata_generation"] ?? []).map(t => ({ ...t })));
+  }, [selectedScenarioId]);
+
   const showCenterFooter = workflowStage >= 3;
+  const showVerificationPanel = workflowState === 'REVIEW' && NEEDS_VERIFICATION_SCENARIOS.has(selectedScenarioId);
 
   const errorBanner = error ? (
     <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
@@ -662,8 +688,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         </div>
       </main>
 
-      {/* Verification Panel (floating bottom) */}
-      {workflowState === 'REVIEW' && (
+      {/* Verification Panel (floating bottom) — only for scenarios that need game verification */}
+      {showVerificationPanel && (
         <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-800 bg-slate-900/95 backdrop-blur">
           <VerificationPanel
             onStartVerification={handleStartVerification}

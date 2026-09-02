@@ -28,13 +28,12 @@ const useAuth = () => useContext(AuthContext);
 const STAGE1_TASKS: Record<string, TaskItem[]> = {
   testdata_generation: [
     { id: 't1-1', stage: 1, title: 'Intent Analysis', description: 'Parse natural language requirement and game constraints', status: 'pending' },
-    { id: 't1-2', stage: 1, title: 'Paytable Structuring', description: 'Parse Paytable URL into structured Symbol/Multiplier config', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'TestData Formatting', description: 'Format parsed paytable data into structured testdata XML', status: 'pending' },
     { id: 't1-3', stage: 1, title: 'Constraint Mapping', description: 'Map requirements to verification rules and boundary conditions', status: 'pending' },
   ],
   game_verification: [
-    { id: 't1-1', stage: 1, title: 'Seed Validation', description: 'Verify all generated test seeds are accepted by game server', status: 'pending' },
-    { id: 't1-2', stage: 1, title: 'Payout Consistency', description: 'Verify base game and feature payouts match expected values', status: 'pending' },
-    { id: 't1-3', stage: 1, title: 'RTP Verification', description: 'Verify overall RTP matches theoretical value', status: 'pending' },
+    { id: 't1-1', stage: 1, title: 'Format Validation', description: 'Validate testdata XML structure, seed format and file integrity', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Game Payout Verification', description: 'Upload testdata to real game and verify actual payout matches expected values', status: 'pending' },
   ],
   log_diagnosis: [
     { id: 't1-1', stage: 1, title: 'Log Collection', description: 'Collect and parse verification failure logs', status: 'pending' },
@@ -61,11 +60,8 @@ const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; desc
     { id: "plan-5", name: "Paytable Verification", description: "Verify all symbol payouts match paytable", selected: true },
   ],
   game_verification: [
-    { id: "plan-1", name: "Seed Acceptance Check", description: "Verify game server accepts all generated test seeds", selected: true },
-    { id: "plan-2", name: "Base Game Payout Consistency", description: "Verify base game payouts match expected values", selected: true },
-    { id: "plan-3", name: "Free Spins Payout Check", description: "Verify free spins feature payouts are correct", selected: true },
-    { id: "plan-4", name: "Bonus Game Verification", description: "Verify bonus game outcomes and payouts", selected: false },
-    { id: "plan-5", name: "RTP Consistency Check", description: "Verify overall RTP matches theoretical value", selected: true },
+    { id: "plan-1", name: "Format Validation", description: "Validate testdata XML structure, seed format and file integrity", selected: true },
+    { id: "plan-2", name: "Game Payout Verification", description: "Upload testdata to real game and verify actual payout matches expected values", selected: true },
   ],
   log_diagnosis: [
     { id: "plan-1", name: "Failed Case Log Analysis", description: "Analyze logs from failed verification cases", selected: true },

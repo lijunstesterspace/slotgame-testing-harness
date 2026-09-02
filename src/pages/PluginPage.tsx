@@ -30,22 +30,22 @@ const SKILL_ICONS: Record<string, React.ReactNode> = {
 const HARDCODED_SKILLS: SkillInfoDto[] = [
   {
     id: "skill-generator-plugin-contract",
-    name: "测试生成插件接口契约规范",
-    description: "定义 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。涵盖 testdata_parser、testdata_generator、zip_packager、game_verifier、log_diagnoser 五大工具的输入输出规范。",
+    name: "Test Generation Plugin Interface Contract",
+    description: "Defines the interface contract between the Plugin tool layer and the Agent layer, ensuring consistent parameter formats. Covers input/output specifications for five tools: testdata_parser, testdata_generator, zip_packager, game_verifier, and log_diagnoser.",
     file: "skill-generator-plugin-contract.md",
     size_kb: 2.8,
   },
   {
     id: "skill-sheet-data-clean",
-    name: "SLOT 测试表格数据清洗规则",
-    description: "SLOT 测试表格专属清洗、过滤、标准化技能，为数据生成 Agent 提供约束规范。包括 Module ID 提取、Batch & Index 清理、文件分类命名规则等。",
+    name: "SLOT Test Sheet Data Cleaning Rules",
+    description: "Dedicated cleaning, filtering, and standardization skills for SLOT test sheets, providing constraint specifications for the data generation Agent. Includes Module ID extraction, Batch & Index cleanup, file classification naming rules, etc.",
     file: "skill-sheet-data-clean.md",
     size_kb: 1.2,
   },
   {
     id: "skill-task-dispatch-rule",
-    name: "SLOT 测试任务封装派发规则",
-    description: "SLOT 测试任务封装、派发、格式约束规则，保障 AI 输出格式稳定。定义两阶段工作流（数据生成 + 验证诊断）及工具调用格式强制约束。",
+    name: "SLOT Test Task Packaging & Dispatch Rules",
+    description: "Rules for packaging, dispatching, and format constraints of SLOT test tasks, ensuring stable AI output formats. Defines a two-phase workflow (data generation + verification diagnosis) with mandatory tool invocation format constraints.",
     file: "skill-task-dispatch-rule.md",
     size_kb: 1.4,
   },

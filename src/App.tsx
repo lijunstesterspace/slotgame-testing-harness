@@ -4,15 +4,17 @@ import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
 import { TestDataPreview } from "./components/TestDataPreview";
 import { VerificationReportModal } from "./components/VerificationReportModal";
+import { VerificationPanel } from "./components/VerificationPanel";
 import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
 import { AgentPage } from "./pages/AgentPage";
 import { LoginPage } from "./pages/LoginPage";
-import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, LlmProviderConfig } from "./types";
+import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
 import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
+import { runRealGameVerification } from "./utils/verificationEngine";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { FunctionCallingSchema, TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
@@ -369,6 +371,38 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
   const handleOpenAgentPage = () => setPage("agent");
+
+  // ── Verification handler ──────────────────────────────────────
+  const handleStartVerification = async (config: VerificationConfig) => {
+    setWorkflowState("VERIFYING");
+    setError(null);
+    setLogs([]);
+    addLog({ type: "HARNESS_EVENT", content: `Starting verification against ${config.targetUrl}`, status: "running" });
+
+    try {
+      const report = await runRealGameVerification(
+        testRecords,
+        config,
+        (completed, result) => {
+          addLog({
+            type: "TOOL_RES",
+            toolName: "testdata_verifier",
+            content: `Spin ${completed}: ${result.status}`,
+            detail: result.errorMessage ?? "OK",
+            status: result.passed ? "success" : "error",
+          });
+        }
+      );
+      setVerificationReport(report);
+      setWorkflowState("VERIFIED");
+      addLog({ type: "HARNESS_EVENT", content: `Verification complete: ${report.passedCount}/${report.totalCases} passed (${report.passRate}%)`, status: "success" });
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      setWorkflowState("READY");
+      addLog({ type: "HARNESS_EVENT", content: `Verification failed: ${e?.message ?? e}`, status: "error" });
+    }
+  };
+
   const handleConfigChanged = async () => {
     // Reload config from the multi-model store
     const { loadStoredModels, getActiveModelConfig } = await import("./utils/llmGateway");
@@ -612,6 +646,18 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* ── Verification Panel (Stage 2) ── */}
+          {selectedScenarioId === 'game_verification' && workflowState !== 'GENERATING' && (
+            <VerificationPanel
+              onStartVerification={handleStartVerification}
+              isVerifying={workflowState === 'VERIFYING'}
+              loginName={loginName}
+              setLoginName={setLoginName}
+              folderPath={folderPath}
+              setFolderPath={setFolderPath}
+            />
           )}
 
           {/* ── Pipeline + Console ── */}

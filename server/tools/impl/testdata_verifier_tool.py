@@ -445,6 +445,43 @@ class TestdataVerifierTool(ToolPlugin):
         # Enable browser console log capture
         chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
+        # ─ Reuse user's Chrome profile to skip Okta login ─────────
+        # Use the default Chrome user data directory so that existing
+        # login sessions (Okta SSO, etc.) are preserved and the user
+        # does NOT need to log in again for each verification run.
+        import platform
+        if platform.system() == "Windows":
+            user_data_dir = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
+        elif platform.system() == "Darwin":
+            user_data_dir = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+        else:
+            user_data_dir = Path.home() / ".config" / "google-chrome"
+
+        if user_data_dir.exists():
+            # Use a separate profile copy to avoid "Chrome is already running" conflicts
+            # when the user's main Chrome is open. We copy to a temp directory.
+            import tempfile, shutil
+            temp_profile = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
+            # Copy only the Default profile (much faster than full copy)
+            default_profile = user_data_dir / "Default"
+            if default_profile.exists():
+                # Copy essential login-related files only (fast)
+                for item in ["Cookies", "Login Data", "Web Data", "Local State"]:
+                    src = user_data_dir / item
+                    if src.exists():
+                        shutil.copy2(src, temp_profile / item)
+                # Copy Default profile subfolder
+                shutil.copytree(default_profile, temp_profile / "Default", ignore=shutil.ignore_patterns(
+                    "Cache", "Code Cache", "GPUCache", "Service Worker", "DawnCache"
+                ))
+                chrome_options.add_argument(f"--user-data-dir={temp_profile}")
+                chrome_options.add_argument("--profile-directory=Default")
+                log.info("verifier.chrome_profile_reused", path=str(temp_profile))
+            else:
+                log.warning("verifier.chrome_profile_not_found", path=str(default_profile))
+        else:
+            log.warning("verifier.chrome_user_data_not_found", path=str(user_data_dir))
+
         # Auto-accept SSL certificates for staging/internal environments
         parsed_target = urlparse(target_url)
         target_host = parsed_target.hostname or ""
@@ -476,27 +513,28 @@ class TestdataVerifierTool(ToolPlugin):
 
         try:
             # ── Step 1: Navigate to admin TestData page ─────────────
-            # If Okta SSO is required, the page will redirect to Okta login.
-            # User must manually complete login (just like the original script
-            # waited for "Press Enter"). We poll until we reach the admin page.
+            # Chrome profile is reused, so Okta login session should already exist.
+            # We wait a shorter time for the page to load.
             log.info("verifier.navigate_admin", url=admin_url)
             driver.get(admin_url)
 
-            # Wait for admin page to load (handle Okta redirect)
+            # Wait for admin page to load (Okta redirect should be skipped with reused profile)
             admin_host = urlparse(admin_url).hostname or ""
-            max_wait = 120  # seconds
+            max_wait = 30  # seconds (reduced from 120s since login is reused)
             waited = 0
             while waited < max_wait:
                 current_host = urlparse(driver.current_url).hostname or ""
                 if current_host == admin_host:
                     break  # Successfully on admin page
-                time.sleep(2)
-                waited += 2
+                time.sleep(1)
+                waited += 1
             else:
+                # If still redirected, the login session may have expired
                 return ToolResult(
                     success=False,
-                    error=f"okta_login_timeout: User did not complete SSO login within {max_wait}s. "
-                          f"Current URL: {driver.current_url}",
+                    error=f"Admin page login failed: Still redirected after {max_wait}s. "
+                          f"Current URL: {driver.current_url}. "
+                          f"Please log in to the admin panel in your regular Chrome browser first.",
                 )
 
             # ── Step 2: Upload testdata ─────────────────────────────
@@ -663,6 +701,14 @@ class TestdataVerifierTool(ToolPlugin):
         finally:
             try:
                 driver.quit()
+            except Exception:
+                pass
+            # Clean up temp Chrome profile directory
+            try:
+                if 'temp_profile' in locals() and temp_profile.exists():
+                    import shutil
+                    shutil.rmtree(temp_profile, ignore_errors=True)
+                    log.info("verifier.chrome_profile_cleaned", path=str(temp_profile))
             except Exception:
                 pass
 

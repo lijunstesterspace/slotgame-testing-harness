@@ -22,125 +22,144 @@ export async function runRealGameVerification(
   const spinDelayMs = config.spinDelayMs ?? 500;
   const maxWaitMs = config.timeoutSeconds ? config.timeoutSeconds * 1000 : 120_000;
 
-  // Step A: Use testdata file from folder (skip testdata_generator)
-  // The user has already selected the folder and file in VerificationPanel
-  const testdataFile = config.testdataFilePath;
-  if (!testdataFile) {
+  // Step A: Use testdata file(s) from folder
+  // Support both single file (testdataFilePath) and multiple files (testdataFilePaths)
+  const testdataFiles = config.testdataFilePaths && config.testdataFilePaths.length > 0
+    ? config.testdataFilePaths
+    : config.testdataFilePath
+    ? [config.testdataFilePath]
+    : [];
+
+  if (testdataFiles.length === 0) {
     throw new Error("No testdata file selected. Please select a folder with .testdata files.");
   }
 
-  // Step B: launch testdata_verifier with the selected testdata file
-  const prepared = await harnessClient.executeToolAsync("testdata_verifier", {
-    testdata_file: testdataFile,
-    target_url: config.targetUrl,
-    spin_delay_sec: spinDelayMs / 1000,
-  });
-  const eid = prepared.execution_id;
+  // Step B: launch testdata_verifier for each file sequentially
+  let lastCall: any = null;
+  let totalSummary = { passed: 0, failed: 0, total: 0 };
+  const allParsedCases: any[] = [];
 
-  await new Promise<void>((resolve) => {
-    const unsub = harnessClient.streamExecution(eid, (evt, payload) => {
-      if (evt === "harness_event") {
-        const p = payload as any;
-        if (p.type === "TOOL_RES" && p.toolName === "testdata_verifier") {
-          try {
-            // Extract {passed, failed, total} from result_snippet
-          } catch {}
+  for (const testdataFile of testdataFiles) {
+    const prepared = await harnessClient.executeToolAsync("testdata_verifier", {
+      testdata_file: testdataFile,
+      target_url: config.targetUrl,
+      spin_delay_sec: spinDelayMs / 1000,
+    });
+    const eid = prepared.execution_id;
+
+    await new Promise<void>((resolve) => {
+      const unsub = harnessClient.streamExecution(eid, (evt, payload) => {
+        if (evt === "harness_event") {
+          const p = payload as any;
+          if (p.type === "TOOL_RES" && p.toolName === "testdata_verifier") {
+            try {
+              // Extract {passed, failed, total} from result_snippet
+            } catch {}
+          }
         }
-      }
-      if (evt === "done") {
+        if (evt === "done") {
+          resolve();
+          setTimeout(unsub, 100);
+        }
+      });
+      setTimeout(() => {
+        unsub();
         resolve();
-        setTimeout(unsub, 100);
-      }
+      }, maxWaitMs + 20_000);
     });
-    setTimeout(() => {
-      unsub();
-      resolve();
-    }, maxWaitMs + 20_000);
-  });
 
-  const detail = await harnessClient.getExecution(eid);
+    const detail = await harnessClient.getExecution(eid);
 
-  const lastCall = detail.tool_calls
-    .slice()
-    .reverse()
-    .find((tc) => tc.tool_name === "testdata_verifier");
+    lastCall = detail.tool_calls
+      .slice()
+      .reverse()
+      .find((tc) => tc.tool_name === "testdata_verifier");
 
-  // Extract verifier output
-  let summary: { passed: number; failed: number; total: number } | null = null;
-  let parsed_cases: any[] = [];
-  try {
-    const snippet = lastCall?.result_snippet ?? "";
-    if (snippet) {
-      const parsed = JSON.parse(snippet);
-      if (parsed && typeof parsed === "object") {
-        const inner = typeof parsed.output === "string" ? safeParse(parsed.output) : parsed.output ?? parsed;
-        if (inner && typeof inner === "object") {
-          summary = {
-            passed: Number(inner.passed ?? 0),
-            failed: Number(inner.failed ?? 0),
-            total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
-          };
-          if (Array.isArray(inner.cases)) parsed_cases = inner.cases;
+    // Extract verifier output
+    let summary: { passed: number; failed: number; total: number } | null = null;
+    let parsed_cases: any[] = [];
+    try {
+      const snippet = lastCall?.result_snippet ?? "";
+      if (snippet) {
+        const parsed = JSON.parse(snippet);
+        if (parsed && typeof parsed === "object") {
+          const inner = typeof parsed.output === "string" ? safeParse(parsed.output) : parsed.output ?? parsed;
+          if (inner && typeof inner === "object") {
+            summary = {
+              passed: Number(inner.passed ?? 0),
+              failed: Number(inner.failed ?? 0),
+              total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
+            };
+            if (Array.isArray(inner.cases)) parsed_cases = inner.cases;
+          }
         }
       }
+    } catch {}
+
+    // Accumulate totals
+    if (summary) {
+      totalSummary.passed += summary.passed;
+      totalSummary.failed += summary.failed;
+      totalSummary.total += summary.total;
     }
-  } catch {}
+    allParsedCases.push(...parsed_cases);
 
-  // Step C: map cases back into VerificationResult[]
-  parsed_cases.forEach((c, idx) => {
-    const passed = !!(c.passed ?? c.status === "passed");
-    const caseName = c.caseName ?? c.stage ?? `Spin #${c.spinIndex ?? idx + 1}`;
+    // Step C: map cases back into VerificationResult[]
+    parsed_cases.forEach((c, idx) => {
+      const passed = !!(c.passed ?? c.status === "passed");
+      const caseName = c.caseName ?? c.stage ?? `Spin #${c.spinIndex ?? idx + 1}`;
 
-    // Derive fine-grained status from backend issues / verdict
-    const status = deriveStatus(c, passed);
+      // Derive fine-grained status from backend issues / verdict
+      const status = deriveStatus(c, passed);
 
-    results.push({
-      recordId: c.recordId ?? c.caseId ?? `case-${idx + 1}`,
-      caseName,
-      passed,
-      status,
-      httpStatus: c.httpStatus ?? (passed ? 200 : 0),
-      responseTimeMs: c.durationMs ?? c.responseTimeMs ?? 0,
-      serverPayout: c.actualWin,
-      batchIndexString: `batch=${c.expectedBatch ?? c.batch ?? "?"}, index=${c.expectedIndex ?? c.index ?? "?"}`,
-      responseBodySnippet: c.actualStage ? `stage=${c.actualStage}` : undefined,
-      errorMessage: c.issues?.join("; ") ?? c.error ?? undefined,
-      screenshotB64: c.screenshot_b64 ?? undefined,
-      isBonus: c.isBonus ?? false,
-      actualBatch: c.actualBatch ?? null,
-      actualIndex: c.actualIndex ?? null,
-      actualStage: c.actualStage ?? undefined,
-      expectedBatch: c.expectedBatch ?? c.batch ?? undefined,
-      expectedIndex: c.expectedIndex ?? c.index ?? undefined,
+      results.push({
+        recordId: c.recordId ?? c.caseId ?? `case-${idx + 1}`,
+        caseName,
+        passed,
+        status,
+        httpStatus: c.httpStatus ?? (passed ? 200 : 0),
+        responseTimeMs: c.durationMs ?? c.responseTimeMs ?? 0,
+        serverPayout: c.actualWin,
+        batchIndexString: `batch=${c.expectedBatch ?? c.batch ?? "?"}, index=${c.expectedIndex ?? c.index ?? "?"}`,
+        responseBodySnippet: c.actualStage ? `stage=${c.actualStage}` : undefined,
+        errorMessage: c.issues?.join("; ") ?? c.error ?? undefined,
+        screenshotB64: c.screenshot_b64 ?? undefined,
+        isBonus: c.isBonus ?? false,
+        actualBatch: c.actualBatch ?? null,
+        actualIndex: c.actualIndex ?? null,
+        actualStage: c.actualStage ?? undefined,
+        expectedBatch: c.expectedBatch ?? c.batch ?? undefined,
+        expectedIndex: c.expectedIndex ?? c.index ?? undefined,
+      });
+      onProgress?.(results.length, results[results.length - 1]);
     });
-    onProgress?.(results.length, results[results.length - 1]);
-  });
+  } // End for loop over testdataFiles
 
   // Fallback: SSE did not parse cases
-  if (results.length === 0 && summary) {
-    const passed = summary.failed === 0;
+  if (results.length === 0 && totalSummary.total > 0) {
+    const passed = totalSummary.failed === 0;
     results.push({
       recordId: "aggregate",
-      caseName: `Aggregated ${summary.total} cases`,
+      caseName: `Aggregated ${totalSummary.total} cases`,
       passed,
       status: passed ? "PASSED" : "ERROR",
       httpStatus: passed ? 200 : lastCall?.error_message?.includes("400") ? 400 : 0,
       responseTimeMs: Date.now() - startTime,
       batchIndexString: "Aggregated",
-      errorMessage: passed ? undefined : lastCall?.error_message ?? `${summary.failed}/${summary.total} cases failed`,
+      errorMessage: passed ? undefined : lastCall?.error_message ?? `${totalSummary.failed}/${totalSummary.total} cases failed`,
     });
     onProgress?.(1, results[0]);
   }
 
   const failedCount = results.filter((r) => !r.passed).length;
   const passedCount = results.filter((r) => r.passed).length;
-  const totalCases = summary?.total ?? results.length;
+  const totalCases = totalSummary.total ?? results.length;
 
   // Step D: AI-enhanced diagnosis for failed cases
   let aiDiagnosis: AIDiagnosisResult | undefined;
   if (failedCount > 0) {
     try {
-      aiDiagnosis = await runAIDiagnosis(results, parsed_cases);
+      aiDiagnosis = await runAIDiagnosis(results, allParsedCases);
     } catch (e) {
       console.warn("[verificationEngine] AI diagnosis failed, using rule-based fallback", e);
       aiDiagnosis = await runRuleBasedDiagnosis(results);

@@ -143,7 +143,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [manualFolderPath, setManualFolderPath] = useState<string>("");
   const [scanningFolder, setScanningFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
-  const [selectedTestdataFile, setSelectedTestdataFile] = useState<TestdataFileInfo | null>(null);
+  const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
@@ -276,11 +276,13 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
     // For game_verification, call verification directly
     if (selectedScenarioId === 'game_verification') {
-      if (!selectedTestdataFile) {
-        setError("Please select a testdata file");
+      if (selectedTestdataFiles.length === 0) {
+        setError("Please select at least one testdata file");
         return;
       }
       setShowPreview(false);
+      
+      // Pass all selected files to verification engine
       await handleStartVerification({
         targetUrl: sheetUrl,
         spinDelayMs: 3000,
@@ -288,7 +290,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         autoRetryServerError: true,
         loginName,
         folderPath,
-        testdataFilePath: selectedTestdataFile.path,
+        testdataFilePaths: selectedTestdataFiles.map(f => f.path),
       });
       return;
     }
@@ -409,7 +411,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const folderName = relativePath.split('/')[0];
       setFolderPath(folderName);
       setTestdataFiles([]);
-      setSelectedTestdataFile(null);
+      setSelectedTestdataFiles([]);
       // Show instruction to paste full path
       setError(`Folder "${folderName}" selected. Please paste the full path in the input box (e.g., C:\\Users\\...\\${folderName}) and click Scan.`);
     }
@@ -463,7 +465,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         const data = await res.json();
         console.log('[Scan] Response data:', data);
         setTestdataFiles(data.files || []);
-        setSelectedTestdataFile(data.files?.length === 1 ? data.files[0] : null);
+        // Auto-select all files by default
+        setSelectedTestdataFiles(data.files || []);
         if (data.files?.length === 0) {
           setError(`No .testdata files found in: ${pathToScan}. Make sure the folder contains .testdata XML files.`);
         } else {
@@ -474,13 +477,13 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         console.error('[Scan] Error:', err);
         setError(`Scan failed: ${err.detail || 'Folder not found or inaccessible'}`);
         setTestdataFiles([]);
-        setSelectedTestdataFile(null);
+        setSelectedTestdataFiles([]);
       }
     } catch (e: any) {
       console.error('[Scan] Exception:', e);
       setError(`Network error: ${e?.message ?? 'Unknown error'}. Is the backend server running?`);
       setTestdataFiles([]);
-      setSelectedTestdataFile(null);
+      setSelectedTestdataFiles([]);
     } finally {
       setScanningFolder(false);
     }
@@ -768,32 +771,57 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               {/* Testdata file list for game_verification */}
               {selectedScenarioId === 'game_verification' && (
                 <div className="mb-3">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">
-                    Select testdata file ({testdataFiles.length} found):
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      Select testdata file(s) ({selectedTestdataFiles.length}/{testdataFiles.length} selected):
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedTestdataFiles.length === testdataFiles.length) {
+                          // Deselect all
+                          setSelectedTestdataFiles([]);
+                        } else {
+                          // Select all
+                          setSelectedTestdataFiles([...testdataFiles]);
+                        }
+                      }}
+                      className="text-[10px] text-cyan-400 hover:text-cyan-300 font-medium"
+                    >
+                      {selectedTestdataFiles.length === testdataFiles.length ? 'Deselect All' : 'Select All'}
+                    </button>
                   </div>
                   {testdataFiles.length > 0 ? (
-                    <div className="space-y-1 max-h-[150px] overflow-y-auto">
-                      {testdataFiles.map((f) => (
-                        <label
-                          key={f.path}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-xs ${
-                            selectedTestdataFile?.path === f.path
-                              ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
-                              : 'bg-slate-950/50 border-slate-700 hover:border-slate-600 text-slate-300'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="testdata-file"
-                            checked={selectedTestdataFile?.path === f.path}
-                            onChange={() => setSelectedTestdataFile(f)}
-                            className="accent-amber-400"
-                          />
-                          <FileText className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                          <span className="font-mono truncate flex-1">{f.name}</span>
-                          <span className="text-[10px] text-slate-500">{f.size_kb} KB</span>
-                        </label>
-                      ))}
+                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                      {testdataFiles.map((f) => {
+                        const isSelected = selectedTestdataFiles.some(sf => sf.path === f.path);
+                        return (
+                          <label
+                            key={f.path}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-xs ${
+                              isSelected
+                                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                                : 'bg-slate-950/50 border-slate-700 hover:border-slate-600 text-slate-300'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (isSelected) {
+                                  setSelectedTestdataFiles(selectedTestdataFiles.filter(sf => sf.path !== f.path));
+                                } else {
+                                  setSelectedTestdataFiles([...selectedTestdataFiles, f]);
+                                }
+                              }}
+                              className="accent-amber-400"
+                            />
+                            <FileText className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                            <span className="font-mono truncate flex-1">{f.name}</span>
+                            <span className="text-[10px] text-slate-500">{f.size_kb} KB</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="text-xs text-slate-500 px-3 py-2 text-center">

@@ -61,6 +61,7 @@ export interface VerificationConfig {
   timeoutSeconds?: number;
   folderPath?: string;
   testdataFilePath?: string;
+  testdataFilePaths?: string[];  // Support multiple testdata files
 }
 
 export interface TestdataFileInfo {

@@ -11,6 +11,7 @@ import skill_sheet_clean from "../../skills/skill-sheet-data-clean.md?raw";
 import skill_generator_contract from "../../skills/skill-generator-plugin-contract.md?raw";
 import skill_helpfile_conversion from "../../skills/skill-helpfile-conversion.md?raw";
 import skill_helpfile_plugin from "../../skills/skill-helpfile-plugin-contract.md?raw";
+import skill_verification_protocol from "../../skills/skill-verification-protocol.md?raw";
 
 // ─ Test Scenario Registry ─────────────────────────────────────────────
 // Add a new scenario by appending an entry to this array; HARNESS auto-discovers it
@@ -33,7 +34,7 @@ export const SCENARIOS: TestScenario[] = [
     description: "Send generated testdata to real game environment, verify seed acceptance and payout consistency",
     keywords: ["verify testdata", "verify", "verification", "game", "spin", "游戏", "真实环境", "验证"],
     agentFile: "testdata_verifier_agent.md",
-    skills: [],
+    skills: ["skill-verification-protocol.md"],
     pipelineId: "game-verify-pipeline",
     requiredPlugins: ["testdata_verifier", "log_diagnoser"],
     icon: "shield",
@@ -76,6 +77,7 @@ const SKILL_CONTENT: Record<string, string> = {
   "skill-generator-plugin-contract.md": skill_generator_contract,
   "skill-helpfile-conversion.md": skill_helpfile_conversion,
   "skill-helpfile-plugin-contract.md": skill_helpfile_plugin,
+  "skill-verification-protocol.md": skill_verification_protocol,
 };
 
 // ── Intent Router ────────────────────────────────────────────────

@@ -395,24 +395,42 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
-  // ── Folder selection (general-purpose, used by multiple scenarios) ─
+  // ── Folder selection (general-purpose, used by multiple scenarios) 
   const handleFolderSelect = () => folderInputRef.current?.click();
 
   const handleFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = (e.target.files as any)?.[0];
     if (!file) return;
     
-    // Try to extract absolute path from relative path structure
-    // In browsers, file.path is not available; we use webkitRelativePath
+    // In browsers, we can't get the absolute path from file picker
+    // We use webkitRelativePath to show the folder structure
     const relativePath = file.webkitRelativePath || '';
     if (relativePath) {
-      // Extract folder name from first segment of relative path
       const folderName = relativePath.split('/')[0];
-      // Store just the folder name - user will need to provide full path manually
       setFolderPath(folderName);
       setTestdataFiles([]);
       setSelectedTestdataFile(null);
-      setError(`Folder "${folderName}" selected. Please paste the full absolute path below.`);
+      // Show instruction to paste full path
+      setError(`Folder "${folderName}" selected. Please paste the full path in the input box (e.g., C:\\Users\\...\\${folderName}) and click Scan.`);
+    }
+    e.target.value = '';
+  };
+
+  // Browse for a .testdata file directly to extract folder path
+  const testdataFileInputRef = useRef<HTMLInputElement>(null);
+  const handleTestdataFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = (e.target.files as any)?.[0];
+    if (!file) return;
+    
+    const relativePath = file.webkitRelativePath || '';
+    if (relativePath) {
+      // Extract folder path from relative path (remove filename)
+      const parts = relativePath.split('/');
+      parts.pop(); // Remove filename
+      const folderRelativePath = parts.join('/');
+      
+      // Show instruction with the relative path structure
+      setError(`Selected file: ${file.name}. Folder structure: ${folderRelativePath}. Please paste the full absolute path in the input box (e.g., C:\\Users\\...\\${folderRelativePath}) and click Scan.`);
     }
     e.target.value = '';
   };
@@ -425,30 +443,42 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setError("Please enter a folder path");
       return;
     }
-    setFolderPath(manualFolderPath.trim());
+    const pathToScan = manualFolderPath.trim();
+    console.log('[Scan] Requesting scan for path:', pathToScan);
+    setFolderPath(pathToScan);
     setScanningFolder(true);
     setError(null);
     try {
+      // Use harnessClient to include auth token
       const res = await fetch('/api/tools/scan-testdata', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: manualFolderPath.trim() }),
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${window.sessionStorage.getItem('harness_token') ?? ''}`,
+        },
+        body: JSON.stringify({ folder_path: pathToScan }),
       });
+      console.log('[Scan] Response status:', res.status);
       if (res.ok) {
         const data = await res.json();
+        console.log('[Scan] Response data:', data);
         setTestdataFiles(data.files || []);
         setSelectedTestdataFile(data.files?.length === 1 ? data.files[0] : null);
         if (data.files?.length === 0) {
-          setError("No .testdata files found in this folder");
+          setError(`No .testdata files found in: ${pathToScan}. Make sure the folder contains .testdata XML files.`);
+        } else {
+          setError(null);
         }
       } else {
         const err = await res.json().catch(() => ({ detail: 'Scan failed' }));
-        setError(err.detail || 'Folder not found or scan failed');
+        console.error('[Scan] Error:', err);
+        setError(`Scan failed: ${err.detail || 'Folder not found or inaccessible'}`);
         setTestdataFiles([]);
         setSelectedTestdataFile(null);
       }
     } catch (e: any) {
-      setError(e?.message ?? 'Network error');
+      console.error('[Scan] Exception:', e);
+      setError(`Network error: ${e?.message ?? 'Unknown error'}. Is the backend server running?`);
       setTestdataFiles([]);
       setSelectedTestdataFile(null);
     } finally {
@@ -594,7 +624,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               {/* Bottom row: Folder button + Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {/* Folder selection button */}
+                  {/* Folder selection button - opens folder picker for reference */}
                   <button
                     type="button"
                     onClick={handleFolderSelect}
@@ -603,14 +633,14 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
                         : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
                     }`}
-                    title="Select a folder with test data files"
+                    title="Select folder to see structure (then paste full path below)"
                   >
                     {scanningFolder ? (
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <FolderOpen className="w-3.5 h-3.5" />
                     )}
-                    <span className="max-w-[120px] truncate">{folderPath ? folderPath.split('\\').pop() || folderPath.split('/').pop() : 'Add folder'}</span>
+                    <span className="max-w-[120px] truncate">{folderPath || 'Browse'}</span>
                   </button>
                   <input
                     ref={folderInputRef}
@@ -631,19 +661,19 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         handleScanFolder();
                       }
                     }}
-                    placeholder="Paste absolute folder path..."
-                    className="flex-1 min-w-[200px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
+                    placeholder="Paste full path, e.g., C:\\Users\\...\\features"
+                    className="flex-1 min-w-[250px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
                   />
                   <button
                     type="button"
                     onClick={handleScanFolder}
                     disabled={scanningFolder || !manualFolderPath.trim()}
-                    className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
+                    className={`flex items-center gap-1.5 px-4 h-10 rounded-xl border text-xs font-medium transition-all ${
                       scanningFolder
                         ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
                         : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:border-emerald-500/70'
                     }`}
-                    title="Scan folder for testdata files"
+                    title="Scan folder for .testdata files"
                   >
                     {scanningFolder ? (
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />

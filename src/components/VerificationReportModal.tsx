@@ -35,6 +35,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'PASSED' | 'FAILED'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [aiExpanded, setAiExpanded] = useState(true);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const filteredResults = report.results.filter((res) => {
     const matchesSearch = 
@@ -301,8 +302,16 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                               <CheckCircle2 className="w-3.5 h-3.5" /> PASSED
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700 text-rose-300 text-[10px] flex items-center justify-center gap-1">
-                              <FileSearch className="w-3.5 h-3.5" /> Inspect Proof
+                            <span className={`px-2 py-0.5 rounded border text-[10px] flex items-center justify-center gap-1 ${
+                              res.status === 'TIMEOUT' ? 'bg-amber-950/80 border-amber-700 text-amber-300' :
+                              res.status === 'NETWORK_ERROR' ? 'bg-rose-950/80 border-rose-700 text-rose-300' :
+                              res.status === 'SEED_REJECTED' ? 'bg-rose-950/80 border-rose-700 text-rose-300' :
+                              res.status === 'SEED_MISMATCH' ? 'bg-orange-950/80 border-orange-700 text-orange-300' :
+                              res.status === 'STAGE_MISMATCH' ? 'bg-orange-950/80 border-orange-700 text-orange-300' :
+                              res.status === 'PAYOUT_MISMATCH' ? 'bg-amber-950/80 border-amber-700 text-amber-300' :
+                              'bg-rose-950/80 border-rose-700 text-rose-300'
+                            }`}>
+                              <FileSearch className="w-3.5 h-3.5" /> {res.status}
                             </span>
                           )}
                         </td>
@@ -361,6 +370,22 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                                 </div>
                               </div>
 
+                              {/* Game Screenshot */}
+                              {res.screenshotB64 && (
+                                <div className="flex flex-col gap-1.5">
+                                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                                    <Camera className="w-3.5 h-3.5 text-cyan-400" />
+                                    Game Screenshot
+                                  </span>
+                                  <img
+                                    src={`data:image/png;base64,${res.screenshotB64}`}
+                                    alt={`Spin ${res.recordId} screenshot`}
+                                    className="max-w-full max-h-48 rounded-lg border border-slate-700 cursor-pointer hover:opacity-90 transition object-contain"
+                                    onClick={() => setLightboxSrc(`data:image/png;base64,${res.screenshotB64}`)}
+                                  />
+                                </div>
+                              )}
+
                             </div>
                           </td>
                         </tr>
@@ -391,6 +416,20 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
             Close Diagnostic Report
           </button>
         </div>
+
+        {/* Screenshot Lightbox */}
+        {lightboxSrc && (
+          <div
+            className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-8 cursor-pointer"
+            onClick={() => setLightboxSrc(null)}
+          >
+            <img
+              src={lightboxSrc}
+              alt="Full size screenshot"
+              className="max-w-full max-h-full rounded-lg border border-slate-600 shadow-2xl"
+            />
+          </div>
+        )}
 
       </div>
     </div>

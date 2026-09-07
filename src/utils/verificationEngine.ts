@@ -3,6 +3,7 @@ import type {
   VerificationConfig,
   VerificationReport,
   VerificationResult,
+  VerificationStatus,
   AIDiagnosisResult,
   AIDiagnosis,
 } from "../types";
@@ -89,17 +90,28 @@ export async function runRealGameVerification(
   parsed_cases.forEach((c, idx) => {
     const passed = !!(c.passed ?? c.status === "passed");
     const caseName = c.caseName ?? c.stage ?? `Spin #${c.spinIndex ?? idx + 1}`;
+
+    // Derive fine-grained status from backend issues / verdict
+    const status = deriveStatus(c, passed);
+
     results.push({
       recordId: c.recordId ?? c.caseId ?? `case-${idx + 1}`,
       caseName,
       passed,
-      status: passed ? "PASSED" : "DISCREPANCY",
+      status,
       httpStatus: c.httpStatus ?? (passed ? 200 : 0),
       responseTimeMs: c.durationMs ?? c.responseTimeMs ?? 0,
       serverPayout: c.actualWin,
       batchIndexString: `batch=${c.expectedBatch ?? c.batch ?? "?"}, index=${c.expectedIndex ?? c.index ?? "?"}`,
       responseBodySnippet: c.actualStage ? `stage=${c.actualStage}` : undefined,
       errorMessage: c.issues?.join("; ") ?? c.error ?? undefined,
+      screenshotB64: c.screenshot_b64 ?? undefined,
+      isBonus: c.isBonus ?? false,
+      actualBatch: c.actualBatch ?? null,
+      actualIndex: c.actualIndex ?? null,
+      actualStage: c.actualStage ?? undefined,
+      expectedBatch: c.expectedBatch ?? c.batch ?? undefined,
+      expectedIndex: c.expectedIndex ?? c.index ?? undefined,
     });
     onProgress?.(results.length, results[results.length - 1]);
   });
@@ -303,6 +315,35 @@ async function runRuleBasedDiagnosis(
     failedDiagnoses: diagnoses,
     recommendations: diagnoses.map((d) => d.recommendation),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Derive fine-grained VerificationStatus from backend case data
+// ---------------------------------------------------------------------------
+function deriveStatus(c: any, passed: boolean): VerificationStatus {
+  if (passed) return "PASSED";
+
+  // Backend may already provide a verdict field
+  if (c.verdict) {
+    const v = String(c.verdict).toUpperCase();
+    const validStatuses: VerificationStatus[] = [
+      "SEED_MISMATCH", "STAGE_MISMATCH", "PAYOUT_MISMATCH",
+      "SEED_REJECTED", "TIMEOUT", "NETWORK_ERROR",
+    ];
+    if (validStatuses.includes(v as VerificationStatus)) {
+      return v as VerificationStatus;
+    }
+  }
+
+  // Infer from issues text
+  const issues: string = (c.issues ?? []).join(" ").toLowerCase();
+  if (issues.includes("timeout") || issues.includes("no game response")) return "TIMEOUT";
+  if (issues.includes("cors") || issues.includes("network") || issues.includes("http")) return "NETWORK_ERROR";
+  if (issues.includes("rejected") || issues.includes("invalid seed")) return "SEED_REJECTED";
+  if (issues.includes("stage mismatch") || issues.includes("stage")) return "STAGE_MISMATCH";
+  if (issues.includes("batch mismatch") || issues.includes("index mismatch")) return "SEED_MISMATCH";
+
+  return "DISCREPANCY";
 }
 
 function safeParse(s: string): any {

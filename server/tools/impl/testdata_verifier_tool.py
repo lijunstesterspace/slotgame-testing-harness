@@ -123,7 +123,9 @@ def _parse_testdata(filepath: Path) -> list[dict]:
 def _compare_record(expected: dict, actual: dict) -> dict:
     """Compare expected testdata record with actual game response.
 
-    Returns a dict with pass/fail details.
+    Returns a dict with pass/fail details and fine-grained verdict.
+    Verdict types (per skill-verification-protocol):
+      PASSED | SEED_MISMATCH | STAGE_MISMATCH | PAYOUT_MISMATCH | SEED_REJECTED
     """
     issues: list[str] = []
 
@@ -158,8 +160,19 @@ def _compare_record(expected: dict, actual: dict) -> dict:
 
     passed = batch_ok and index_ok
 
+    # Determine fine-grained verdict
+    if passed and stage_ok:
+        verdict = "PASSED"
+    elif not batch_ok or not index_ok:
+        verdict = "SEED_MISMATCH"
+    elif not stage_ok:
+        verdict = "STAGE_MISMATCH"
+    else:
+        verdict = "PASSED"
+
     return {
         "passed": passed,
+        "verdict": verdict,
         "actualBatch": actual_batch,
         "actualIndex": actual_index,
         "actualStage": actual_stage,
@@ -432,6 +445,14 @@ class TestdataVerifierTool(ToolPlugin):
         # Enable browser console log capture
         chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
+        # Auto-accept SSL certificates for staging/internal environments
+        parsed_target = urlparse(target_url)
+        target_host = parsed_target.hostname or ""
+        staging_keywords = ["installprogram.eu", "staging", "internal", "test", "dev"]
+        if any(kw in target_host.lower() for kw in staging_keywords):
+            chrome_options.add_argument("--ignore-certificate-errors")
+            log.info("verifier.ssl_auto_accept", host=target_host)
+
         driver = webdriver.Chrome(options=chrome_options)
         driver.maximize_window()
 
@@ -445,6 +466,13 @@ class TestdataVerifierTool(ToolPlugin):
 
         results: list[dict] = []
         artifacts: list[str] = []
+
+        # Consecutive failure tracking (per skill-verification-protocol Rule 5)
+        consecutive_network_errors = 0
+        consecutive_seed_rejections = 0
+        max_consecutive_network_errors = 3
+        max_consecutive_seed_rejections = 2
+        environment_aborted = False
 
         try:
             # ── Step 1: Navigate to admin TestData page ─────────────
@@ -491,6 +519,22 @@ class TestdataVerifierTool(ToolPlugin):
             passed_count = 0
 
             for i, rec in enumerate(records):
+                # Check if environment was aborted due to consecutive failures
+                if environment_aborted:
+                    result = {
+                        "passed": False,
+                        "verdict": "NETWORK_ERROR",
+                        "actualBatch": None,
+                        "actualIndex": None,
+                        "actualStage": "N/A",
+                        "actualWin": 0,
+                        "actualWager": 0,
+                        "issues": ["Verification aborted: environment unavailable due to consecutive failures"],
+                        "screenshot_b64": None,
+                    }
+                    results.append(result)
+                    continue
+
                 log.info("verifier.spin", spin=i + 1, total=total,
                          batch=rec["batch"], index=rec["index"])
 
@@ -515,9 +559,10 @@ class TestdataVerifierTool(ToolPlugin):
                     time.sleep(0.5)
 
                 if actual is None:
-                    # No response captured — mark as error
+                    # No response captured — mark as TIMEOUT
                     result = {
                         "passed": False,
+                        "verdict": "TIMEOUT",
                         "actualBatch": None,
                         "actualIndex": None,
                         "actualStage": "N/A",
@@ -526,9 +571,25 @@ class TestdataVerifierTool(ToolPlugin):
                         "issues": ["No game response captured within timeout"],
                         "screenshot_b64": None,
                     }
+                    consecutive_network_errors += 1
+                    consecutive_seed_rejections = 0
                 else:
                     result = _compare_record(rec, actual)
                     result["screenshot_b64"] = None
+
+                    # Check for seed rejection (server returned error in response)
+                    gd = actual.get("gameResponse", {})
+                    error_msg = gd.get("error", "") or gd.get("errorMessage", "")
+                    if error_msg and ("invalid" in error_msg.lower() or "reject" in error_msg.lower()):
+                        result["verdict"] = "SEED_REJECTED"
+                        result["passed"] = False
+                        result["issues"].append(f"Server rejected seed: {error_msg}")
+                        consecutive_seed_rejections += 1
+                        consecutive_network_errors = 0
+                    else:
+                        consecutive_seed_rejections = 0
+                        if result["passed"]:
+                            consecutive_network_errors = 0
 
                     # Screenshot for bonus or failed cases
                     need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
@@ -543,6 +604,23 @@ class TestdataVerifierTool(ToolPlugin):
                             artifacts.append(str(ss_path.resolve()))
                         except Exception:
                             pass
+
+                # Consecutive failure detection (per skill-verification-protocol Rule 5)
+                if consecutive_network_errors >= max_consecutive_network_errors:
+                    log.warning("verifier.env_unavailable",
+                                reason=f"{max_consecutive_network_errors} consecutive network errors")
+                    environment_aborted = True
+                    result["issues"].append(
+                        f"Environment marked UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts/network errors"
+                    )
+                elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
+                    log.warning("verifier.seed_rejection_abort",
+                                reason=f"{max_consecutive_seed_rejections} consecutive seed rejections")
+                    environment_aborted = True
+                    result["issues"].append(
+                        f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected. "
+                        "Check loginName/moduleID."
+                    )
 
                 if result["passed"]:
                     passed_count += 1

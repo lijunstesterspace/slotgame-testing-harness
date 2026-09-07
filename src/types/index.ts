@@ -70,10 +70,21 @@ export interface TestdataFileInfo {
   modified: number;
 }
 
+export type VerificationStatus =
+  | 'PASSED'
+  | 'SEED_MISMATCH'
+  | 'STAGE_MISMATCH'
+  | 'PAYOUT_MISMATCH'
+  | 'SEED_REJECTED'
+  | 'TIMEOUT'
+  | 'NETWORK_ERROR'
+  | 'DISCREPANCY'
+  | 'ERROR';
+
 export interface VerificationResult {
   recordId: string;
   caseName: string;
-  status: 'PASSED' | 'DISCREPANCY' | 'ERROR';
+  status: VerificationStatus;
   passed: boolean;
   httpStatus: number;
   responseTimeMs: number;
@@ -81,6 +92,16 @@ export interface VerificationResult {
   batchIndexString: string;
   responseBodySnippet?: string;
   errorMessage?: string;
+  /** Base64-encoded PNG screenshot captured after the spin */
+  screenshotB64?: string;
+  /** Whether this case triggered a bonus feature */
+  isBonus?: boolean;
+  /** Actual seed returned by the server */
+  actualBatch?: number | null;
+  actualIndex?: number | null;
+  actualStage?: string;
+  expectedBatch?: number;
+  expectedIndex?: number;
 }
 
 export interface VerificationReport {

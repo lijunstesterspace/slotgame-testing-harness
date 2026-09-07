@@ -188,6 +188,7 @@ def _generate_html_report(
     game_url: str,
     testdata_file: str,
     output_path: Path,
+    multi_file: bool = False,
 ) -> str:
     """Generate an HTML verification report with data comparison + screenshots."""
     total = len(results)
@@ -198,9 +199,34 @@ def _generate_html_report(
     status_color = "#10b981" if failed == 0 else ("#f59e0b" if pass_rate >= 80 else "#ef4444")
     status_text = "ALL PASSED" if failed == 0 else f"{passed}/{total} PASSED"
 
+    # Build per-file summary if multi-file
+    file_summaries: dict[str, dict] = {}
+    if multi_file:
+        for rec, res in zip(records, results):
+            sf = res.get("source_file", "unknown")
+            if sf not in file_summaries:
+                file_summaries[sf] = {"total": 0, "passed": 0, "failed": 0}
+            file_summaries[sf]["total"] += 1
+            if res["passed"]:
+                file_summaries[sf]["passed"] += 1
+            else:
+                file_summaries[sf]["failed"] += 1
+
     # Build case rows
     case_rows = ""
+    current_file = None
     for i, (rec, res) in enumerate(zip(records, results)):
+        # File separator header for multi-file mode
+        src_file = res.get("source_file", "")
+        if multi_file and src_file != current_file:
+            current_file = src_file
+            fs = file_summaries.get(src_file, {})
+            case_rows += f"""
+        <div class="file-separator">
+            <span class="file-separator-title">📄 {src_file}</span>
+            <span class="file-separator-stats">{fs.get('passed', 0)}/{fs.get('total', 0)} passed</span>
+        </div>"""
+
         badge_cls = "badge-pass" if res["passed"] else "badge-fail"
         badge_text = "PASS" if res["passed"] else "FAIL"
         issues_html = ""
@@ -314,6 +340,14 @@ def _generate_html_report(
         cursor: pointer; transition: transform 0.2s;
     }}
     .screenshot-img:hover {{ transform: scale(1.02); }}
+    .file-separator {{
+        background: linear-gradient(90deg, rgba(6,182,212,0.1), transparent);
+        border: 1px solid rgba(6,182,212,0.3); border-radius: 10px;
+        padding: 0.8rem 1.2rem; margin: 1.5rem 0 0.8rem;
+        display: flex; justify-content: space-between; align-items: center;
+    }}
+    .file-separator-title {{ font-weight: 700; font-size: 0.9rem; color: var(--cyan); }}
+    .file-separator-stats {{ font-size: 0.8rem; color: var(--text-muted); font-family: monospace; }}
     .footer {{
         text-align: center; margin-top: 2rem; padding-top: 1rem;
         border-top: 1px solid var(--border); font-size: 0.7rem; color: var(--text-muted);
@@ -326,7 +360,7 @@ def _generate_html_report(
         <h1>TestData Verification Report</h1>
         <div class="meta">
             <div>Game: {game_url[:80]}...</div>
-            <div>TestData: {Path(testdata_file).name} &nbsp;|&nbsp; Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}</div>
+            <div>TestData: {testdata_file} &nbsp;|&nbsp; Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}</div>
         </div>
     </header>
 
@@ -379,8 +413,10 @@ class TestdataVerifierTool(ToolPlugin):
                 "Returns HTML report with data comparison + screenshots for bonus/failed cases."
             ),
             inputSchema=ToolInputSchema(properties=[
-                ToolParameter(name="testdata_file", type="string", required=True,
-                              description="Absolute path to .testdata XML file."),
+                ToolParameter(name="testdata_file", type="string", required=False,
+                              description="Absolute path to a single .testdata XML file (backward compat)."),
+                ToolParameter(name="testdata_files", type="array", required=False,
+                              description="List of absolute paths to .testdata XML files for batch verification."),
                 ToolParameter(name="target_url", type="string", required=True,
                               description="Full game environment URL (must contain username & moduleId)."),
                 ToolParameter(name="spin_delay_sec", type="number", default=3.0,
@@ -400,16 +436,24 @@ class TestdataVerifierTool(ToolPlugin):
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
         from server.infra.logger import log
 
-        # ── Extract params ──────────────────────────────────────────
-        testdata_file = Path(params["testdata_file"])
-        if not testdata_file.exists():
-            return ToolResult(success=False, error=f"testdata_file_not_found:{testdata_file}")
+        # ── Extract params (support single file + batch) ──────────
+        testdata_files_list: list[Path] = []
+        if params.get("testdata_files"):
+            for fp in params["testdata_files"]:
+                p = Path(fp)
+                if not p.exists():
+                    return ToolResult(success=False, error=f"testdata_file_not_found:{p}")
+                testdata_files_list.append(p)
+        elif params.get("testdata_file"):
+            p = Path(params["testdata_file"])
+            if not p.exists():
+                return ToolResult(success=False, error=f"testdata_file_not_found:{p}")
+            testdata_files_list.append(p)
+        else:
+            return ToolResult(success=False, error="No testdata_file or testdata_files provided")
 
         target_url: str = params["target_url"]
         spin_delay: float = float(params.get("spin_delay_sec", 3.0))
@@ -423,33 +467,34 @@ class TestdataVerifierTool(ToolPlugin):
         )
         output.parent.mkdir(parents=True, exist_ok=True)
 
-        # ── Parse testdata ─────────────────────────────────────────
-        try:
-            records = _parse_testdata(testdata_file)
-        except Exception as e:
-            return ToolResult(success=False, error=f"testdata_parse_error:{e}")
+        # ── Parse ALL testdata files ───────────────────────────────
+        all_records_by_file: dict[str, list[dict]] = {}
+        for tf in testdata_files_list:
+            try:
+                records = _parse_testdata(tf)
+            except Exception as e:
+                return ToolResult(success=False, error=f"testdata_parse_error:{tf.name}:{e}")
+            if not records:
+                return ToolResult(success=False, error=f"testdata_file_contains_no_spins:{tf.name}")
+            all_records_by_file[str(tf)] = records
 
-        if not records:
-            return ToolResult(success=False, error="testdata_file_contains_no_spins")
+        total_spins = sum(len(r) for r in all_records_by_file.values())
+        log.info("verifier.batch_start", files=len(testdata_files_list), total_spins=total_spins)
 
         # ── Derive admin TestData URL from game URL ────────────────
         admin_url = _derive_admin_testdata_url(target_url)
 
-        # ── Setup Chrome with CDP interceptor ──────────────────────
+        # ── Setup Chrome with CDP interceptor (ONCE) ──────────────
         chrome_options = Options()
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option("useAutomationExtension", False)
-        # Enable browser console log capture
         chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
-        # ─ Reuse user's Chrome profile to skip Okta login ─────────
-        # Use the default Chrome user data directory so that existing
-        # login sessions (Okta SSO, etc.) are preserved and the user
-        # does NOT need to log in again for each verification run.
-        import platform
+        import platform, tempfile, shutil
+        temp_profile = None
         if platform.system() == "Windows":
             user_data_dir = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
         elif platform.system() == "Darwin":
@@ -458,53 +503,37 @@ class TestdataVerifierTool(ToolPlugin):
             user_data_dir = Path.home() / ".config" / "google-chrome"
 
         if user_data_dir.exists():
-            # Use a separate profile copy to avoid "Chrome is already running" conflicts
-            # when the user's main Chrome is open. We copy to a temp directory.
-            import tempfile, shutil
-            temp_profile = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
-            # Copy only the Default profile (much faster than full copy)
             default_profile = user_data_dir / "Default"
             if default_profile.exists():
-                # Copy essential login-related files only (fast)
-                for item in ["Cookies", "Login Data", "Web Data", "Local State"]:
-                    src = user_data_dir / item
-                    if src.exists():
-                        shutil.copy2(src, temp_profile / item)
-                # Copy Default profile subfolder
-                shutil.copytree(default_profile, temp_profile / "Default", ignore=shutil.ignore_patterns(
-                    "Cache", "Code Cache", "GPUCache", "Service Worker", "DawnCache"
-                ))
+                temp_profile = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
+                local_state = user_data_dir / "Local State"
+                if local_state.exists():
+                    shutil.copy2(local_state, temp_profile / "Local State")
+                (temp_profile / "Default").symlink_to(default_profile)
                 chrome_options.add_argument(f"--user-data-dir={temp_profile}")
                 chrome_options.add_argument("--profile-directory=Default")
-                log.info("verifier.chrome_profile_reused", path=str(temp_profile))
+                log.info("verifier.chrome_profile_symlinked", path=str(temp_profile))
             else:
                 log.warning("verifier.chrome_profile_not_found", path=str(default_profile))
         else:
             log.warning("verifier.chrome_user_data_not_found", path=str(user_data_dir))
 
-        # Auto-accept SSL certificates for staging/internal environments
         parsed_target = urlparse(target_url)
         target_host = parsed_target.hostname or ""
-        staging_keywords = ["installprogram.eu", "staging", "internal", "test", "dev"]
-        if any(kw in target_host.lower() for kw in staging_keywords):
+        if any(kw in target_host.lower() for kw in ["installprogram.eu", "staging", "internal", "test", "dev"]):
             chrome_options.add_argument("--ignore-certificate-errors")
-            log.info("verifier.ssl_auto_accept", host=target_host)
 
         driver = webdriver.Chrome(options=chrome_options)
         driver.maximize_window()
-
-        # Inject interceptor BEFORE any page script runs
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": _INTERCEPTOR_JS,
-        })
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
 
         screenshots_dir = Path(ctx.work_dir) / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
-        results: list[dict] = []
+        all_results: list[dict] = []
+        all_records_flat: list[dict] = []
         artifacts: list[str] = []
 
-        # Consecutive failure tracking (per skill-verification-protocol Rule 5)
         consecutive_network_errors = 0
         consecutive_seed_rejections = 0
         max_consecutive_network_errors = 3
@@ -512,188 +541,186 @@ class TestdataVerifierTool(ToolPlugin):
         environment_aborted = False
 
         try:
-            # ── Step 1: Navigate to admin TestData page ─────────────
-            # Chrome profile is reused, so Okta login session should already exist.
-            # We wait a shorter time for the page to load.
+            # ── Step 1: Navigate to admin TestData page (ONCE) ────
             log.info("verifier.navigate_admin", url=admin_url)
             driver.get(admin_url)
-
-            # Wait for admin page to load (Okta redirect should be skipped with reused profile)
             admin_host = urlparse(admin_url).hostname or ""
-            max_wait = 30  # seconds (reduced from 120s since login is reused)
-            waited = 0
-            while waited < max_wait:
-                current_host = urlparse(driver.current_url).hostname or ""
-                if current_host == admin_host:
-                    break  # Successfully on admin page
+            for waited in range(30):
+                if urlparse(driver.current_url).hostname or "" == admin_host:
+                    break
                 time.sleep(1)
-                waited += 1
             else:
-                # If still redirected, the login session may have expired
                 return ToolResult(
                     success=False,
-                    error=f"Admin page login failed: Still redirected after {max_wait}s. "
+                    error=f"Admin page login failed: Still redirected after 30s. "
                           f"Current URL: {driver.current_url}. "
                           f"Please log in to the admin panel in your regular Chrome browser first.",
                 )
 
-            # ── Step 2: Upload testdata ─────────────────────────────
-            log.info("verifier.upload_testdata", file=str(testdata_file))
-            file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-            file_input.send_keys(str(testdata_file.resolve()))
-            time.sleep(1)
+            # ── Step 2: Process each file (reuse Chrome) ──────────
+            for file_idx, (filepath_str, records) in enumerate(all_records_by_file.items()):
+                testdata_file = Path(filepath_str)
+                file_label = f"[{file_idx + 1}/{len(all_records_by_file)}] {testdata_file.name}"
+                log.info("verifier.file_start", file=file_label, spins=len(records))
 
-            upload_btn = driver.find_element(By.XPATH, "//button[contains(text(),'UPLOAD')]")
-            upload_btn.click()
-            time.sleep(3)  # Wait for upload to complete
-
-            # ── Step 3: Open game URL ───────────────────────────────
-            log.info("verifier.open_game", url=target_url)
-            driver.get(target_url)
-            time.sleep(5)  # Wait for game to load
-
-            # ── Step 4: Auto-spin & verify ──────────────────────────
-            total = len(records)
-            passed_count = 0
-
-            for i, rec in enumerate(records):
-                # Check if environment was aborted due to consecutive failures
-                if environment_aborted:
-                    result = {
-                        "passed": False,
-                        "verdict": "NETWORK_ERROR",
-                        "actualBatch": None,
-                        "actualIndex": None,
-                        "actualStage": "N/A",
-                        "actualWin": 0,
-                        "actualWager": 0,
-                        "issues": ["Verification aborted: environment unavailable due to consecutive failures"],
-                        "screenshot_b64": None,
-                    }
-                    results.append(result)
-                    continue
-
-                log.info("verifier.spin", spin=i + 1, total=total,
-                         batch=rec["batch"], index=rec["index"])
-
-                # Reset response counter before spin
-                prev_count = driver.execute_script("return window.__gvResponses ? window.__gvResponses.length : 0;")
-
-                # Click spin button
-                self._click_spin(driver)
-                time.sleep(spin_delay)
-
-                # Wait for response (poll up to 15s)
-                actual = None
-                for _ in range(30):
-                    curr_count = driver.execute_script(
-                        "return window.__gvResponses ? window.__gvResponses.length : 0;"
-                    )
-                    if curr_count > prev_count:
-                        actual = driver.execute_script(
-                            f"return window.__gvResponses[{curr_count - 1}];"
-                        )
-                        break
-                    time.sleep(0.5)
-
-                if actual is None:
-                    # No response captured — mark as TIMEOUT
-                    result = {
-                        "passed": False,
-                        "verdict": "TIMEOUT",
-                        "actualBatch": None,
-                        "actualIndex": None,
-                        "actualStage": "N/A",
-                        "actualWin": 0,
-                        "actualWager": 0,
-                        "issues": ["No game response captured within timeout"],
-                        "screenshot_b64": None,
-                    }
-                    consecutive_network_errors += 1
-                    consecutive_seed_rejections = 0
-                else:
-                    result = _compare_record(rec, actual)
-                    result["screenshot_b64"] = None
-
-                    # Check for seed rejection (server returned error in response)
-                    gd = actual.get("gameResponse", {})
-                    error_msg = gd.get("error", "") or gd.get("errorMessage", "")
-                    if error_msg and ("invalid" in error_msg.lower() or "reject" in error_msg.lower()):
-                        result["verdict"] = "SEED_REJECTED"
-                        result["passed"] = False
-                        result["issues"].append(f"Server rejected seed: {error_msg}")
-                        consecutive_seed_rejections += 1
-                        consecutive_network_errors = 0
+                # ── Navigate back to admin TestData page for upload ──
+                # After processing previous file, browser is on game page.
+                # Must return to admin page to upload next testdata file.
+                if file_idx > 0:
+                    log.info("verifier.navigate_admin_for_upload", file=file_label)
+                    driver.get(admin_url)
+                    # Wait for admin page to load (check hostname)
+                    for _waited in range(30):
+                        current_host = urlparse(driver.current_url).hostname or ""
+                        if current_host == admin_host:
+                            break
+                        time.sleep(1)
                     else:
+                        log.warning("verifier.admin_page_timeout", file=file_label)
+                        # Mark all remaining records as failed
+                        for rec in records:
+                            all_results.append({
+                                "passed": False, "verdict": "NETWORK_ERROR",
+                                "actualBatch": None, "actualIndex": None,
+                                "actualStage": "N/A", "actualWin": 0, "actualWager": 0,
+                                "issues": [f"Admin page failed to load for file {file_idx + 1}"],
+                                "screenshot_b64": None, "source_file": testdata_file.name,
+                            })
+                            all_records_flat.append(rec)
+                        continue
+                    time.sleep(1)  # Let page fully settle
+
+                # Upload testdata
+                file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+                file_input.send_keys(str(testdata_file.resolve()))
+                time.sleep(1)
+                upload_btn = driver.find_element(By.XPATH, "//button[contains(text(),'UPLOAD')]")
+                upload_btn.click()
+                time.sleep(3)
+
+                # Open game URL
+                driver.get(target_url)
+                time.sleep(5)
+
+                # Reset interceptor response count for fresh game session
+                driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")
+
+                # Auto-spin & verify each record
+                for i, rec in enumerate(records):
+                    if environment_aborted:
+                        result = {
+                            "passed": False, "verdict": "NETWORK_ERROR",
+                            "actualBatch": None, "actualIndex": None,
+                            "actualStage": "N/A", "actualWin": 0, "actualWager": 0,
+                            "issues": ["Verification aborted: environment unavailable"],
+                            "screenshot_b64": None, "source_file": testdata_file.name,
+                        }
+                        all_results.append(result)
+                        all_records_flat.append(rec)
+                        continue
+
+                    log.info("verifier.spin", file=file_label, spin=i + 1, total=len(records),
+                             batch=rec["batch"], index=rec["index"])
+
+                    prev_count = driver.execute_script(
+                        "return window.__gvResponses ? window.__gvResponses.length : 0;")
+                    self._click_spin(driver)
+                    time.sleep(spin_delay)
+
+                    actual = None
+                    for _ in range(30):
+                        curr_count = driver.execute_script(
+                            "return window.__gvResponses ? window.__gvResponses.length : 0;")
+                        if curr_count > prev_count:
+                            actual = driver.execute_script(
+                                f"return window.__gvResponses[{curr_count - 1}];")
+                            break
+                        time.sleep(0.5)
+
+                    if actual is None:
+                        result = {
+                            "passed": False, "verdict": "TIMEOUT",
+                            "actualBatch": None, "actualIndex": None,
+                            "actualStage": "N/A", "actualWin": 0, "actualWager": 0,
+                            "issues": ["No game response captured within timeout"],
+                            "screenshot_b64": None, "source_file": testdata_file.name,
+                        }
+                        consecutive_network_errors += 1
                         consecutive_seed_rejections = 0
-                        if result["passed"]:
+                    else:
+                        result = _compare_record(rec, actual)
+                        result["screenshot_b64"] = None
+                        result["source_file"] = testdata_file.name
+
+                        gd = actual.get("gameResponse", {})
+                        error_msg = gd.get("error", "") or gd.get("errorMessage", "")
+                        if error_msg and ("invalid" in error_msg.lower() or "reject" in error_msg.lower()):
+                            result["verdict"] = "SEED_REJECTED"
+                            result["passed"] = False
+                            result["issues"].append(f"Server rejected seed: {error_msg}")
+                            consecutive_seed_rejections += 1
                             consecutive_network_errors = 0
+                        else:
+                            consecutive_seed_rejections = 0
+                            if result["passed"]:
+                                consecutive_network_errors = 0
 
-                    # Screenshot for bonus or failed cases
-                    need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
-                        not result["passed"] and screenshot_fail
-                    )
-                    if need_screenshot:
-                        try:
-                            png_bytes = driver.get_screenshot_as_png()
-                            result["screenshot_b64"] = base64.b64encode(png_bytes).decode("utf-8")
-                            ss_path = screenshots_dir / f"spin_{rec['spinIndex']}_{'pass' if result['passed'] else 'fail'}.png"
-                            ss_path.write_bytes(png_bytes)
-                            artifacts.append(str(ss_path.resolve()))
-                        except Exception:
-                            pass
+                        need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
+                            not result["passed"] and screenshot_fail)
+                        if need_screenshot:
+                            try:
+                                png_bytes = driver.get_screenshot_as_png()
+                                result["screenshot_b64"] = base64.b64encode(png_bytes).decode("utf-8")
+                                ss_path = screenshots_dir / f"{testdata_file.stem}_spin{rec['spinIndex']}_{'pass' if result['passed'] else 'fail'}.png"
+                                ss_path.write_bytes(png_bytes)
+                                artifacts.append(str(ss_path.resolve()))
+                            except Exception:
+                                pass
 
-                # Consecutive failure detection (per skill-verification-protocol Rule 5)
-                if consecutive_network_errors >= max_consecutive_network_errors:
-                    log.warning("verifier.env_unavailable",
-                                reason=f"{max_consecutive_network_errors} consecutive network errors")
-                    environment_aborted = True
-                    result["issues"].append(
-                        f"Environment marked UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts/network errors"
-                    )
-                elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
-                    log.warning("verifier.seed_rejection_abort",
-                                reason=f"{max_consecutive_seed_rejections} consecutive seed rejections")
-                    environment_aborted = True
-                    result["issues"].append(
-                        f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected. "
-                        "Check loginName/moduleID."
-                    )
+                    if consecutive_network_errors >= max_consecutive_network_errors:
+                        environment_aborted = True
+                        result["issues"].append(
+                            f"Environment UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts")
+                    elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
+                        environment_aborted = True
+                        result["issues"].append(
+                            f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected")
 
-                if result["passed"]:
-                    passed_count += 1
+                    all_results.append(result)
+                    all_records_flat.append(rec)
 
-                results.append(result)
+                log.info("verifier.file_done", file=file_label, passed=sum(1 for r in all_results if r.get("source_file") == testdata_file.name and r["passed"]))
 
-            # ─ Step 5: Generate HTML report ────────────────────────
+            # ── Step 3: Generate combined HTML report ─────────────
+            passed_count = sum(1 for r in all_results if r["passed"])
+            total = len(all_results)
+            is_multi = len(testdata_files_list) > 1
+            if is_multi:
+                report_label = f"{len(testdata_files_list)} files batch verification"
+            else:
+                report_label = testdata_files_list[0].name
             report_path = _generate_html_report(
-                records, results, target_url, str(testdata_file), output,
+                all_records_flat, all_results, target_url, report_label, output,
+                multi_file=is_multi,
             )
             artifacts.append(str(output.resolve()))
 
-            success = passed_count == total
             return ToolResult(
-                success=success,
+                success=passed_count == total,
                 content={
-                    "total": total,
-                    "passed": passed_count,
+                    "total": total, "passed": passed_count,
                     "failed": total - passed_count,
                     "passRate": round(passed_count / total * 100, 1) if total else 0,
                     "report_html": report_path,
+                    "files_processed": len(testdata_files_list),
                     "cases": [
-                        {
-                            "spinIndex": rec["spinIndex"],
-                            "stage": rec["stage"],
-                            "expectedBatch": rec["batch"],
-                            "expectedIndex": rec["index"],
-                            "isBonus": rec["isBonus"],
-                            **r,
-                        }
-                        for rec, r in zip(records, results)
+                        {"spinIndex": rec["spinIndex"], "stage": rec["stage"],
+                         "expectedBatch": rec["batch"], "expectedIndex": rec["index"],
+                         "isBonus": rec["isBonus"], **r}
+                        for rec, r in zip(all_records_flat, all_results)
                     ],
                 },
-                execution_ms=0,
-                artifacts=artifacts,
+                execution_ms=0, artifacts=artifacts,
             )
 
         except Exception as e:
@@ -703,10 +730,11 @@ class TestdataVerifierTool(ToolPlugin):
                 driver.quit()
             except Exception:
                 pass
-            # Clean up temp Chrome profile directory
             try:
-                if 'temp_profile' in locals() and temp_profile.exists():
-                    import shutil
+                if temp_profile is not None and temp_profile.exists():
+                    default_link = temp_profile / "Default"
+                    if default_link.is_symlink():
+                        default_link.unlink()
                     shutil.rmtree(temp_profile, ignore_errors=True)
                     log.info("verifier.chrome_profile_cleaned", path=str(temp_profile))
             except Exception:

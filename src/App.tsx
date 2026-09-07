@@ -492,19 +492,23 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // ── Verification handler ──────────────────────────────────────
   const handleStartVerification = async (config: VerificationConfig) => {
     setWorkflowState("VERIFYING");
+    setIsGenerating(true);
     setError(null);
     setLogs([]);
-    addLog({ type: "HARNESS_EVENT", content: `Starting verification against ${config.targetUrl}`, status: "running" });
+    const fileCount = config.testdataFilePaths?.length ?? 1;
+    addLog({ type: "HARNESS_EVENT", content: `Starting batch verification: ${fileCount} file(s) against ${config.targetUrl}`, status: "running" });
 
     try {
       const report = await runRealGameVerification(
         testRecords,
         config,
         (completed, result) => {
+          const srcFile = (result as any).sourceFile;
+          const filePrefix = srcFile ? `[${srcFile}] ` : '';
           addLog({
             type: "TOOL_RES",
             toolName: "testdata_verifier",
-            content: `Spin ${completed}: ${result.status}`,
+            content: `${filePrefix}Spin ${completed}: ${result.status}`,
             detail: result.errorMessage ?? "OK",
             status: result.passed ? "success" : "error",
           });
@@ -517,6 +521,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setError(e?.message ?? String(e));
       setWorkflowState("READY");
       addLog({ type: "HARNESS_EVENT", content: `Verification failed: ${e?.message ?? e}`, status: "error" });
+    } finally {
+      setIsGenerating(false);
     }
   };
 

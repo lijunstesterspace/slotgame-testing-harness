@@ -140,6 +140,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
   const [folderPath, setFolderPath] = useState<string>("");
+  const [manualFolderPath, setManualFolderPath] = useState<string>("");
   const [scanningFolder, setScanningFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFile, setSelectedTestdataFile] = useState<TestdataFileInfo | null>(null);
@@ -400,43 +401,60 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const handleFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = (e.target.files as any)?.[0];
     if (!file) return;
-    const fullPath = file.path;
-    let folder = '';
-    if (fullPath) {
-      folder = fullPath.substring(0, fullPath.lastIndexOf('\\') || fullPath.lastIndexOf('/'));
-    } else {
-      const dir = file.webkitRelativePath;
-      if (dir) folder = dir.split('/')[0];
-    }
-    if (folder) {
-      setFolderPath(folder);
-      setScanningFolder(true);
-      // Auto-scan for testdata files
-      try {
-        const res = await fetch('/api/tools/scan-testdata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder_path: folder }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setTestdataFiles(data.files || []);
-          setSelectedTestdataFile(data.files?.length === 1 ? data.files[0] : null);
-        } else {
-          setTestdataFiles([]);
-          setSelectedTestdataFile(null);
-        }
-      } catch {
-        setTestdataFiles([]);
-        setSelectedTestdataFile(null);
-      } finally {
-        setScanningFolder(false);
-      }
+    
+    // Try to extract absolute path from relative path structure
+    // In browsers, file.path is not available; we use webkitRelativePath
+    const relativePath = file.webkitRelativePath || '';
+    if (relativePath) {
+      // Extract folder name from first segment of relative path
+      const folderName = relativePath.split('/')[0];
+      // Store just the folder name - user will need to provide full path manually
+      setFolderPath(folderName);
+      setTestdataFiles([]);
+      setSelectedTestdataFile(null);
+      setError(`Folder "${folderName}" selected. Please paste the full absolute path below.`);
     }
     e.target.value = '';
   };
 
   const handleOpenAgentPage = () => setPage("agent");
+
+  // Scan folder using manual path input
+  const handleScanFolder = async () => {
+    if (!manualFolderPath.trim()) {
+      setError("Please enter a folder path");
+      return;
+    }
+    setFolderPath(manualFolderPath.trim());
+    setScanningFolder(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/tools/scan-testdata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_path: manualFolderPath.trim() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTestdataFiles(data.files || []);
+        setSelectedTestdataFile(data.files?.length === 1 ? data.files[0] : null);
+        if (data.files?.length === 0) {
+          setError("No .testdata files found in this folder");
+        }
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Scan failed' }));
+        setError(err.detail || 'Folder not found or scan failed');
+        setTestdataFiles([]);
+        setSelectedTestdataFile(null);
+      }
+    } catch (e: any) {
+      setError(e?.message ?? 'Network error');
+      setTestdataFiles([]);
+      setSelectedTestdataFile(null);
+    } finally {
+      setScanningFolder(false);
+    }
+  };
 
   // ── Verification handler ──────────────────────────────────────
   const handleStartVerification = async (config: VerificationConfig) => {
@@ -601,6 +619,39 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     onChange={handleFolderChange}
                     {...({ webkitdirectory: '', directory: '' } as any)}
                   />
+
+                  {/* Manual folder path input */}
+                  <input
+                    type="text"
+                    value={manualFolderPath}
+                    onChange={(e) => setManualFolderPath(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleScanFolder();
+                      }
+                    }}
+                    placeholder="Paste absolute folder path..."
+                    className="flex-1 min-w-[200px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleScanFolder}
+                    disabled={scanningFolder || !manualFolderPath.trim()}
+                    className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
+                      scanningFolder
+                        ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                        : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:border-emerald-500/70'
+                    }`}
+                    title="Scan folder for testdata files"
+                  >
+                    {scanningFolder ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FolderOpen className="w-3.5 h-3.5" />
+                    )}
+                    <span>Scan</span>
+                  </button>
 
                   {/* Preview/Generate or Stop button */}
                   <button

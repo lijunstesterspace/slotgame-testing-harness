@@ -12,7 +12,6 @@ interface AgentCoreProps {
   workflowStage: WorkflowStage;
   workflowState: WorkflowState;
   isGenerating: boolean;
-  isTesting: boolean;
 }
 
 // ── Pipeline stages ────────────────────────────────────────────
@@ -38,7 +37,6 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
   workflowStage,
   workflowState,
   isGenerating,
-  isTesting,
 }) => {
   const [activeTab, setActiveTab] = useState<'COT' | 'RAW_TOOLS' | 'SYSTEM'>('COT');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -59,7 +57,7 @@ export const AgentCore: React.FC<AgentCoreProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const isRunning = isGenerating || isTesting;
+  const isRunning = isGenerating;
 
   return (
     <div className="flex flex-col gap-3 h-full">

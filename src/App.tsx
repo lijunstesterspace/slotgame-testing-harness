@@ -3,16 +3,14 @@ import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
 import { TestDataPreview } from "./components/TestDataPreview";
-import { VerificationPanel } from "./components/VerificationPanel";
 import { VerificationReportModal } from "./components/VerificationReportModal";
 import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
 import { AgentPage } from "./pages/AgentPage";
 import { LoginPage } from "./pages/LoginPage";
-import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationConfig, VerificationReport, LlmProviderConfig } from "./types";
+import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
-import { runRealGameVerification } from "./utils/verificationEngine";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
 import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
 import { harnessClient, clearAuth } from "./harness/client";
@@ -46,9 +44,6 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
     { id: 't1-3', stage: 1, title: 'AI Analysis Report', description: 'Generate AI-powered analysis report with quality issues', status: 'pending' },
   ],
 };
-
-// Scenarios that require real game environment verification (Stage 2)
-const NEEDS_VERIFICATION_SCENARIOS = new Set(['testdata_generation', 'game_verification']);
 
 // ── Scenario-specific Test Plan Items ──────────────────────────────────
 const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; description: string; selected: boolean }>> = {
@@ -133,7 +128,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [tasks, setTasks] = useState<TaskItem[]>(STAGE1_TASKS["testdata_generation"] ?? []);
   const [logs, setLogs] = useState<ToolCallLog[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
   const [testRecords, setTestRecords] = useState<TestRecord[]>(INITIAL_TEST_RECORDS);
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -145,7 +139,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
   const [folderPath, setFolderPath] = useState<string>("");
-  const folderInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
@@ -345,73 +338,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
   };
 
-  const handleStartVerification = async (config: VerificationConfig) => {
-    if (isTesting) return;
-    setIsTesting(true);
-    setWorkflowStage(4);
-    setWorkflowState("VERIFYING");
-    setVerificationReport(null);
-    addLog({ type: "TOOL_CALL", toolName: "testdata_verifier", content: "Connecting to Real Game Environment via Backend Harness...", detail: JSON.stringify(config, null, 2), status: "running" });
-    try {
-      const cfg: VerificationConfig = {
-        targetUrl: config.targetUrl,
-        spinDelayMs: config.spinDelayMs,
-        timeoutMs: config.timeoutMs,
-        loginName: config.loginName,
-        autoRetryServerError: config.autoRetryServerError,
-        folderPath: config.folderPath,
-        testdataFilePath: config.testdataFilePath,
-      };
-      const report = await runRealGameVerification(testRecords, cfg, (completedCount, currentResult) => {
-        addLog({
-          type: currentResult.status === "PASSED" ? "TOOL_RES" : "SELF_HEAL",
-          toolName: "testdata_verifier",
-          content: `Verifying Case: ${currentResult.caseName} (${completedCount}/${testRecords.length})`,
-          detail: currentResult.status === "PASSED" ? `Server Payout Match. Response: ${currentResult.responseTimeMs}ms` : `Discrepancy Detected: ${currentResult.errorMessage}`,
-          status: currentResult.status === "PASSED" ? "success" : "error",
-        });
-      });
-      setVerificationReport(report);
-      const results = report.results;
-      const failedCount = results.filter((r) => !r.passed).length;
-      addLog({
-        type: "TOOL_RES",
-        toolName: "testdata_verifier",
-        content: `Verification Complete: ${report.passedCount}/${report.totalCases} Passed`,
-        detail: failedCount > 0 ? `${failedCount} discrepancies found. Generating Diagnostic Report...` : "All server payouts matched expected values.",
-        status: failedCount > 0 ? "warning" : "success",
-      });
-      chime();
-      if (failedCount > 0) {
-        addLog({ type: "TOOL_CALL", toolName: "log_diagnoser", content: "Running AI-Powered Diagnostic Analysis...", status: "running" });
-        try {
-          const diag = await harnessClient.executeTool("log_diagnoser", { results: report.results });
-          const diagCount = diag.content && typeof diag.content === "object" ? (diag.content as any)?.count ?? 0 : 0;
-          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: `Rule-based: Identified ${diagCount} root causes.`, status: "success" });
-        } catch (e: any) {
-          addLog({ type: "TOOL_RES", toolName: "log_diagnoser", content: "Rule-based diagnosis fallback", detail: String(e?.message ?? e), status: "warning" });
-        }
-        // AI diagnosis is now handled in verificationEngine.ts
-        if (report.aiDiagnosis) {
-          addLog({
-            type: "TOOL_RES",
-            toolName: "ai_diagnoser",
-            content: `AI Diagnosis: ${report.aiDiagnosis.failedDiagnoses.length} root causes analyzed`,
-            detail: report.aiDiagnosis.summary,
-            status: "success",
-          });
-        }
-      }
-      setWorkflowStage(5);
-      setWorkflowState("VERIFIED");
-    } catch (e: any) {
-      addLog({ type: "SELF_HEAL", content: `Verification Interrupted: ${e?.message ?? String(e)}`, status: "error" });
-      setWorkflowState("REVIEW");
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
   const handleRegenerate = () => {
     setWorkflowStage(2);
     setWorkflowState("GENERATING");
@@ -462,7 +388,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   }, [selectedScenarioId]);
 
   const showCenterFooter = workflowStage >= 3;
-  const showVerificationPanel = workflowState === 'REVIEW' && NEEDS_VERIFICATION_SCENARIOS.has(selectedScenarioId);
 
   const errorBanner = error ? (
     <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
@@ -548,33 +473,9 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
               />
 
-              {/* Bottom row: Folder picker + Generate button (left) | Model selector (right) */}
+              {/* Bottom row: Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {/* Hidden folder file input */}
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    className="hidden"
-                    {...({ webkitdirectory: "", directory: "", multiple: true } as any)}
-                    onChange={(e) => {
-                      const files = e.target.files;
-                      if (files && files.length > 0) {
-                        const dirName = files[0].webkitRelativePath.split("/")[0];
-                        setFolderPath(dirName);
-                      }
-                    }}
-                  />
-                  {/* Add local folder button */}
-                  <button
-                    onClick={() => folderInputRef.current?.click()}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 transition text-[11px]"
-                    title="Add local folder"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5" />
-                    <span>{folderPath || "Add folder"}</span>
-                  </button>
-
                   {/* Preview/Generate or Stop button */}
                   <button
                     onClick={isGenerating ? handleStop : handleShowPreview}
@@ -721,7 +622,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               workflowStage={workflowStage}
               workflowState={workflowState}
               isGenerating={isGenerating}
-              isTesting={isTesting}
             />
           </div>
 
@@ -733,20 +633,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           )}
         </div>
       </main>
-
-      {/* Verification Panel (floating bottom) — only for scenarios that need game verification */}
-      {showVerificationPanel && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-800 bg-slate-900/95 backdrop-blur">
-          <VerificationPanel
-            onStartVerification={handleStartVerification}
-            isVerifying={isTesting}
-            loginName={loginName}
-            setLoginName={setLoginName}
-            folderPath={folderPath}
-            setFolderPath={setFolderPath}
-          />
-        </div>
-      )}
 
       <footer className="px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <div className="flex items-center gap-2">

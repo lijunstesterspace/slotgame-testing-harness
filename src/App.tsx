@@ -4,16 +4,15 @@ import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
 import { TestDataPreview } from "./components/TestDataPreview";
 import { VerificationReportModal } from "./components/VerificationReportModal";
-import { VerificationPanel } from "./components/VerificationPanel";
 import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
 import { AgentPage } from "./pages/AgentPage";
 import { LoginPage } from "./pages/LoginPage";
-import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, LlmProviderConfig } from "./types";
+import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square } from "lucide-react";
+import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square, RefreshCw, FileText } from "lucide-react";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { harnessClient, clearAuth } from "./harness/client";
 import type { FunctionCallingSchema, TestRecordDto } from "./harness/sharedTypes";
@@ -141,6 +140,10 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
   const [folderPath, setFolderPath] = useState<string>("");
+  const [scanningFolder, setScanningFolder] = useState(false);
+  const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
+  const [selectedTestdataFile, setSelectedTestdataFile] = useState<TestdataFileInfo | null>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
@@ -269,6 +272,27 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setError("Please select at least one test item");
       return;
     }
+
+    // For game_verification, call verification directly
+    if (selectedScenarioId === 'game_verification') {
+      if (!selectedTestdataFile) {
+        setError("Please select a testdata file");
+        return;
+      }
+      setShowPreview(false);
+      await handleStartVerification({
+        targetUrl: sheetUrl,
+        spinDelayMs: 3000,
+        timeoutMs: 5000,
+        autoRetryServerError: true,
+        loginName,
+        folderPath,
+        testdataFilePath: selectedTestdataFile.path,
+      });
+      return;
+    }
+
+    // For other scenarios, use planner
     setShowPreview(false);
     
     if (isGenerating) return;
@@ -370,6 +394,48 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
+  // ── Folder selection (general-purpose, used by multiple scenarios) ─
+  const handleFolderSelect = () => folderInputRef.current?.click();
+
+  const handleFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = (e.target.files as any)?.[0];
+    if (!file) return;
+    const fullPath = file.path;
+    let folder = '';
+    if (fullPath) {
+      folder = fullPath.substring(0, fullPath.lastIndexOf('\\') || fullPath.lastIndexOf('/'));
+    } else {
+      const dir = file.webkitRelativePath;
+      if (dir) folder = dir.split('/')[0];
+    }
+    if (folder) {
+      setFolderPath(folder);
+      setScanningFolder(true);
+      // Auto-scan for testdata files
+      try {
+        const res = await fetch('/api/tools/scan-testdata', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder_path: folder }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTestdataFiles(data.files || []);
+          setSelectedTestdataFile(data.files?.length === 1 ? data.files[0] : null);
+        } else {
+          setTestdataFiles([]);
+          setSelectedTestdataFile(null);
+        }
+      } catch {
+        setTestdataFiles([]);
+        setSelectedTestdataFile(null);
+      } finally {
+        setScanningFolder(false);
+      }
+    }
+    e.target.value = '';
+  };
+
   const handleOpenAgentPage = () => setPage("agent");
 
   // ── Verification handler ──────────────────────────────────────
@@ -507,9 +573,35 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
               />
 
-              {/* Bottom row: Generate button (left) | Model selector (right) */}
+              {/* Bottom row: Folder button + Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
+                  {/* Folder selection button */}
+                  <button
+                    type="button"
+                    onClick={handleFolderSelect}
+                    className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
+                      folderPath
+                        ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
+                        : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                    }`}
+                    title="Select a folder with test data files"
+                  >
+                    {scanningFolder ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FolderOpen className="w-3.5 h-3.5" />
+                    )}
+                    <span className="max-w-[120px] truncate">{folderPath ? folderPath.split('\\').pop() || folderPath.split('/').pop() : 'Add folder'}</span>
+                  </button>
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={handleFolderChange}
+                    {...({ webkitdirectory: '', directory: '' } as any)}
+                  />
+
                   {/* Preview/Generate or Stop button */}
                   <button
                     onClick={isGenerating ? handleStop : handleShowPreview}
@@ -592,6 +684,44 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   : 'Select the test items to execute:'}
               </div>
 
+              {/* Testdata file list for game_verification */}
+              {selectedScenarioId === 'game_verification' && (
+                <div className="mb-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">
+                    Select testdata file ({testdataFiles.length} found):
+                  </div>
+                  {testdataFiles.length > 0 ? (
+                    <div className="space-y-1 max-h-[150px] overflow-y-auto">
+                      {testdataFiles.map((f) => (
+                        <label
+                          key={f.path}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-xs ${
+                            selectedTestdataFile?.path === f.path
+                              ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                              : 'bg-slate-950/50 border-slate-700 hover:border-slate-600 text-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="testdata-file"
+                            checked={selectedTestdataFile?.path === f.path}
+                            onChange={() => setSelectedTestdataFile(f)}
+                            className="accent-amber-400"
+                          />
+                          <FileText className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                          <span className="font-mono truncate flex-1">{f.name}</span>
+                          <span className="text-[10px] text-slate-500">{f.size_kb} KB</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 px-3 py-2 text-center">
+                      No .testdata files found. Please select a folder with testdata files.
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 {plannedTests.map((test) => (
                   <label
@@ -648,19 +778,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             </div>
           )}
 
-          {/* ── Verification Panel (Stage 2) ── */}
-          {selectedScenarioId === 'game_verification' && workflowState !== 'GENERATING' && (
-            <VerificationPanel
-              onStartVerification={handleStartVerification}
-              isVerifying={workflowState === 'VERIFYING'}
-              loginName={loginName}
-              setLoginName={setLoginName}
-              folderPath={folderPath}
-              setFolderPath={setFolderPath}
-            />
-          )}
-
-          {/* ── Pipeline + Console ── */}
+          {/* ── Pipeline + Console ─ */}
           <div className="flex-1 flex flex-col min-h-0">
             <AgentCore
               tasks={tasks}

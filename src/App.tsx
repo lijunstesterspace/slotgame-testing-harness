@@ -220,25 +220,49 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       xmlSnippet: d.xml_snippet,
     }));
 
+  // ── URL type detection helpers ──────────────────────────────────
+  const isGoogleSheetUrl = (url: string) =>
+    /docs\.google\.com\/spreadsheets/i.test(url);
+  const isGameUrl = (url: string) =>
+    /htmlGames|launch\/mgs|gameId=/i.test(url);
+
   // Step 1: Show preview of planned tests
   const handleShowPreview = () => {
     if (!promptIntent.trim()) {
       setError("Please describe your test task first");
       return;
     }
+
+    // URL type validation: detect mismatch between input and scenario
+    if (sheetUrl.trim()) {
+      if (selectedScenarioId === 'testdata_generation' && isGameUrl(sheetUrl)) {
+        setError('The first input box only accepts Google Sheet URLs (docs.google.com/spreadsheets). Game URLs are not supported here. Please switch to "TestData Verification" scenario for game URLs.');
+        return;
+      }
+      if (selectedScenarioId === 'game_verification' && isGoogleSheetUrl(sheetUrl)) {
+        setError('The first input box expects a Game URL for verification. Please enter the real game environment URL.');
+        return;
+      }
+    }
+
     // 自动意图路由：根据用户输入匹配场景
+    // 仅当路由结果得分很高（>100）时才覆盖用户手动选择的场景，避免误判
     let effectiveScenarioId = selectedScenarioId;
     const routeResult = routeIntent(promptIntent);
-    if (routeResult && routeResult.scenario.id !== selectedScenarioId) {
+    if (routeResult && routeResult.scenario.id !== selectedScenarioId && routeResult.matchScore > 100) {
       effectiveScenarioId = routeResult.scenario.id;
       setSelectedScenarioId(effectiveScenarioId);
       addLog({
         type: "HARNESS_EVENT",
-        content: `Auto-routed to scenario: ${routeResult.scenario.label} (keywords: ${routeResult.matchedKeywords.join(", ")})`,
+        content: `Auto-routed to scenario: ${routeResult.scenario.label} (keywords: ${routeResult.matchedKeywords.join(", ")}, score: ${routeResult.matchScore})`,
       });
     }
     // Generate planned test items based on selected scenario
-    const tests = SCENARIO_TEST_ITEMS[effectiveScenarioId] ?? SCENARIO_TEST_ITEMS["testdata_generation"];
+    const tests = SCENARIO_TEST_ITEMS[effectiveScenarioId];
+    if (!tests) {
+      setError(`No test plan defined for scenario: ${effectiveScenarioId}`);
+      return;
+    }
     setPlannedTests(tests.map(t => ({ ...t })));
     setShowPreview(true);
   };
@@ -290,7 +314,8 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const outcome = await planner.run({
         scenarioId: selectedScenarioId,
         intent: promptIntent,
-        sheetUrl,
+        sheetUrl: selectedScenarioId === 'testdata_generation' ? sheetUrl : undefined,
+        targetUrl: selectedScenarioId === 'game_verification' ? sheetUrl : undefined,
         loginName,
         maxCycles: 14,
         signal: controller.signal,
@@ -486,24 +511,40 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         {/* Center: Input Dialog → Pipeline → Console → Preview */}
         <div className="flex-1 flex flex-col overflow-y-auto p-4 gap-4 min-w-0">
 
-          {/* ── Input Dialog ── */}
+          {/* ─ Input Dialog ── */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
             <div className="flex flex-col gap-3">
-              <input
-                type="text"
-                placeholder="Sheet URL (optional)"
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-                disabled={isGenerating}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono"
-              />
-
+              {/* Unified input: auto-detects URL and intent */}
               <textarea
-                placeholder="Describe your test task..."
-                value={promptIntent}
-                onChange={(e) => setPromptIntent(e.target.value)}
+                placeholder={
+                  selectedScenarioId === 'game_verification'
+                    ? 'Paste game URL and/or describe your test task...\n\nExample:\nhttps://.../htmlGames/...&gameId=...\nverify testdata'
+                    : selectedScenarioId === 'testdata_generation'
+                    ? 'Paste sheet URL (optional) and describe your test task...\n\nExample:\nhttps://docs.google.com/spreadsheets/d/...\ngenerate testdata for base game'
+                    : 'Describe your test task...'
+                }
+                value={sheetUrl ? `${sheetUrl}\n${promptIntent}` : promptIntent}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Auto-detect and split URL from intent
+                  const lines = value.split('\n');
+                  let detectedUrl = '';
+                  let detectedIntent = '';
+                  
+                  for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!detectedUrl && /^https?:\/\//i.test(trimmed)) {
+                      detectedUrl = trimmed;
+                    } else if (trimmed) {
+                      detectedIntent += (detectedIntent ? '\n' : '') + trimmed;
+                    }
+                  }
+                  
+                  setSheetUrl(detectedUrl);
+                  setPromptIntent(detectedIntent);
+                }}
                 disabled={isGenerating}
-                rows={3}
+                rows={4}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
               />
 
@@ -607,7 +648,13 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
 
               <div className="text-[11px] text-slate-400 mb-3">
-                Select the test items you want to generate:
+                {selectedScenarioId === 'testdata_generation'
+                  ? 'Select the test items you want to generate:'
+                  : selectedScenarioId === 'game_verification'
+                  ? 'Select the verification items to execute:'
+                  : selectedScenarioId === 'log_diagnosis'
+                  ? 'Select the diagnosis items to analyze:'
+                  : 'Select the test items to execute:'}
               </div>
 
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
@@ -656,7 +703,10 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     disabled={plannedTests.filter(t => t.selected).length === 0}
                     className="px-4 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/20 transition"
                   >
-                    Confirm & Generate
+                    {selectedScenarioId === 'testdata_generation' ? 'Confirm & Generate'
+                      : selectedScenarioId === 'game_verification' ? 'Confirm & Verify'
+                      : selectedScenarioId === 'log_diagnosis' ? 'Confirm & Diagnose'
+                      : 'Confirm & Execute'}
                   </button>
                 </div>
               </div>

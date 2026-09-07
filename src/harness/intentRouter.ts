@@ -31,7 +31,7 @@ export const SCENARIOS: TestScenario[] = [
     id: "game_verification",
     label: "TestData Verification",
     description: "Send generated testdata to real game environment, verify seed acceptance and payout consistency",
-    keywords: ["verify", "game", "spin", "游戏", "真实环境"],
+    keywords: ["verify testdata", "verify", "verification", "game", "spin", "游戏", "真实环境", "验证"],
     agentFile: "testdata_verifier_agent.md",
     skills: [],
     pipelineId: "game-verify-pipeline",
@@ -101,8 +101,18 @@ export function routeIntent(userInput: string): RouteResult | null {
     for (const kw of scenario.keywords) {
       if (input.includes(kw.toLowerCase())) {
         matched.push(kw);
-        // Longer keywords get higher weight
-        score += kw.length * 10;
+        // Longer keywords get higher weight; exact word-boundary matches get bonus
+        let kwScore = kw.length * 10;
+        // Bonus for multi-word keywords (more specific intent signal)
+        if (kw.includes(' ') || kw.includes('_')) {
+          kwScore *= 2;
+        }
+        // Bonus if the keyword appears near the start of the input (stronger intent signal)
+        const idx = input.indexOf(kw.toLowerCase());
+        if (idx <= 3) {
+          kwScore += 20;
+        }
+        score += kwScore;
       }
     }
 

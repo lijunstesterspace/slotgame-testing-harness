@@ -1,35 +1,48 @@
 # AGENT: Helpfile Conversion & Analysis Agent
 
-## 1. Role & Identity (角色与定位)
-You are the **Helpfile Conversion & Analysis Agent** for Help Files Quality Assurance.
-Your mission is to batch-convert HTML help files to plain text, perform diff comparison across versions, highlight keyword differences, and invoke a **local AI model** to generate intelligent analysis reports that summarize content changes, keyword distribution, and potential quality issues.
+## ⚠️ Execution Model (read this first)
 
----
+This file is loaded as **domain-reference context** for the `easyhelp_checking` scenario. It is
+**not** an autonomous multi-step executor.
 
-## 2. System Prompt (系统提示词)
+The `helpfile-conversion-pipeline` (see `src/harness/pipelineRegistry.ts`) declares the fixed step
+order:
 
-```text
-You are the Helpfile Conversion & Analysis Agent for Help Files QA Automation.
-Your objective is to:
-1. Accept a source folder containing multiple subdirectories, each with an index.html help file.
-2. Convert all HTML help files to clean plain text format, stripping HTML tags, images, and links.
-3. Select a baseline file (alphabetically first subdirectory) and compare all other files against it.
-4. Generate visual diff reports with keyword highlighting (case-insensitive).
-5. Count keyword occurrences across all files and produce an Excel summary.
-6. Invoke the local AI model (Ollama) to perform intelligent analysis:
-   - Summarize major content differences between files
-   - Identify potential content inconsistencies or missing sections
-   - Highlight keyword coverage gaps
-   - Generate a natural-language quality assessment report
-7. Package all outputs: TXT files, diff HTML/PNG images, Excel report, and AI analysis report.
+```
+convert (html_to_text_converter)  →  compare (diff_comparator)  →  analyze (helpfile_analyzer)
 ```
 
+`ExecutionEngine` calls these three Plugins in this exact order, every time. The AI never decides
+which Plugin runs next. Conversion (Rule 1) and diffing/keyword-highlighting (Rules 2-3) are
+implemented as **deterministic code** inside `server/tools/impl/html_to_text_converter_tool.py`
+and `server/tools/impl/diff_comparator_tool.py`.
+
+The one place a model genuinely runs in this scenario is **Rule 4 below** — and it already lives
+entirely server-side, inside the `helpfile_analyzer` Plugin
+(`server/tools/impl/helpfile_analyzer_tool.py`), which calls a local Ollama model directly with the
+conversion + diff results. This frontend `PlannerAgent` class is not involved in that call at all;
+it is documented here so the prompt/rule design for that server-side call stays traceable to one
+place.
+
+## AI Responsibility (narrowed, per design doc §1.2 / §10.7 / §11)
+
+For this scenario, AI involvement is:
+
+- **Analysis-report generation** (bucket 3 of the AI's role) — implemented server-side in the
+  `helpfile_analyzer` Plugin (see Rule 4), and optionally echoed to the user as a short frontend
+  summary via `PlannerAgent.summarizeStepResult()` after the pipeline completes.
+
+It never decides which files to scan, never picks the baseline, and never does the keyword
+diffing — all of that is 100% code, and the pipeline still produces TXT/diff/Excel output even if
+the AI analysis step is unavailable (it is the only step allowed to fail without failing the whole
+pipeline, per its Plugin's own error handling).
+
 ---
 
-## 3. Conversion & Analysis Rules (转换与分析规范)
+## Domain Reference: Conversion & Analysis Rules
 
-### Rule 1: HTML → Text Conversion
-- Use `html2text` library with the following configuration:
+### Rule 1: HTML → Text Conversion (implemented in `html_to_text_converter_tool.py`)
+- Uses the `html2text` library with the following configuration:
   - `ignore_links = True` — strip hyperlinks
   - `ignore_images = True` — strip image references
   - `ignore_emphasis = True` — remove bold/italic markers
@@ -37,37 +50,41 @@ Your objective is to:
   - `single_line_break = True` — single newline between blocks
   - `skip_internal_links = True` — remove internal anchors
   - `bypass_tables = True` — preserve table structure
-- Post-process: strip blank lines, normalize whitespace
+- Post-processing: strip blank lines, normalize whitespace.
 
-### Rule 2: Baseline Selection & Diff Comparison
-- Sort all subdirectory names alphabetically
-- First subdirectory's TXT becomes the **baseline file**
-- Compare each remaining file against the baseline using `difflib.HtmlDiff`
-- Generate per-file diff HTML with color-coded changes
+### Rule 2: Baseline Selection & Diff Comparison (implemented in `diff_comparator_tool.py`)
+- Sorts all subdirectory names alphabetically.
+- The first subdirectory's TXT becomes the **baseline file** (unless overridden).
+- Compares each remaining file against the baseline using `difflib.HtmlDiff`.
+- Generates per-file diff HTML with color-coded changes.
 
-### Rule 3: Keyword Highlighting (Nested-Safe)
-- Sort keywords by length **descending** before highlighting (longer matches first)
-- Use BeautifulSoup to only modify **text nodes**, preserving HTML structure
-- Skip `<script>`, `<style>`, `<head>`, `<title>`, `<meta>` tags
-- Wrap matches in `<span style="background-color:yellow">` tags
-- Fallback to global regex replacement if BeautifulSoup parsing fails
+### Rule 3: Keyword Highlighting, Nested-Safe (implemented in `diff_comparator_tool.py`)
+- Sorts keywords by length **descending** before highlighting (longer matches first).
+- Uses BeautifulSoup to only modify **text nodes**, preserving HTML structure.
+- Skips `<script>`, `<style>`, `<head>`, `<title>`, `<meta>` tags.
+- Wraps matches in `<span style="background-color:yellow">` tags.
+- Falls back to global regex replacement if BeautifulSoup parsing fails.
 
-### Rule 4: AI Analysis Report (Local Model)
-- After conversion and comparison, invoke local Ollama model
-- Provide the AI with:
-  - File list and keyword counts summary
-  - Key diff snippets (top N most changed sections)
+### Rule 4: AI Analysis Report (the actual model call — implemented in `helpfile_analyzer_tool.py`)
+- After conversion and comparison, this Plugin invokes a local Ollama model directly (server-side,
+  via `ollama_base_url` / `ollama_model` params — no frontend PlannerAgent involved).
+- It provides the model with:
+  - The file list and keyword-count summary
+  - Key diff snippets (top N most-changed sections)
   - Keyword coverage statistics
-- AI generates a structured analysis report containing:
-  - `summary`: Overall content comparison summary
-  - `keyDifferences`: Major content differences identified
-  - `keywordCoverage`: Keyword distribution analysis
-  - `qualityIssues`: Potential inconsistencies or missing content
-  - `recommendations`: Actionable suggestions for improvement
+- The model is asked to generate a structured analysis containing:
+  - `summary`: overall content-comparison summary
+  - `keyDifferences`: major content differences identified
+  - `keywordCoverage`: keyword distribution analysis
+  - `qualityIssues`: potential inconsistencies or missing content
+  - `recommendations`: actionable suggestions for improvement
+- The prompt for this call must stay tightly constrained (single JSON schema, low temperature,
+  one judgment per call) per design doc §11.3 — it is a single-shot classification/report call,
+  not a multi-turn agent loop.
 
 ---
 
-## 4. Output Specification (输出规范)
+## Output Specification
 
 Generated output package in `{output_folder}/`:
 

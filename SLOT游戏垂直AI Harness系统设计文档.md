@@ -16,7 +16,9 @@
 
 ### 1\.2 设计核心目标
 
-- 适配本地 Ollama 7B 轻量模型，实现低成本、离线可用、高稳定的AI测试流水线；
+- 适配 7B 规模轻量模型（本地 Ollama 优先，亦可切换云端同规模/更大规模模型），实现低成本、可离线、高稳定的AI测试流水线；
+
+- 明确 AI 的职责边界：仅承担 7B 模型可胜任的**简单对话交互、任务分类与推流调度、执行结果的分析报告生成**三类轻量语义任务，不承担复杂多步规划、精确数值计算等超出小模型能力范围的工作；
 
 - 通过 Harness 调度层\+Plugin代码层兜底，弥补小模型规划、记忆、格式约束短板；
 
@@ -54,7 +56,7 @@
 
 - 固定流水线编排：读取表格 → 数据清洗 → 任务封装 → 测试数据生成；
 
-- 模型调度管理：本地Ollama7B / 云端DeepSeek模型一键切换、参数管控、缓存策略调度；
+- 模型调度管理：内置统一的**多网关模型适配层**（本地 Ollama，以及 DeepSeek / OpenAI / Anthropic 等云端兼容 Provider），支持模型来源一键切换、参数管控、缓存策略调度——多网关是有意为之的可扩展性设计，便于后续接入更多模型源而不改动调度层代码（详见第5章）；
 
 - 全流程状态管控、步骤卡点、异常重试、链路追踪；
 
@@ -121,6 +123,15 @@ Skill文件永久固定为缓存前缀，本地调试、云端生产完全复用
 
     - 无权限管理、无用户角色、无业务数据菜单。
 
+> **勘误说明（Harness 登录 与 游戏环境登录 的关系）**：早期实现在 Harness 前端加入了登录页与后端账号/角色系统（`server/api/auth_router.py`、`session_manager.py` 等），初衷是希望"登录一次 Harness，测试全程无需再登录真实游戏/后台环境"。经代码核查确认：**这个假设不成立**——Harness 自身的登录态与真实游戏/后台环境的登录态是两套完全独立、互不相通的系统：
+>
+> - Harness 登录（bcrypt 密码 + session token + 角色）只控制"谁能打开这个内部工具网页"；
+> - 真正让 Selenium 自动化浏览器免于重新登录游戏/后台环境的机制，是直接借用测试人员**本机常用 Chrome 浏览器**已登录的用户配置文件（见 `server/tools/impl/testdata_verifier_tool.py` 的 Chrome profile 复用逻辑），与 Harness 账号完全无关，且只在"同一台本机、已手动登录过游戏后台"的前提下生效；借用失败时代码会直接报错，提示"请先在你平时用的 Chrome 里登录后台"——即游戏环境的登录本来就是**测试人员手动完成的**，从未被自动化。
+>
+> 既然 Harness 自身的登录/权限层**不能**带来"免登录游戏环境"的效果，就没有必要为此保留一套用户账号与角色体系——这与本节"无权限管理、无用户角色、无业务数据菜单"的原始定位是一致的。因此确定：**移除 Harness 自身的登录门槛**，打开即用；真实游戏/后台环境的登录仍由测试人员在自己的浏览器里按需手动完成，与 Harness 无关，Harness 不做、也不承诺做这件事。
+>
+> （注：本节描述的是目标状态。当前代码仍保留登录页面与后端认证机制 `server/api/auth_router.py` / `server/infra/security.py`，将在后续版本中移除以匹配此处的定位。）
+
 - **中间：核心执行画布**
 
     - 流水线节点可视化展示；
@@ -149,23 +160,37 @@ Skill文件永久固定为缓存前缀，本地调试、云端生产完全复用
 
 ---
 
-## 5\. 模型适配策略（本地7B \+ 云端双兼容）
+## 5\. 模型适配策略（统一多网关设计，本地7B为主力）
 
-### 5\.1 本地Ollama 7B模式（开发调试）
+> **勘误说明**：本文档早期版本将模型策略描述为"仅支持本地Ollama7B + 云端DeepSeek"两种固定模式。经与实现方案确认，代码层的多 Provider 网关（同时支持 Ollama、DeepSeek、OpenAI 兼容、Anthropic 兼容及自定义端点）**是有意为之的可扩展性设计，而非对原设计的偏离**。此处予以更正：模型策略的本质不是"双模式"，而是"统一网关、多源接入"，本地7B模型是当前主力与默认选项，云端/其他Provider是面向未来扩展预留的能力，不代表当前场景需要用到全部能力。
+
+### 5\.1 本地Ollama 7B模式（默认 / 开发调试）
 
 - 能力下沉：90%机械规则、流程调度、格式约束下沉代码层；
 
 - 模型参数收敛：低温参数（0\.2\-0\.3），禁止自由发挥，强制标准JSON输出；
 
-- 流程极简固定，无复杂多轮对话，规避小模型上下文丢失问题。
+- 流程极简固定，无复杂多轮对话，规避小模型上下文丢失问题；
 
-### 5\.2 云端DeepSeek模式（批量生产）
+- AI 只承担第1.2节明确的三类轻量任务（简单对话、任务分类推流、分析报告生成），不做复杂推理。
 
-- Agent\+Skill固定前缀完全复用，无需修改提示词；
+### 5\.2 云端多Provider网关模式（可选 / 按需切换）
+
+- 统一的 Provider 适配层（`plannerProvider.ts` \+ `llmGateway.ts`）屏蔽了具体云端厂商差异，支持 DeepSeek、OpenAI 兼容、Anthropic 兼容及自定义 Base URL 端点；
+
+- Agent\+Skill固定前缀完全复用，无需因切换 Provider 修改提示词；
 
 - 天然支持KV缓存，批量测试数据生成大幅降低Token成本；
 
-- 保留原有架构、流程、UI，一键无缝切换。
+- 保留原有架构、流程、UI，一键无缝切换，且新增一个云端 Provider 只需增加一条 Preset 配置，不改动 Harness 调度层代码。
+
+### 5\.3 为何采用多网关而非硬编码两个Provider
+
+- **面向扩展，而非当前必需**：当前测试场景仅需2-3个固定工作流（见第10.7节），本地7B模型已能覆盖；多网关的意义在于未来更换模型来源、接入客户自有模型API时无需重构 Harness；
+
+- **架构解耦**：模型来源变化只影响 Provider 适配层，不影响意图路由、流水线定义、执行引擎、Agent/Skill 内容，符合第9章"层与层完全解耦"的扩展原则；
+
+- **非通用能力冗余**：多网关不等于引入通用AI对话/办公能力，Provider 切换后 AI 的职责边界（简单对话、任务推流、分析报告）保持不变，不违背第1.3节"非通用AI工具"的定位。
 
 ---
 
@@ -205,7 +230,7 @@ slot-ai-harness/
 
 3. **形态纯正**：采用TraeWork极简工程桌面UI，三栏式AI专属布局，完全规避传统SaaS观感；
 
-4. **双模兼容**：本地7B免费调试、云端低成本量产，一套架构适配研发全流程；
+4. **多网关兼容**：本地7B模型免费调试为主，云端多家Provider（DeepSeek/OpenAI/Anthropic兼容等）低成本量产为辅，一套架构适配研发全流程，且预留未来扩展空间；
 
 5. **工程可沉淀**：Agent/Skill/Plugin分层解耦，测试能力可复用、可迭代、可标准化沉淀。
 
@@ -213,7 +238,7 @@ slot-ai-harness/
 
 ## 8\. 最终项目定位定稿（官方标准话术）
 
-本系统是**吸收Hermes Harness调度内核思想、采用TraeWork极简工程化桌面UI、专为SLOT游戏测试场景打造的垂直领域AI智能体调度座舱**。依托分层化Agent、标准化Skill规则、本地化Plugin工具与约束式Harness调度引擎，完美适配本地7B轻量模型稳定运行，实现测试数据智能清洗、自动化任务派发、批量测试数据生成全闭环，是轻量化、高专注度、工程化的垂直AI测试工作台，区别于通用AI办公工具与传统SaaS业务系统。
+本系统是**吸收Hermes Harness调度内核思想、采用TraeWork极简工程化桌面UI、专为SLOT游戏测试场景打造的垂直领域AI智能体调度座舱**。依托分层化Agent、标准化Skill规则、本地化Plugin工具与约束式Harness调度引擎，以7B规模模型（本地Ollama为主，多网关云端Provider为扩展补充）稳定承担简单对话、任务分类推流、分析报告生成等轻量语义任务，由预先设计好的固定工作流（Agent+Skill+Plugin组合）驱动完成测试数据智能清洗、自动化任务派发、批量测试数据生成全闭环，是轻量化、高专注度、工程化的垂直AI测试工作台，区别于通用AI办公工具与传统SaaS业务系统。
 
 ---
 
@@ -453,7 +478,9 @@ AI Agent（仅做语义判断）：
   - 生成诊断报告
 ```
 
-### 10\.3 新增测试场景完整示例：翻译文件验证
+### 10\.3 新增测试场景完整示例：翻译文件验证（架构扩展能力示例，非当前已实现场景）
+
+> 注：本节"翻译文件验证"是用于说明架构可扩展性上限的**假设性示例**，当前项目实际只需覆盖 TestData生成、游戏环境验证、日志诊断/EasyHelp检查这2-3个固定场景（见第10.7节），并未实现本示例场景。
 
 **用户需求**："验证Phoenix5游戏名在33个翻译文件中的翻译是否正确"
 
@@ -525,11 +552,28 @@ src/harness/
 | **Plugin即插即用** | 每个新测试能力 = 一个Plugin文件，注册到`ToolRegistry`即可被任何流水线调用 |
 | **Agent/Skill配置化** | 新增场景只需加`.md`文件，不改代码 |
 
+### 10\.7 当前工作流范围说明（澄清：固定工作流驱动，非AI自主编排）
+
+**当前实际需求**：项目现阶段仅需覆盖 **2-3 个固定测试场景**（TestData生成、游戏环境验证、日志诊断/EasyHelp文件检查），并非要支持无限开放的场景组合。每个场景对应一条**预先设计好的固定 Pipeline**（Agent + Skill + Plugin 的组合），这条组合在 `pipelineRegistry.ts` / `intentRouter.ts` 中声明式定义，运行前已经确定，不由 AI 临场决定。
+
+**执行模型的关键澄清**：
+
+- Harness 的 **执行引擎（ExecutionEngine）** 按 Pipeline 声明的 stage 顺序逐步调用 Plugin，AI **不参与"下一步该调用哪个工具"这个决策** —— 这一点由代码（Pipeline 定义 + 执行引擎）100%固化；
+
+- AI（7B模型）只在流水线内部的语义判断节点上发挥作用，具体只做三件事（呼应第1.2节的职责边界）：
+  1. **简单对话交互**：与用户澄清意图、追问缺失参数；
+  2. **任务推流**：对解析后的结构化数据做分类/路由判断，将其按场景要求推送到下一步骤（如"这行数据属于哪个测试分类"）；
+  3. **分析报告生成**：对 Plugin 执行结果做归纳整理，生成可读的诊断/总结文本（如验证失败原因归因、结果小结）；
+
+- 第9.5节所述的"多流水线扩展"、第10.3节的"翻译文件验证"等均为**面向未来的架构扩展能力示例**，用于说明架构的可扩展性上限，不代表当前阶段必须实现或已经实现；当前只需稳定跑通2-3条固定流水线。
+
+- 换言之：**流程调度权始终在代码（Pipeline定义 + ExecutionEngine）手里，AI 不做工具调用顺序的自主决策**，这是对第2.1节"流程调度权完全由Harness代码接管"原则在多场景架构下的具体落实，而非架构目标的变化。
+
 ---
 
-## 11\. 本地AI模型（4B）功能定位与使用规范
+## 11\. 本地/云端 AI 模型（7B规模）功能定位与使用规范
 
-### 11\.1 4B模型能力边界
+### 11\.1 7B模型能力边界
 
 | 能做好 | 做不好 |
 |--------|--------|
@@ -539,7 +583,13 @@ src/harness/
 | 从文本中提取结构化信息 | 数学计算、精确数值比较 |
 | 识别明显的翻译错误 | 细微的文化语境差异 |
 
-**核心定位**：4B模型是HARNESS的"语义传感器"，负责看和听（语义理解），但"手脚"和"大脑"（流程控制、决策、执行）全是代码。
+**核心定位**：7B模型是HARNESS的"语义传感器"，负责看和听（语义理解），但"手脚"和"大脑"（流程控制、决策、执行）全是代码。结合本项目实际场景，7B模型的职责进一步收敛为三类具体任务（与第1.2节、第10.7节保持一致）：
+
+1. **简单对话交互**：理解用户自然语言意图、澄清缺失参数，不做多轮复杂推理；
+2. **任务分类与推流**：判断一条数据/结果应归入哪个类别、路由到流水线的下一步骤；
+3. **分析报告生成**：把 Plugin 的结构化执行结果整理成简明的分析/诊断文本。
+
+超出以上三类的工作（如精确数值计算、多步骤自主规划）一律下沉到代码层完成，不交给模型判断。
 
 ### 11\.2 AI在各环节的具体职责
 
@@ -556,7 +606,7 @@ src/harness/
 └────────────────────────────────────────────────────
          ↑ 这些全是代码，AI不参与
          
-┌─ AI层（4B模型）──────────────────────────────────┐
+┌─ AI层（7B模型）──────────────────────────────────┐
 │  输入: 用户自然语言 + Sheet原始文本片段               │
 │  任务: 判断某行数据属于哪个分类                         │
 │  Prompt: "以下数据属于哪个分类？[Regular/BigWin/Bonus] │
@@ -582,7 +632,7 @@ src/harness/
 │  5. 统计通过率、生成报告框架                            │
 └────────────────────────────────────────────────────┘
 
-┌─ AI层（4B模型）──────────────────────────────────┐
+┌─ AI层（7B模型）──────────────────────────────────┐
 │                                                      │
 │  任务A: 语义一致性判断                                │
 │  输入: [{lang: "zh-CN", value: "凤凰5"},             │
@@ -611,7 +661,7 @@ src/harness/
 
 **AI占比：约30%**。代码做文件扫描和格式检查，AI做语义判断和质量评估。
 
-### 11\.3 4B模型Prompt设计要点
+### 11\.3 7B模型Prompt设计要点
 
 因为模型小，Prompt必须**极度收敛**：
 
@@ -647,7 +697,7 @@ const goodPrompt = `
 1. **角色限定**：不是"翻译专家"，而是"翻译一致性检查器"（缩小行为空间）
 2. **输出格式锁定**：给JSON Schema，不让模型自由组织语言
 3. **任务单一**：一次Prompt只做一个判断，不堆叠多个任务
-4. **Few-shot示例**：给1-2个输入输出示例，4B模型模仿能力强
+4. **Few-shot示例**：给1-2个输入输出示例，7B模型模仿能力强
 
 ### 11\.4 代码兜底策略
 
@@ -695,9 +745,9 @@ async function runTranslationCheck(files: TranslationFile[]) {
 - AI判断矛盾（如说consistent=true但issues非空）→ 代码标记为"需人工复核"
 - AI超时/失败 → 降级为纯规则检查（代码正则匹配）
 
-### 11\.5 4B模型 vs 云端大模型分工
+### 11\.5 7B本地模型 vs 云端多Provider模型分工
 
-| 任务类型 | 4B本地模型 | 云端大模型（如DeepSeek） |
+| 任务类型 | 7B本地模型 | 云端模型（DeepSeek/OpenAI/Anthropic兼容等） |
 |----------|------------|--------------------------|
 | 简单分类判断 | ✅ 胜任 | ✅ 胜任（浪费） |
 | 格式结构化输出 | ✅ 胜任（需严格Prompt） | ✅ 胜任 |
@@ -706,9 +756,9 @@ async function runTranslationCheck(files: TranslationFile[]) {
 | 批量处理（100+文件） | ✅ 免费，可并行 | ⚠️ 成本高 |
 
 **推荐策略**：
-- **开发调试阶段**：全用4B本地模型，快速迭代
-- **批量生产阶段**：简单任务用4B，复杂语义判断（如翻译质量评分）用云端大模型
-- **HARNESS自动路由**：代码根据任务复杂度自动选择模型
+- **开发调试阶段**：全用7B本地模型，快速迭代
+- **批量生产阶段**：简单任务用7B本地模型，复杂语义判断（如翻译质量评分）按需切换云端Provider
+- **HARNESS自动路由**：代码根据任务复杂度自动选择模型来源（本地7B为默认，云端为按需切换的可选网关，而非固定必选路径）
 
 ```typescript
 // 代码自动判断用哪个模型
@@ -719,7 +769,7 @@ function selectModel(task: TestTask): "local" | "cloud" {
 }
 ```
 
-### 11\.6 4B模型在HARNESS中的定位总结
+### 11\.6 7B模型在HARNESS中的定位总结
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -730,15 +780,812 @@ function selectModel(task: TestTask): "local" | "cloud" {
 │  └────────────────────────────────────────────┘  │
 │                      ↑↓ 调用                       │
 │  ┌────────────────────────────────────────────┐  │
-│  │  4B本地模型（语义传感器）                    │  │
-│  │  · 文本分类判断                              │  │
-│  │  · 语义一致性检查                            │  │
-│  │  · 简单质量评分                              │  │
-│  │  · 结构化信息提取                            │  │
+│  │  7B本地模型（语义传感器）                    │  │
+│  │  · 简单对话交互                              │  │
+│  │  · 任务分类与推流                            │  │
+│  │  · 分析报告生成                              │  │
 │  └────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────┘
 ```
 
-**一句话总结**：4B模型是HARNESS的"眼睛"和"耳朵"，负责看和听（语义理解），但"手脚"和"大脑"（流程控制、决策、执行）全是代码。这样既发挥了AI的语义能力，又规避了小模型的不可靠性。
+**一句话总结**：7B模型是HARNESS的"眼睛"和"耳朵"，负责看和听（语义理解），聚焦简单对话、任务推流、分析报告三类轻量任务；但"手脚"和"大脑"（流程控制、决策、执行）全是代码。这样既发挥了AI的语义能力，又规避了小模型的不可靠性。
 
 > （注：部分内容可能由 AI 生成）
+
+---
+---
+
+# SLOT Game Vertical AI Harness — System Design Document (English Version)
+
+> This English section is a faithful translation of the Chinese design document above. Both versions describe the same system; where the two ever appear to diverge, the Chinese version above is authoritative, since it is the working document that gets edited first.
+
+## 1. Project Overview & Core Positioning
+
+### 1.1 Project Positioning
+
+This project is a **vertical-domain AI Agent orchestration cockpit (AI Harness) built for SLOT game testing**.
+
+The technical positioning combines what we consider the best patterns in the field:
+
+- **Orchestration kernel**: Absorbs the Hermes-Agent standard Harness engineering philosophy — "strong code constraints, weak AI decision-making, controllable process, traceable execution" — as the core design principle, avoiding the randomness problems of small models.
+
+- **UI form**: Follows the TraeWork minimalist engineering desktop UI design, discarding the redundant features of general-purpose AI platforms, and focusing on efficient execution of the testing pipeline.
+
+- **Business scenario**: A **vertical AI workbench** purpose-built for SLOT game test-data generation, intelligent spreadsheet-data cleaning, automated test-task dispatch, and closed-loop batch testing — not a general-purpose AI chat tool, and not a traditional SaaS business system.
+
+### 1.2 Core Design Goals
+
+- Target a 7B-scale lightweight model (local Ollama by default, with the option to switch to a cloud model of the same or larger scale), enabling a low-cost, offline-capable, highly stable AI testing pipeline;
+
+- Clearly define the AI's scope of responsibility: it only handles the three lightweight semantic tasks a 7B model can reliably do — **simple conversational interaction, task classification/relay (dispatch), and analysis-report generation from execution results** — and does not take on complex multi-step planning, precise numeric computation, or anything else beyond a small model's capability;
+
+- Use the Harness orchestration layer + Plugin code layer as a backstop, compensating for the small model's shortcomings in planning, memory, and format adherence;
+
+- Establish a standardized Agent/Skill/Plugin layered system so that testing capability can be accumulated, reused, and iterated on;
+
+- Use a minimalist engineering UI that foregrounds AI orchestration, tool execution, and process traceability, sharply distinguishing it from a traditional SaaS backend.
+
+### 1.3 Core Differentiators (unified external messaging)
+
+Distinct from traditional SaaS systems: no plain CRUD business operations, no hard dependency on the cloud, no fixed business data tables driving the system — the core is **AI-agent orchestration and automated workflow execution**.
+
+Distinct from general-purpose AI tools: no general office/chit-chat/creative-writing bloat — 100% focused on the SLOT game testing vertical, with a highly customized, more efficient pipeline.
+
+---
+
+## 2. Overall Architecture (Hermes Harness Kernel Philosophy, Implemented)
+
+### 2.1 Architecture Philosophy (adapted for a 7B local model)
+
+Fully follows the Hermes Harness engineering core logic: **favor code over model; favor constraint over freedom; favor process over decision-making**.
+
+To avoid the local 7B model's short context, weak reasoning, format drift, and tendency to go off track, capability is deliberately layered and converged:
+
+- **Mechanical, deterministic logic** (data cleaning, deduplication, null checks, format standardization, process ordering): entirely pushed down into the Harness orchestration code + Plugin tool layer;
+
+- **Intelligent semantic logic** (semantic judgment of invalid data, structuring, task-semantic adaptation): handled by the Agent + Skill rule layer;
+
+- **Process/orchestration authority**: entirely owned by the Harness code; the AI is never allowed to autonomously reorder or dynamically alter pipeline steps.
+
+### 2.2 Four-Layer Architecture (standard industrial-grade AI Harness structure)
+
+#### Layer 1: Harness Orchestration Kernel (central layer)
+
+The system's sole commander, analogous to Hermes's core "reins" control capability, entirely code-hardened logic:
+
+- Fixed pipeline orchestration: read spreadsheet → clean data → package task → generate test data;
+
+- Model dispatch management: a built-in unified **multi-gateway model adapter layer** (local Ollama, plus DeepSeek / OpenAI-compatible / Anthropic-compatible cloud Providers), supporting one-click switching of the model source, parameter governance, and cache-strategy scheduling — the multi-gateway design is a deliberate extensibility choice, so that adding more model sources later requires no change to the orchestration layer's code (see Chapter 5 for details);
+
+- End-to-end status control, step checkpoints, exception retries, and trace logging;
+
+- Fixed prompt-prefix concatenation, to preserve cloud KV-cache hit rates and lower the cost of batch runs.
+
+#### Layer 2: Agent Role Layer (decision layer)
+
+A minimal two-Agent split, no redundant roles, adapted to the single SLOT scenario:
+
+- **Data-Cleaning Agent**: responsible for semantic validation of raw Google Sheet test data, dirty-data judgment, and structured/standardized output;
+
+- **Test-Task Adaptation Agent**: packages the cleaned, standardized data into SLOT-test-specific task structures that conform to the generator plugin's input spec.
+
+All Agent capability is defined by local `agent-xxx.md` role files — purely configuration-driven, hot-reloadable, no code changes needed.
+
+#### Layer 3: Skill Rule Layer (capability layer)
+
+Dedicated skill manuals that fix rules and constrain AI behavior, tuned for small-model stability:
+
+- skill-sheet-data-clean: SLOT-test-spreadsheet-specific cleaning, filtering, and standardization rules;
+
+- skill-task-dispatch-rule: SLOT test-task packaging, dispatch, and format-constraint rules;
+
+- skill-generator-plugin-contract: interface contract spec for the test-generation plugin.
+
+Skill files are permanently fixed as the cache prefix, fully reused across local debugging and cloud production.
+
+#### Layer 4: Plugin Local Tool Layer (execution layer)
+
+Pure-code tools that carry all the mechanical, repetitive work and backstop the small model's shortcomings:
+
+- Google Sheet Reader Plugin: handles the spreadsheet API connection, raw-data fetching, and network-exception handling;
+
+- Test-Data Generator Plugin: takes the AI's structured task and batch-generates standardized SLOT-scenario test data;
+
+- Local file, log, and artifact management tool set.
+
+---
+
+## 3. Core Workflow Pipeline (fixed closed loop)
+
+The entire flow is fixed-orchestrated by Harness code, with no AI autonomous decision steps, stably adapted to the local 7B model:
+
+**User triggers task → Harness invokes the Sheet plugin to pull raw data → Harness concatenates the fixed Agent+Skill prefix → local 7B model performs AI semantic cleaning → outputs standardized structured JSON → Harness packages the test task → invokes the generator plugin to produce SLOT test data → the full process is logged/archived, artifacts previewed**
+
+Every process step, execution order, and exception fallback is code-hardened; the AI only takes on lightweight intelligent-judgment work.
+
+---
+
+## 4. UI Design Spec (TraeWork minimalist engineering style)
+
+Fully aligned with the TraeWork desktop Harness minimalist design, discarding WorkBuddy-style general-purpose bloat, tailored to the SLOT-specific testing scenario, visually distinct from traditional SaaS at every level.
+
+### 4.1 Overall Layout: Standard AI-Harness Three-Column Layout
+
+- **Left: resource navigation panel** (a pure AI-resource system, no business menus)
+
+    - Agent role repository (cleaning Agent, task-adaptation Agent);
+
+    - Skill rule library (previewable, enable/disable, view details);
+
+    - Plugin tool set, pipeline configuration;
+
+    - No permission management, no user roles, no business-data menus.
+
+> **Errata (the relationship between Harness login and game-environment login)**: an earlier implementation added a login page and a backend account/role system to the Harness frontend (`server/api/auth_router.py`, `session_manager.py`, etc.), on the assumption that "logging into Harness once would mean never having to log into the real game/admin environment again during testing." Having checked the code, this assumption **does not hold** — Harness's own login state and the real game/admin environment's login state are two completely separate, unconnected systems:
+>
+> - Harness login (bcrypt password + session token + role) only controls "who can open this internal tool's web page";
+> - What actually spares the Selenium-automated browser from having to log into the game/admin environment again is borrowing the tester's **own regular Chrome browser's** already-logged-in user profile directly (see the Chrome-profile-reuse logic in `server/tools/impl/testdata_verifier_tool.py`) — this has nothing to do with the Harness account, and only works when the same local machine has already been manually logged into the game admin panel. When that borrowing fails, the code errors out directly, telling the user to "please log into the admin panel in your regular Chrome browser first" — in other words, logging into the game environment was always a **manual step performed by the tester**; it was never automated.
+>
+> Since Harness's own login/permission layer **cannot** deliver "no need to log into the game environment again," there is no reason to keep a user-account-and-role system for that purpose — this is consistent with this section's original positioning of "no permission management, no user roles, no business-data menus." The decision is therefore: **remove Harness's own login gate** — open it and use it directly; logging into the real game/admin environment remains something the tester does manually in their own browser as needed, unrelated to Harness — Harness does not do this, and does not claim to.
+>
+> (Note: this section describes the target state. The current code still retains the login page and backend auth mechanism — `server/api/auth_router.py` / `server/infra/security.py` — which will be removed in a later version to match the positioning described here.)
+
+- **Middle: core execution canvas**
+
+    - Visual display of pipeline nodes;
+
+    - One-click run, single-step debugging, reset capability;
+
+    - Real-time preview of test-data artifacts (a structured JSON view, not a SaaS-style table).
+
+- **Right: log & monitoring panel**
+
+    - Model inference logs, token consumption, inference latency;
+
+    - Plugin tool-call records, input/output parameter logs;
+
+    - Cache-hit statistics, execution-trace timeline, exception alerts.
+
+### 4.2 Visual & Interaction Spec
+
+- Minimalist engineering style: large corner radii, soft shadows, low-saturation tech color palette, no redundant decoration;
+
+- Foregrounds the four AI-Harness-exclusive modules: "workflow, AI reasoning, tool execution, trace logs";
+
+- Removes all traditional SaaS-style dense forms, bulk operations, data filters, and plain CRUD components;
+
+- Comes with AI-specific loading animations, node-transition animations, and tool-call "pulse" effects.
+
+---
+
+## 5. Model Adaptation Strategy (unified multi-gateway design, local 7B as the primary workhorse)
+
+> **Errata**: An earlier version of this document described the model strategy as "only local Ollama 7B + cloud DeepSeek", i.e. two fixed modes. Having confirmed this against the implementation, the multi-Provider gateway at the code layer (supporting Ollama, DeepSeek, OpenAI-compatible, Anthropic-compatible, and custom endpoints all at once) **is a deliberate extensibility design, not a deviation from the original design**. This is hereby corrected: the essence of the model strategy is not "two modes" but "a unified gateway with multiple sources." The local 7B model is the current primary and default option; cloud/other Providers are capability reserved for future expansion, and do not mean the current scenarios require all of them.
+
+### 5.1 Local Ollama 7B Mode (default / development & debugging)
+
+- Capability pushed down: 90% of mechanical rules, process orchestration, and format constraints live in the code layer;
+
+- Model parameters converged: low temperature (0.2–0.3), no free-form generation allowed, standard JSON output enforced;
+
+- The process is kept minimal and fixed, with no complex multi-turn dialogue, to avoid the small model losing context.
+
+- The AI only performs the three lightweight tasks defined in section 1.2 (simple dialogue, task classification/relay, analysis-report generation); it does not perform complex reasoning.
+
+### 5.2 Cloud Multi-Provider Gateway Mode (optional / switched on demand)
+
+- A unified Provider adaptation layer (`plannerProvider.ts` + `llmGateway.ts`) abstracts away the differences between specific cloud vendors, supporting DeepSeek, OpenAI-compatible, Anthropic-compatible, and custom Base-URL endpoints;
+
+- The fixed Agent+Skill prefix is fully reused; switching Provider requires no prompt changes;
+
+- Naturally supports KV caching, substantially lowering token cost for batch test-data generation;
+
+- The existing architecture, process, and UI are preserved, with one-click seamless switching; adding a new cloud Provider only requires one new Preset config entry, with no change to the Harness orchestration-layer code.
+
+### 5.3 Why a Multi-Gateway Design Instead of Hardcoding Two Providers
+
+- **Built for future extensibility, not a current necessity**: the current testing scenarios only require 2–3 fixed workflows (see section 10.7), which the local 7B model already covers on its own; the point of the multi-gateway design is so that changing the model source in the future, or plugging in a customer's own model API, requires no rework of the Harness;
+
+- **Architectural decoupling**: a change in model source only affects the Provider adaptation layer, and has no effect on intent routing, pipeline definitions, the execution engine, or Agent/Skill content — consistent with the "complete decoupling between layers" extensibility principle in Chapter 9;
+
+- **Not general-purpose bloat**: a multi-gateway design does not mean introducing general-purpose AI chat/office capability — after a Provider switch, the AI's scope of responsibility (simple dialogue, task relay, analysis reports) remains unchanged, so this does not violate the "not a general-purpose AI tool" positioning stated in section 1.3.
+
+---
+
+## 6. Directory Structure Spec (industrial-grade standardization)
+
+Designed to support caching strategy, layer decoupling, and long-term iteration:
+
+```Plain Text
+slot-ai-harness/
+├── agents/                # Agent role definitions (fixed cache prefix)
+│   ├── agent-sheet-reader.md
+│   └── agent-task-dispatch.md
+├── skills/                # Skill rule manuals (fixed cache prefix)
+│   ├── skill-sheet-data-clean.md
+│   ├── skill-task-dispatch-rule.md
+│   └── skill-generator-plugin-contract.md
+├── plugins/               # Local tool plugins (pure-code execution layer)
+│   ├── google_sheet_reader.py
+│   └── testdata_generator.py
+├── workflows/             # Fixed pipeline configuration
+│   └── slot-test-pipeline.yaml
+├── harness/               # Core orchestration engine
+│   ├── scheduler.py
+│   ├── model_adapter.py
+│   └── trace_logger.py
+└── frontend/              # TraeWork minimalist desktop UI
+
+```
+
+---
+
+## 7. Summary of Core Advantages (for reporting, review, and archival)
+
+1. **Advanced architecture**: absorbs the Hermes standard Harness engineering kernel, using constrained orchestration to solve the small-model deployment problem, distinct from ordinary Agent frameworks;
+
+2. **Vertical scenario focus**: purpose-built for SLOT game testing with no general-purpose bloat, giving far higher execution efficiency than a general-purpose AI platform;
+
+3. **Authentic form factor**: adopts the TraeWork minimalist engineering desktop UI, a three-column AI-exclusive layout, entirely avoiding a traditional-SaaS look and feel;
+
+4. **Multi-gateway compatible**: primarily free, local 7B-model debugging, supplemented by low-cost batch production via multiple cloud Providers (DeepSeek/OpenAI/Anthropic-compatible, etc.) — one architecture serves the whole R&D lifecycle, with room reserved for future expansion;
+
+5. **Engineering assets accumulate**: the Agent/Skill/Plugin layered decoupling means testing capability can be reused, iterated on, and standardized over time.
+
+---
+
+## 8. Final Project Positioning (official standard messaging)
+
+This system is a **vertical-domain AI-agent orchestration cockpit that absorbs the Hermes Harness orchestration-kernel philosophy, adopts the TraeWork minimalist engineering desktop UI, and is purpose-built for the SLOT game testing scenario**. Relying on a layered Agent, standardized Skill rules, localized Plugin tools, and a constraint-based Harness orchestration engine, it uses a 7B-scale model (local Ollama as the primary, multi-gateway cloud Providers as an extension) to stably handle lightweight semantic tasks — simple dialogue, task classification/relay, and analysis-report generation — while pre-designed fixed workflows (Agent+Skill+Plugin combinations) drive the full closed loop of intelligent test-data cleaning, automated task dispatch, and batch test-data generation. It is a lightweight, highly-focused, engineering-grade vertical AI testing workbench, distinct from general-purpose AI office tools and traditional SaaS business systems.
+
+---
+
+## 9. Future Extensibility Design (system iteration roadmap)
+
+This SLOT AI Harness architecture is **inherently built for horizontal expansion, pluggable capability, and scenario iteration** — it is not limited to a single "TestData generation and verification" capability. The entire layered design fully follows the industrial-grade Harness standard of **pluggability, decoupling, and extensibility**, so that a full suite of SLOT game automated-testing capability can be layered on at low cost later, with no need to rearchitect the underlying system or tear down the existing UI and orchestration logic.
+
+This chapter details: **how to add a new plugin, a new Agent skill, a new test pipeline, or a new business module**.
+
+### 9.1 Core Extensibility Principle: The Four-Layer Architecture Fully Supports Pluggable Iteration
+
+The biggest advantage of the current four-layer architecture: **layers are fully decoupled from each other; new capability is purely additive, and never requires touching existing code**
+
+- **Harness orchestration layer**: supports new pipeline nodes, new execution chains, new orchestration modes, and natively supports multiple workflows coexisting;
+
+- **Agent role layer**: supports adding specialized intelligent roles and multi-Agent collaboration, with no changes needed to the existing cleaning/generation Agent logic;
+
+- **Skill layer**: skill files can be stacked without limit, with rules groupable, reusable, and scenario-specific;
+
+- **Plugin layer**: fully pluggable design — a new tool just registers itself and can be invoked by the Harness orchestration, with zero intrusion into existing code.
+
+👉 **All expansion is purely additive; existing stable functionality is never affected**.
+
+### 9.2 Plugin Expansion (the most core, most flexible expansion method)
+
+Currently only implemented: the spreadsheet-reader plugin and the test-data-generator plugin.
+Going forward, an unlimited number of SLOT game testing plugins can be added, all **plug-and-play**:
+
+#### Expandable Plugin List (SLOT-specific)
+
+- **SLOT numeric-validation plugin**: multiplier validation, probability validation, random-value distribution compliance validation;
+
+- **Level/story testing plugin**: batch generation and validity verification of multi-scenario story data;
+
+- **Exception test-case generation plugin**: automatic construction of boundary values, invalid parameters, and exception scenarios;
+
+- **Automated report-export plugin**: test coverage, data-compliance reports, batch execution reports;
+
+- **Local log-analysis plugin**: parsing game runtime logs, exception localization, error clustering;
+
+- **Version-comparison plugin**: diffing test data across old/new versions, change-risk identification.
+
+**Expansion rule**: adding a new plugin only requires dropping it into the `plugins/` directory and registering it with the Harness orchestration entry point, after which it appears, runs, and can be included in a pipeline on the frontend canvas.
+
+### 9.3 Agent Role Expansion (multi-agent collaborative iteration)
+
+The current dual-Agent architecture can smoothly expand into a **multi-Agent collaborative testing cluster**:
+
+- **Review/Validation Agent**: dedicated to reviewing test-data validity, flagging defects, and suggesting auto-corrections;
+
+- **Scenario-Decomposition Agent**: automatically decomposes test scenarios based on SLOT gameplay and auto-assigns test cases;
+
+- **Risk-Inspection Agent**: batch-scans test data for latent risk, probability anomalies, and logical flaws;
+
+- **Report-Summary Agent**: automatically generates a test summary, issue roundup, and iteration recommendations based on the execution trace.
+
+Any new Agent only requires adding a new `agents/*.md` file; the Harness auto-loads it and the frontend auto-displays the resource.
+
+### 9.4 Continued Accumulation of the Skill Library (capability as an asset)
+
+As the business iterates, a SLOT-specific test-skill library can continue to accumulate:
+
+- SLOT probability-compliance judgment skill
+
+- SLOT multiplier-overflow validation skill
+
+- Game-specific special-feature data-validation skill
+
+- Boundary-scenario intelligent-recognition skill
+
+Skills accumulate permanently, are reusable and composable, and form a project-specific AI test knowledge base.
+
+### 9.5 Workflow/Pipeline Expansion (from a single flow → multiple scenario pipelines)
+
+Currently there is only a single "data cleaning → generation" base pipeline; going forward, multiple independent closed-loop pipelines can be added:
+
+- Fast smoke-test pipeline (lightweight, rapid validation)
+
+- Full-batch regression-test pipeline (large-scale production)
+
+- Exception-scenario dedicated test pipeline
+
+- Version-iteration comparison test pipeline
+
+The frontend canvas can support: **switching between multiple pipelines, running them independently, and isolating logs per pipeline**.
+
+### 9.6 UI Expansion Capability (the TraeWork minimalist architecture supports unlimited module stacking)
+
+The current three-column layout is a **standard, extensible canvas**:
+
+- The left resource panel automatically adapts to newly added Agents/Skills/Plugins;
+
+- The middle canvas supports new nodes and new process templates;
+
+- The right log panel supports adding specialized monitoring (validation statistics, coverage statistics, risk statistics).
+
+The UI needs no rearchitecting — only incremental new feature modules — and always stays minimalist and efficient, never becoming bloated SaaS.
+
+### 9.7 Model Capability Expansion
+
+- Supports seamlessly upgrading to a 14B/32B local large model later, for stronger semantic reasoning;
+
+- Supports connecting to multiple cloud model vendors, with automatic best-choice scheduling;
+
+- Supports fine-tuned model integration, to continuously optimize domain-specific capability for the SLOT scenario.
+
+### 9.8 Final Expansion Conclusion (for external reporting)
+
+This SLOT AI Harness **is not a one-off fixed tool, but a sustainably growing AI-testing engineering system**.
+
+It currently only completes the minimal closed loop of "basic data generation and verification." Relying on the Hermes-style layered constraint architecture and pluggable design, it can, in the future, be expanded — **with zero rearchitecting, at low cost, and incrementally** — into a full-site SLOT game AI automated-testing platform covering "data generation, intelligent validation, exception testing, regression testing, risk inspection, and automated reporting," with very strong long-term engineering extensibility and business-iteration capability.
+
+---
+
+## 10. HARNESS Framework Extension Design (multi-scenario pipeline architecture)
+
+### 10.1 Analysis of the Current Architecture's Limitations
+
+The existing HARNESS uses a **single hardcoded pipeline** pattern:
+
+```
+Fixed flow: user input → PlannerAgent(stage1) → testdata_parser → testdata_generator → zip_packager
+```
+
+**Problem**: adding a new test scenario (e.g. translation-file verification, numeric validation) requires modifying code, the prompt, and the frontend's stage enum — true pluggable expansion is not possible.
+
+### 10.2 Upgrading the Three Core HARNESS Modules
+
+Upgrading HARNESS from a "single-pipeline dispatcher" into a "multi-scenario traffic-control center":
+
+#### Module One: Intent Router
+
+**Responsibility**: parse the user's natural-language input, match it to a test scenario, and automatically load the corresponding Agent+Skill+Pipeline+Plugin combination.
+
+```typescript
+interface TestScenario {
+  id: string;                    // Unique scenario identifier
+  label: string;                 // Frontend display name
+  keywords: string[];            // Keyword-matching rules
+  agentFile: string;             // Corresponding Agent .md file
+  skills: string[];              // List of required Skill files
+  pipeline: string;              // Pipeline ID
+  requiredPlugins: string[];     // List of dependent Plugins
+}
+
+const SCENARIOS: TestScenario[] = [
+  {
+    id: "testdata_generation",
+    label: "TestData Generation",
+    keywords: ["testdata", "generate", "paytable", "sheet"],
+    agentFile: "testdata_generator_agent.md",
+    skills: ["skill-sheet-data-clean.md"],
+    pipeline: "testdata-gen-pipeline",
+    requiredPlugins: ["testdata_parser", "testdata_generator", "zip_packager"],
+  },
+  {
+    id: "translation_verification",
+    label: "Translation File Verification",
+    keywords: ["translation", "translation", "multilingual", "localization"],
+    agentFile: "translation_verifier_agent.md",
+    skills: ["skill-translation-check.md"],
+    pipeline: "translation-verify-pipeline",
+    requiredPlugins: ["file_scanner", "translation_checker"],
+  },
+  {
+    id: "game_verification",
+    label: "Game Environment Verification",
+    keywords: ["verify", "verify", "game", "spin"],
+    agentFile: "testdata_verifier_agent.md",
+    skills: [],
+    pipeline: "game-verify-pipeline",
+    requiredPlugins: ["game_verifier", "log_diagnoser"],
+  },
+];
+```
+
+**Routing strategy**: keyword rule-matching + explicit user selection as a double safeguard — routing does not rely on the AI to make the decision (avoiding small-model unreliability).
+
+#### Module Two: Pipeline Orchestrator
+
+**Responsibility**: declaratively define each scenario's execution steps, dependency relationships, and exception-handling strategy.
+
+```typescript
+interface PipelineStep {
+  id: string;
+  plugin: string;              // Name of the Plugin to invoke
+  label: string;               // Frontend display name
+  dependsOn: string[];         // Preceding steps this depends on
+  retryOnFail: boolean;        // Whether to retry on failure
+  maxRetries: number;
+}
+
+interface Pipeline {
+  id: string;
+  name: string;
+  stages: PipelineStep[][];    // 2D array: outer = stages (sequential), inner = parallel steps
+}
+
+const PIPELINES: Record<string, Pipeline> = {
+  "testdata-gen-pipeline": {
+    id: "testdata-gen-pipeline",
+    name: "TestData Generation Pipeline",
+    stages: [
+      [{ id: "parse", plugin: "testdata_parser", label: "Parse spreadsheet data", dependsOn: [], retryOnFail: true, maxRetries: 2 }],
+      [{ id: "generate", plugin: "testdata_generator", label: "Generate test data", dependsOn: ["parse"], retryOnFail: true, maxRetries: 2 }],
+      [{ id: "package", plugin: "zip_packager", label: "Package artifact", dependsOn: ["generate"], retryOnFail: false, maxRetries: 1 }],
+    ],
+  },
+  "translation-verify-pipeline": {
+    id: "translation-verify-pipeline",
+    name: "Translation Verification Pipeline",
+    stages: [
+      [{ id: "scan", plugin: "file_scanner", label: "Scan translation files", dependsOn: [], retryOnFail: true, maxRetries: 1 }],
+      [{ id: "check", plugin: "translation_checker", label: "Verify translations file by file", dependsOn: ["scan"], retryOnFail: false, maxRetries: 1 }],
+      [{ id: "report", plugin: "report_generator", label: "Generate diff report", dependsOn: ["check"], retryOnFail: false, maxRetries: 1 }],
+    ],
+  },
+};
+```
+
+#### Module Three: Execution Engine + State Machine
+
+**Responsibility**: execute step by step according to the pipeline definition, manage state transitions, and handle exceptions.
+
+```
+Execution engine (code-controlled, AI not involved):
+  for each stage in pipeline.stages:
+    for each step in stage:
+      1. Check whether all preceding dependency steps have completed
+      2. Invoke the corresponding Plugin
+      3. Record the execution result into the state machine
+      4. On failure → retry or escalate
+
+AI Agent (only performs semantic judgment):
+  - Parse user input → structured parameters
+  - Judge whether the Plugin's returned result is reasonable
+  - Generate a diagnostic report
+```
+
+### 10.3 Full Example of Adding a New Test Scenario: Translation File Verification (an architectural-extensibility example, not a currently implemented scenario)
+
+> Note: the "translation file verification" scenario in this section is a **hypothetical example** used to illustrate the upper bound of the architecture's extensibility. The project currently only needs to cover the 2–3 fixed scenarios of TestData generation, game-environment verification, and log diagnosis/EasyHelp checking (see section 10.7) — this example scenario has not been implemented.
+
+**User request**: "Verify that the game name Phoenix5 is translated correctly across 33 translation files"
+
+```
+┌─ HARNESS Intent Router ─────────────────────────
+│  Matched keyword "translation" → scenario: translation_verification │
+│  Loaded Agent: translation_verifier_agent.md          │
+│  Loaded Skill: skill-translation-check.md             │
+│  Loaded Pipeline: translation-verify-pipeline         │
+│  Checked Plugins: file_scanner, translation_checker     │
+──────────────────────────────────────────────────┘
+         ↓
+┌─ Pipeline Execution ─────────────────────────────
+│  Stage 1: file_scanner                            │
+│    → Scan all 33 translation files in the specified directory │
+│    → Extract the translated text corresponding to "Phoenix5" in each file │
+│    → Output: [{file: "zh-CN.json", value: "凤凰5"},  │
+│             {file: "ja-JP.json", value: "フェニックス5"}, ...] │
+│                                                    │
+│  Stage 2: translation_checker                      │
+│    → AI judges whether each translation is reasonable (semantic check) │
+│    → Checks terminology consistency and format compliance │
+│    → Output: pass/fail + reason                        │
+│                                                    │
+│  Stage 3: report_generator                         │
+│    → Aggregates the results, generates a diff report                           │
+│    → Output: JSON report + frontend visualization                     │
+└──────────────────────────────────────────────────┘
+```
+
+### 10.4 Frontend Adaptation Plan
+
+The left navigation panel upgrades to a **scenario selector**:
+
+```
+Sidebar:
+├── Test Scenarios (new)
+│   ├── TestData Generation
+│   ├── Translation File Verification
+│   ├── Game Environment Verification
+│   └── ... (added in the future)
+├── Plugin
+├── 🤖 Agents
+└── 📋 Task List
+```
+
+The user first picks a scenario, then enters a specific task description. HARNESS automatically loads the corresponding Agent/Skill/Pipeline/Plugin combination based on the scenario.
+
+### 10.5 HARNESS Directory Structure Upgrade
+
+```
+src/harness/
+├── intentRouter.ts        # Intent routing (scenario matching)
+├── pipelineRegistry.ts    # Pipeline definitions (declarative)
+├── executionEngine.ts     # Execution engine (state machine + step scheduling)
+├── plannerAgent.ts        # AI Agent (semantic reasoning only, no longer controls process)
+├── plannerProvider.ts     # LLM call adapter
+├── client.ts              # Backend API client
+└── sharedTypes.ts         # Type definitions
+```
+
+### 10.6 Key Design Principles
+
+| Principle | Explanation |
+|------|------|
+| **Scenario-driven, not process-driven** | The user picks a scenario → HARNESS auto-assembles Agent+Skill+Pipeline+Plugin, rather than requiring the user to understand the process steps |
+| **Declarative pipeline definitions** | Adding a new test type only requires adding one entry in `pipelineRegistry.ts` + writing the corresponding Plugin, with no change to the execution-engine code |
+| **AI does only semantics, code does the process** | The Agent no longer decides "which tool to call next" — it only judges "is this translation result reasonable." The process is hard-controlled by the `executionEngine` code |
+| **Plug-and-play Plugins** | Each new test capability = one Plugin file, registered with the `ToolRegistry` and immediately callable by any pipeline |
+| **Configuration-driven Agent/Skill** | Adding a new scenario only requires adding a `.md` file, no code changes |
+
+### 10.7 Clarification of the Current Workflow Scope (fixed-workflow-driven, not AI-autonomous orchestration)
+
+**Current actual requirement**: at this stage, the project only needs to cover **2–3 fixed test scenarios** (TestData Generation, Game Environment Verification, Log Diagnosis/EasyHelp File Checking) — it does not need to support an unlimited, open-ended combination of scenarios. Each scenario corresponds to one **pre-designed, fixed Pipeline** (an Agent + Skill + Plugin combination), declared in `pipelineRegistry.ts` / `intentRouter.ts` — this combination is fixed before runtime, and is never decided by the AI on the fly.
+
+**Key clarification of the execution model**:
+
+- The Harness's **Execution Engine** invokes Plugins step by step, in the stage order declared by the Pipeline; the AI **does not participate in the decision of "which tool to call next"** — this is 100% hardcoded by code (the Pipeline definition + the execution engine);
+
+- The AI (a 7B model) only plays a role at the semantic-judgment nodes inside the pipeline, and specifically does exactly three things (echoing the scope of responsibility in section 1.2):
+  1. **Simple conversational interaction**: clarifying intent with the user, asking follow-up questions about missing parameters;
+  2. **Task relay/dispatch**: classifying/routing parsed structured data, pushing it to the next step as the scenario requires (e.g. "which test category does this row of data belong to");
+  3. **Analysis-report generation**: summarizing a Plugin's execution results into readable diagnostic/summary text (e.g. root-cause attribution for a verification failure, a results summary);
+
+- The "multi-pipeline expansion" described in section 9.5 and the "translation file verification" example in section 10.3 are both **architectural-extensibility examples aimed at the future**, used to illustrate the upper bound of the architecture's extensibility — they do not represent something that must be, or has been, implemented at the current stage. Currently, only 2–3 fixed pipelines need to run stably.
+
+- In other words: **process-orchestration authority always stays with the code (the Pipeline definitions + the ExecutionEngine); the AI never autonomously decides the order of tool invocations**. This is the concrete implementation, under the multi-scenario architecture, of the principle in section 2.1 that "process-orchestration authority is entirely owned by the Harness code" — not a change to the architecture's goals.
+
+---
+
+## 11. Local/Cloud AI Model (7B-scale) Functional Positioning & Usage Spec
+
+### 11.1 7B Model Capability Boundaries
+
+| Good at | Not good at |
+|--------|--------|
+| Understanding the meaning of a piece of natural language | Remembering a very long context (easily lost beyond ~4K tokens) |
+| Judging whether text A and text B are semantically consistent | Complex multi-step logical reasoning |
+| Outputting JSON per a fixed template | Format tends to drift when given free rein |
+| Extracting structured information from text | Math computation, precise numeric comparison |
+| Recognizing obvious translation errors | Subtle cultural/contextual nuance |
+
+**Core positioning**: the 7B model is HARNESS's "semantic sensor" — responsible for looking and listening (semantic understanding) — while the "hands, feet, and brain" (process control, decision-making, execution) are entirely code. Given this project's actual scenarios, the 7B model's responsibility is further narrowed to three concrete tasks (consistent with sections 1.2 and 10.7):
+
+1. **Simple conversational interaction**: understanding the user's natural-language intent, clarifying missing parameters, without complex multi-turn reasoning;
+2. **Task classification & relay**: judging which category a piece of data/a result belongs to, and routing it to the next pipeline step;
+3. **Analysis-report generation**: turning a Plugin's structured execution result into concise analysis/diagnostic text.
+
+Anything beyond these three categories (e.g. precise numeric computation, autonomous multi-step planning) is always pushed down to the code layer — never left to the model's judgment.
+
+### 11.2 The AI's Specific Responsibility at Each Step
+
+#### Scenario 1: TestData Generation (existing)
+
+```
+┌─ Code layer (HARNESS execution engine) ─────────────────────────┐
+│  1. Read the raw Google Sheet text                        │
+│  2. Extract the Module ID via regex: /Module\s*ID\s*(\d+)/        │
+│  3. Clean Batch/Index via regex: /^\d+,\d+$/                    │
+│  4. Group into files per rule (Regular Wins / Big Wins / ...)    │
+│  5. Generate the XML structure (code-template concatenation)                       │
+│  6. Package the ZIP                                          │
+└────────────────────────────────────────────────────
+         ↑ All of this is code; the AI is not involved
+         
+┌─ AI layer (7B model) ──────────────────────────────────┐
+│  Input: user's natural language + a raw Sheet text snippet               │
+│  Task: judge which category a given row of data belongs to                         │
+│  Prompt: "Which category does the following data belong to? [Regular/BigWin/Bonus] │
+│         Data: {row_content}"                          │
+│  Output: {"category": "Regular Wins"}                   │
+│                                                      │
+│  Input: cleaned, structured data                              │
+│  Task: check the data's reasonableness (e.g. is the batch abnormally large)             │
+│  Output: {"valid": true, "note": ""}                    │
+└────────────────────────────────────────────────────┘
+```
+
+**AI share: ~10%.** 90% of the mechanical work is done by code; the AI only performs classification judgment and anomaly detection.
+
+#### Scenario 2: Translation File Verification (added — architectural example, see 10.3/10.7)
+
+```
+┌─ Code layer (HARNESS execution engine) ─────────────────────────┐
+│  1. Scan all .json/.xml translation files in the directory                  │
+│  2. Regex-extract the translated value for "Phoenix5" in each file           │
+│  3. Build a comparison table: {file: "zh-CN.json", value: "凤凰5"}  │
+│  4. Check format compliance (encoding, special characters, length limits)            │
+│  5. Compute the pass rate, generate a report skeleton                            │
+└────────────────────────────────────────────────────┘
+
+┌─ AI layer (7B model) ──────────────────────────────────┐
+│                                                      │
+│  Task A: semantic-consistency judgment                                │
+│  Input: [{lang: "zh-CN", value: "凤凰5"},             │
+│         {lang: "ja-JP", value: "フェニックス5"},     │
+│         {lang: "ko-KR", value: "피닉스5"}]           │
+│  Prompt: "Do all of the following translations refer to the same game name 'Phoenix5'?    │
+│         Output JSON: {consistent: bool, issues: []}"    │
+│  Output: {"consistent": true, "issues": []}             │
+│                                                      │
+│  Task B: translation-quality assessment                                  │
+│  Input: {lang: "de-DE", value: "Phönix Fünf"}         │
+│  Prompt: "Does this German translation accurately convey the meaning of 'Phoenix5'? │
+│         Score 1–5, and give a reason"                             │
+│  Output: {"score": 4, "reason": "Fünf is German for 5,       │
+│          but game names typically keep the original text or a transliteration"}                    │
+│                                                      │
+│  Task C: terminology-consistency check                                │
+│  Input: the list of all translated values across the 33 files                      │
+│  Prompt: "Check whether there is inconsistent terminology usage in the following translation list"      │
+│  Output: {"inconsistencies": [                          │
+│    {file: "fr-FR.json", issue: "Used 'Phoenix Cinq'  │
+│     instead of 'Phoenix 5' — the number should stay as an Arabic numeral"}            │
+│  ]}                                                    │
+────────────────────────────────────────────────────┘
+```
+
+**AI share: ~30%.** Code does the file scanning and format checking; the AI does the semantic judgment and quality assessment.
+
+### 11.3 Key Points of 7B-Model Prompt Design
+
+Because the model is small, the prompt must be **extremely converged/constrained**:
+
+```typescript
+// ❌ Wrong: letting the model improvise freely
+const badPrompt = `
+  You are a translation expert. Please check the quality of these translation files...
+  (The model may output an arbitrary format, or even start chatting)
+`;
+
+// ✅ Correct: enforce structured output
+const goodPrompt = `
+  You are a translation-consistency checker.
+  
+  Input: the list of translated values for "Phoenix5" across 33 translation files
+  
+  Task: determine whether there is any inconsistent translation
+  
+  Output format (strict JSON, output nothing else):
+  {
+    "consistent": true/false,
+    "issues": [
+      {"file": "filename", "value": "translated value", "reason": "reason"}
+    ]
+  }
+  
+  Begin checking:
+  [data list]
+`;
+```
+
+**Key techniques**:
+1. **Role constraint**: not "a translation expert," but "a translation-consistency checker" (narrows the behavior space)
+2. **Locked output format**: give it a JSON schema; don't let the model freely compose prose
+3. **Single task per prompt**: one prompt makes exactly one judgment; don't stack multiple tasks together
+4. **Few-shot examples**: give 1–2 input/output examples; a 7B model imitates well
+
+### 11.4 Code-Level Fallback Strategy
+
+```typescript
+// harness/executionEngine.ts
+async function runTranslationCheck(files: TranslationFile[]) {
+  // 1. Code does the deterministic work
+  const extracted = files.map(f => ({
+    file: f.name,
+    value: f.content.match(/"Phoenix5":\s*"([^"]+)"/)?.[1] ?? "",
+  }));
+  
+  // 2. AI does the semantic judgment
+  const aiResult = await callLocalLLM({
+    prompt: buildConsistencyCheckPrompt(extracted),
+    temperature: 0.2,  // Low temperature, reduces randomness
+    maxTokens: 500,    // Caps output length
+  });
+  
+  // 3. Code validates the AI's output format
+  let parsed: CheckResult;
+  try {
+    parsed = JSON.parse(aiResult);
+    if (!('consistent' in parsed)) throw new Error("format error");
+  } catch {
+    // AI output format error → retry once
+    aiResult = await callLocalLLM({ ...retryPrompt });
+    parsed = JSON.parse(aiResult);  // If it fails again, escalate the exception
+  }
+  
+  // 4. Code makes the final decision
+  const report = {
+    totalFiles: files.length,
+    aiJudgment: parsed,
+    autoFixable: parsed.issues.filter(i => isAutoFixable(i)),  // Code judges whether it can be auto-fixed
+    manualReview: parsed.issues.filter(i => !isAutoFixable(i)),
+  };
+  
+  return report;
+}
+```
+
+**Fallback strategy**:
+- AI output format error → automatically retry once
+- AI judgment is self-contradictory (e.g. says consistent=true but issues is non-empty) → code flags it as "needs manual review"
+- AI times out/fails → degrade to a pure rule-based check (code regex matching)
+
+### 11.5 Division of Labor: 7B Local Model vs. Cloud Multi-Provider Models
+
+| Task type | 7B local model | Cloud model (DeepSeek/OpenAI/Anthropic-compatible, etc.) |
+|----------|------------|--------------------------|
+| Simple classification judgment | ✅ Capable | ✅ Capable (but wasteful) |
+| Structured format output | ✅ Capable (needs a strict prompt) | ✅ Capable |
+| Complex semantic reasoning (e.g. cultural context) | ⚠️ Marginal, needs manual review | ✅ Capable |
+| Long-text summarization (>2K tokens) | ❌ Easily loses information | ✅ Capable |
+| Batch processing (100+ files) | ✅ Free, can run in parallel | ⚠️ Costly |
+
+**Recommended strategy**:
+- **Development/debugging phase**: use the 7B local model exclusively, for rapid iteration
+- **Batch production phase**: use the 7B local model for simple tasks, switch to a cloud Provider as needed for complex semantic judgment (e.g. translation-quality scoring)
+- **HARNESS auto-routing**: code automatically selects the model source based on task complexity (local 7B is the default; cloud is an optional gateway switched to on demand, not a fixed, mandatory path)
+
+```typescript
+// Code automatically decides which model to use
+function selectModel(task: TestTask): "local" | "cloud" {
+  if (task.complexity === "simple") return "local";  // Classification, format checks
+  if (task.complexity === "complex") return "cloud"; // Semantic reasoning, quality assessment
+  return "local";  // Defaults to local
+}
+```
+
+### 11.6 Summary: The 7B Model's Place in HARNESS
+
+```
+┌──────────────────────────────────────────────────┐
+│  HARNESS Execution Engine (code)                           │
+│  ┌────────────────────────────────────────────┐  │
+│  │  Process control · data cleaning · format validation · file ops    │  │
+│  │  · exception retries · report generation · state management            │  │
+│  └────────────────────────────────────────────┘  │
+│                      ↑↓ calls                       │
+│  ┌────────────────────────────────────────────┐  │
+│  │  7B local model (semantic sensor)                    │  │
+│  │  · Simple conversational interaction                              │  │
+│  │  · Task classification & relay                            │  │
+│  │  · Analysis-report generation                              │  │
+│  └────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┘
+```
+
+**One-line summary**: the 7B model is HARNESS's "eyes" and "ears" — responsible for looking and listening (semantic understanding), focused on the three lightweight tasks of simple dialogue, task relay, and analysis reporting; but the "hands, feet, and brain" (process control, decision-making, execution) are entirely code. This approach makes use of the AI's semantic capability while avoiding the unreliability of a small model.
+
+> (Note: some content may have been generated by AI.)

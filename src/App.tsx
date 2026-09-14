@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { AgentCore } from "./components/AgentCore";
@@ -8,21 +8,20 @@ import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
 import { AgentPage } from "./pages/AgentPage";
-import { LoginPage } from "./pages/LoginPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
 import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square, RefreshCw, FileText } from "lucide-react";
 import { runRealGameVerification } from "./utils/verificationEngine";
-import { harnessClient, clearAuth } from "./harness/client";
-import type { FunctionCallingSchema, TestRecordDto } from "./harness/sharedTypes";
-import { PlannerAgent, PlannerCallbacks } from "./harness/plannerAgent";
-import { routeIntent, SCENARIOS } from "./harness/intentRouter";
+import { harnessClient, coerceTestRecords } from "./harness/client";
+import type { TestRecordDto } from "./harness/sharedTypes";
+import { PlannerAgent } from "./harness/plannerAgent";
+import { ExecutionEngine, EngineCallbacks } from "./harness/executionEngine";
+import { getPipeline } from "./harness/pipelineRegistry";
+import { routeIntent, SCENARIOS, getScenarioSystemPrompt } from "./harness/intentRouter";
 
-// --- Auth Context ---
-interface AuthUser { id: string; username: string; role: string; isAdmin: boolean; }
-const AuthContext = createContext<{ user: AuthUser | null; refresh: () => Promise<void> }>({ user: null, refresh: async () => {} });
-const useAuth = () => useContext(AuthContext);
+// No login in this build (see design doc §4.1) — the app opens straight into the Workbench.
+export const App: React.FC = () => <Workbench />;
 
 const STAGE1_TASKS: Record<string, TaskItem[]> = {
   testdata_generation: [
@@ -82,45 +81,7 @@ const MODEL_OPTIONS: { label: string; value: string }[] = [
   { label: "Anthropic · claude-3-haiku", value: "claude-3-haiku" },
 ];
 
-export const App: React.FC = () => {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  const refresh = async () => {
-    try {
-      const u = await harnessClient.me();
-      setUser({ id: u.id, username: u.username, role: u.role, isAdmin: u.role === "admin" });
-    } catch {
-      setUser(null);
-    }
-  };
-
-  useEffect(() => {
-    setAuthLoading(true);
-    refresh().finally(() => setAuthLoading(false));
-  }, []);
-
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400 font-mono text-xs">
-        Validating session token...
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginPage onLoggedIn={() => { void refresh(); }} />;
-  }
-
-  return (
-    <AuthContext.Provider value={{ user, refresh }}>
-      <Workbench onLogout={() => { clearAuth(); setUser(null); }} />
-    </AuthContext.Provider>
-  );
-};
-
-const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
-  const auth = useAuth();
+const Workbench: React.FC = () => {
   const [selectedGame] = useState<SlotGameConfig>(MOCK_GAME_CONFIGS[0]);
   const [sheetUrl, setSheetUrl] = useState("");
   const [promptIntent, setPromptIntent] = useState("");
@@ -138,7 +99,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(() => loadStoredLlmConfig());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
   const [modelOpen, setModelOpen] = useState(false);
-  const [loginName, setLoginName] = useState<string>(auth.user?.username ?? "");
+  const [loginName, setLoginName] = useState<string>("");
   const [folderPath, setFolderPath] = useState<string>("");
   const [manualFolderPath, setManualFolderPath] = useState<string>("");
   const [scanningFolder, setScanningFolder] = useState(false);
@@ -151,6 +112,11 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // Test plan preview state
   const [showPreview, setShowPreview] = useState(false);
   const [plannedTests, setPlannedTests] = useState<Array<{id: string; name: string; description: string; selected: boolean}>>([]);
+
+  // ── Simple dialogue state (AI clarifies ONE missing free-text field; it never
+  // decides pipeline order — see PlannerAgent.clarify()) ──
+  const [clarifyState, setClarifyState] = useState<{ field: "rawText" | "folderPath"; question: string } | null>(null);
+  const [clarifyReply, setClarifyReply] = useState("");
 
   const chime = () => {
     if (isMuted) return;
@@ -176,31 +142,36 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     ]);
   };
 
-  const plannerCallbacks = useMemo<PlannerCallbacks>(() => ({
-    onThought: (full) => {
-      setLogs((prev) => {
-        const idx = prev.length - 1;
-        if (idx >= 0 && prev[idx].type === "THOUGHT") {
-          const cp = [...prev];
-          cp[idx] = { ...cp[idx], content: full };
-          return cp;
-        }
-        return [
-          ...prev,
-          { id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: new Date().toLocaleTimeString(), type: "THOUGHT", content: full },
-        ];
+  // Drives the fixed Pipeline (pipelineRegistry.ts) via ExecutionEngine — the engine decides
+  // step order, not the AI. These callbacks just mirror engine progress into the log panel + task list.
+  const engineCallbacks = useMemo<EngineCallbacks>(() => ({
+    onStepChange: (ctx) => {
+      setTasks((prev) => prev.map((t, i) => {
+        const step = ctx.steps[i];
+        if (!step) return t;
+        const status: TaskItem["status"] =
+          step.status === "success" ? "completed"
+          : step.status === "failed" ? "failed"
+          : (step.status === "running" || step.status === "retrying") ? "active"
+          : "pending";
+        return { ...t, status };
+      }));
+    },
+    onStepComplete: (stepId, result) => {
+      chime();
+      addLog({
+        type: "TOOL_RES",
+        toolName: stepId,
+        content: stepId,
+        detail: JSON.stringify(result.content, null, 2).slice(0, 2000),
+        status: "success",
       });
     },
-    onToolCall: (toolName, params) => addLog({ type: "TOOL_CALL", toolName, content: toolName, detail: JSON.stringify(params, null, 2), status: "running" }),
-    onToolResult: (toolName, resultSnippet, ok) => {
-      chime();
-      addLog({ type: "TOOL_RES", toolName, content: toolName, detail: resultSnippet, status: ok ? "success" : "error" });
+    onStepFail: (stepId, error) => {
+      addLog({ type: "TOOL_RES", toolName: stepId, content: stepId, detail: error, status: "error" });
     },
-    onSelfHeal: (reason) => addLog({ type: "SELF_HEAL", content: `RECOVERY: ${reason}`, status: "warning" }),
-    onHarnessEvent: (content) => addLog({ type: "HARNESS_EVENT", content }),
-    onProgress: (records) => {
-      if (records.length) setTestRecords(toFrontendRecords(records));
-    },
+    onStatusChange: () => {},
+    onLog: (message) => addLog({ type: "HARNESS_EVENT", content: message }),
   }), [isMuted]);
 
   const toFrontendRecords = (dtos: TestRecordDto[]): TestRecord[] =>
@@ -295,9 +266,97 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       return;
     }
 
-    // For other scenarios, use planner
+    // For other scenarios, use the fixed pipeline (ExecutionEngine + pipelineRegistry.ts)
     setShowPreview(false);
-    
+
+    const missing = checkMissingField(selectedScenarioId);
+    if (missing?.field === "verificationResults") {
+      setError(`Missing ${missing.message}. Run "TestData Verification" for this game first, then come back to Log Diagnosis.`);
+      return;
+    }
+    if (missing) {
+      await startClarifyFlow(missing as { field: "rawText" | "folderPath"; message: string });
+      return;
+    }
+
+    await runPipeline();
+  };
+
+  /**
+   * Deterministic, code-only precondition check per scenario — decides WHETHER a required
+   * free-text field is missing, never what to do about it. If something is missing, the AI is
+   * only used to phrase ONE clarifying question (see startClarifyFlow); the pipeline itself is
+   * still driven entirely by ExecutionEngine once the field is filled.
+   */
+  const checkMissingField = (
+    scenarioId: string,
+  ): { field: "rawText" | "folderPath" | "verificationResults"; message: string } | null => {
+    if (scenarioId === "testdata_generation") {
+      if (!/\d+\s*,\s*\d+/.test(promptIntent)) {
+        return { field: "rawText", message: "raw paytable rows in 'batch,index' format (paste the Google Sheet rows directly)" };
+      }
+    } else if (scenarioId === "easyhelp_checking") {
+      if (!folderPath.trim()) {
+        return { field: "folderPath", message: "the absolute folder path containing the HTML help files to convert" };
+      }
+    } else if (scenarioId === "log_diagnosis") {
+      if (!verificationReport?.results?.length) {
+        return { field: "verificationResults", message: "a prior TestData Verification run's results" };
+      }
+    }
+    return null;
+  };
+
+  /** AI asks ONE short clarifying question (simple dialogue interaction); bounded to a single round. */
+  const startClarifyFlow = async (missing: { field: "rawText" | "folderPath"; message: string }) => {
+    setIsGenerating(true);
+    setError(null);
+    const fallback = `Looks like I'm missing ${missing.message}. Could you provide that?`;
+    try {
+      const planner = new PlannerAgent({ ...llmConfig, selectedModel });
+      const scenarioContext = getScenarioSystemPrompt(selectedScenarioId);
+      const question = await planner.clarify(
+        scenarioContext,
+        `Missing: ${missing.message}. The user's original intent was: "${promptIntent || "(empty)"}". ` +
+          "Write ONE short, friendly question (max 2 sentences) asking the user to provide this.",
+      );
+      const q = question || fallback;
+      setClarifyState({ field: missing.field, question: q });
+      addLog({ type: "HARNESS_EVENT", content: `AI asked: ${q}` });
+    } catch (e: any) {
+      setClarifyState({ field: missing.field, question: fallback });
+      addLog({ type: "HARNESS_EVENT", content: `AI asked (fallback, LLM unavailable: ${e?.message ?? e}): ${fallback}`, status: "warning" });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  /** User answers the clarifying question. The reply is routed to the exact field that asked for
+   * it — deterministic, not reinterpreted by the AI — then the pipeline runs (single round, no
+   * open-ended back-and-forth). */
+  const handleClarifySubmit = async () => {
+    if (!clarifyState) return;
+    const reply = clarifyReply.trim();
+    addLog({ type: "HARNESS_EVENT", content: `User replied: ${reply || "(empty)"}` });
+    if (reply) {
+      if (clarifyState.field === "rawText") {
+        setPromptIntent((prev) => (prev ? `${prev}\n${reply}` : reply));
+      } else if (clarifyState.field === "folderPath") {
+        setFolderPath(reply);
+      }
+    }
+    setClarifyState(null);
+    setClarifyReply("");
+    await runPipeline();
+  };
+
+  const handleClarifyCancel = () => {
+    setClarifyState(null);
+    setClarifyReply("");
+  };
+
+  /** Drives the fixed pipeline for the currently selected scenario via ExecutionEngine. */
+  const runPipeline = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
     setError(null);
@@ -310,8 +369,14 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     abortControllerRef.current = controller;
 
     try {
+      const scenario = SCENARIOS.find((s) => s.id === selectedScenarioId);
+      const pipeline = scenario ? getPipeline(scenario.pipelineId) : undefined;
+      if (!scenario || !pipeline) {
+        throw new Error(`No fixed pipeline registered for scenario: ${selectedScenarioId}`);
+      }
+
       const plannerCfg = { ...llmConfig, selectedModel };
-      const planner = new PlannerAgent(plannerCfg, plannerCallbacks);
+      const planner = new PlannerAgent(plannerCfg);
       if (planner.complianceRisk) {
         addLog({
           type: "HARNESS_EVENT",
@@ -320,31 +385,67 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         });
       }
 
-      // Fetch tools filtered by scenario's requiredPlugins (backend does the filtering)
-      let availableTools: FunctionCallingSchema[] | undefined;
-      try {
-        const listRes = await harnessClient.listTools(selectedScenarioId);
-        availableTools = listRes.schema;
-        addLog({
-          type: "HARNESS_EVENT",
-          content: `Tools loaded for scenario: ${availableTools.length} tool(s) available`,
-        });
-      } catch (e: any) {
-        addLog({ type: "SELF_HEAL", content: `Failed to fetch tool list: ${e?.message ?? e}`, status: "warning" });
+      const executionId = await harnessClient.newExecution({
+        intent: promptIntent,
+        workflowStage: 1,
+        llmProvider: planner.providerType,
+        llmModel: selectedModel,
+      });
+
+      // Build this scenario's fixed-pipeline kickoff params from actual UI state.
+      // The pipeline (pipelineRegistry.ts) — not the AI — decides which plugin consumes what.
+      const extraParams: Record<string, unknown> = { executionId, loginName };
+      if (selectedScenarioId === "testdata_generation") {
+        extraParams.rawText = promptIntent;
+        extraParams.gamePrefix = "P5P";
+        extraParams.moduleId = "105359";
+      } else if (selectedScenarioId === "log_diagnosis") {
+        extraParams.results = verificationReport?.results ?? [];
+      } else if (selectedScenarioId === "easyhelp_checking") {
+        extraParams.sourceFolder = folderPath;
+        extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
+        extraParams.keywords = promptIntent.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
       }
 
-      const outcome = await planner.run({
-        scenarioId: selectedScenarioId,
-        intent: promptIntent,
-        sheetUrl: selectedScenarioId === 'testdata_generation' ? sheetUrl : undefined,
-        targetUrl: selectedScenarioId === 'game_verification' ? sheetUrl : undefined,
-        loginName,
-        maxCycles: 14,
-        signal: controller.signal,
-        availableTools,
-      });
-      if (!outcome.success) throw new Error(outcome.message ?? "Planner did not complete the task");
+      addLog({ type: "HARNESS_EVENT", content: `Running fixed pipeline "${pipeline.name}" (${pipeline.stages.length} stage(s))` });
+
+      const engine = new ExecutionEngine(harnessClient, engineCallbacks);
+      const finalCtx = await engine.run(pipeline, selectedScenarioId, promptIntent, extraParams, controller.signal);
+      if (finalCtx.status !== "completed") {
+        throw new Error(`Pipeline ended with status: ${finalCtx.status}`);
+      }
+
+      const stepResults = engine.getStepResults();
+
+      // testdata_generation's "parse" step emits records for the TestData Preview panel.
+      const parseOutput = stepResults.parse as { records?: Record<string, unknown>[] } | undefined;
+      if (parseOutput?.records?.length) {
+        const recs = coerceTestRecords(parseOutput.records, executionId);
+        await harnessClient.saveRecords(recs as unknown as Parameters<typeof harnessClient.saveRecords>[0]).catch(() => {});
+        setTestRecords(toFrontendRecords(recs));
+      }
+
+      // Best-effort analysis-report generation (bucket 3 of the AI's role) over the last step's
+      // result. Never blocks pipeline success if the LLM is unavailable or misconfigured.
+      const lastStage = pipeline.stages[pipeline.stages.length - 1];
+      const lastStep = lastStage[lastStage.length - 1];
+      const lastResult = stepResults[lastStep.id];
+      if (lastResult !== undefined) {
+        try {
+          const summary = await planner.summarizeStepResult(
+            getScenarioSystemPrompt(selectedScenarioId),
+            lastStep.label,
+            lastResult,
+            controller.signal,
+          );
+          if (summary) addLog({ type: "HARNESS_EVENT", content: `AI summary: ${summary}` });
+        } catch (e: any) {
+          addLog({ type: "HARNESS_EVENT", content: `AI summary unavailable: ${e?.message ?? e}`, status: "warning" });
+        }
+      }
+
       setWorkflowState("REVIEW");
+      setWorkflowStage(3);
       setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
     } catch (e: any) {
       if (e?.name === "AbortError") {
@@ -451,13 +552,9 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     setScanningFolder(true);
     setError(null);
     try {
-      // Use harnessClient to include auth token
       const res = await fetch('/api/tools/scan-testdata', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${window.sessionStorage.getItem('harness_token') ?? ''}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folder_path: pathToScan }),
       });
       console.log('[Scan] Response status:', res.status);
@@ -492,6 +589,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // ── Verification handler ──────────────────────────────────────
   const handleStartVerification = async (config: VerificationConfig) => {
     setWorkflowState("VERIFYING");
+    setWorkflowStage(4);
     setIsGenerating(true);
     setError(null);
     setLogs([]);
@@ -516,6 +614,7 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       );
       setVerificationReport(report);
       setWorkflowState("VERIFIED");
+      setWorkflowStage(5);
       addLog({ type: "HARNESS_EVENT", content: `Verification complete: ${report.passedCount}/${report.totalCases} passed (${report.passRate}%)`, status: "success" });
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -575,8 +674,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         setIsMuted={setIsMuted}
         onReset={handleReset}
         onOpenConfig={() => handleOpenModelPage()}
-        user={auth.user}
-        onLogout={onLogout}
       />
       {errorBanner}
 
@@ -745,6 +842,49 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
             </div>
           </div>
+
+          {/* ── AI Clarify Panel: simple dialogue interaction, bounded to one question ── */}
+          {clarifyState && (
+            <div className="bg-slate-900/70 border border-amber-700/40 rounded-2xl p-5 shadow-xl animate-in slide-in-from-top duration-300">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="p-1.5 rounded-lg bg-amber-950/60 border border-amber-800/50 text-amber-400">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">AI needs one more detail</span>
+              </div>
+              <div className="text-xs text-slate-200 mb-3 bg-slate-950/50 border border-slate-800 rounded-lg p-3">
+                {clarifyState.question}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={clarifyReply}
+                  onChange={(e) => setClarifyReply(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleClarifySubmit();
+                    }
+                  }}
+                  placeholder="Type your answer..."
+                  autoFocus
+                  className="flex-1 px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
+                />
+                <button
+                  onClick={handleClarifySubmit}
+                  className="px-4 h-10 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-slate-900 hover:shadow-lg hover:shadow-amber-500/20 transition"
+                >
+                  Send
+                </button>
+                <button
+                  onClick={handleClarifyCancel}
+                  className="px-3 h-10 rounded-xl text-xs text-slate-400 bg-slate-800 hover:bg-slate-700 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ── Test Plan Preview Panel ── */}
           {showPreview && (
@@ -923,7 +1063,6 @@ const Workbench: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <span className={`w-1.5 h-1.5 rounded-full ${workflowState === "GENERATING" ? "bg-cyan-400 animate-ping" : "bg-emerald-400"}`} />
             {workflowState}
           </span>
-          <span>USER: {auth.user?.username}</span>
         </div>
       </footer>
 

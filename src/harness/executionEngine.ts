@@ -24,13 +24,15 @@ export interface EngineCallbacks {
 }
 
 // ── 执行引擎 ──────────────────────────────────────────────────
-// TODO: 集成到 App.tsx 的 handleConfirmGeneration 中，
-//       根据 selectedScenarioId 查找 pipeline 并创建 ExecutionEngine 实例编排执行。
-//       当前 PlannerAgent.run() 直接驱动执行，后续应由 ExecutionEngine 统一编排。
+// 流程调度权完全在这里：按 Pipeline 声明的 stage 顺序调用 Plugin，
+// AI（PlannerAgent）不参与"下一步该调用哪个工具"的决策——那由 pipelineRegistry.ts
+// 的声明式定义决定。App.tsx 通过这个类驱动所有场景的执行。
 
 export class ExecutionEngine {
   private ctx: PipelineExecutionContext | null = null;
   private abortSignal: AbortSignal | undefined;
+  /** 每个已成功完成步骤的 result.content，供后续步骤的 buildParams 读取 */
+  private stepResults: Record<string, unknown> = {};
 
   constructor(
     private readonly client: HarnessClient,
@@ -40,6 +42,11 @@ export class ExecutionEngine {
   /** 获取当前执行上下文（只读快照） */
   getContext(): PipelineExecutionContext | null {
     return this.ctx ? { ...this.ctx, steps: [...this.ctx.steps] } : null;
+  }
+
+  /** 获取所有已完成步骤的产出（stepId → result.content），供 App.tsx 读取最终产物 */
+  getStepResults(): Record<string, unknown> {
+    return { ...this.stepResults };
   }
 
   /**
@@ -54,6 +61,7 @@ export class ExecutionEngine {
     signal?: AbortSignal,
   ): Promise<PipelineExecutionContext> {
     this.abortSignal = signal;
+    this.stepResults = {};
 
     // 初始化执行上下文
     this.ctx = {
@@ -163,6 +171,7 @@ export class ExecutionEngine {
           stepRecord.status = "success";
           stepRecord.finishedAt = Date.now();
           stepRecord.resultSnippet = this.truncate(JSON.stringify(result.content), 500);
+          this.stepResults[stepDef.id] = result.content;
           this.callbacks.onStepChange(this.ctx!);
           this.callbacks.onStepComplete(stepDef.id, result);
           this.callbacks.onLog(`Step "${stepDef.label}" succeeded`);
@@ -204,13 +213,23 @@ export class ExecutionEngine {
     }
   }
 
-  /** 构建工具调用参数，合并用户意图和额外参数 */
+  /**
+   * 构建工具调用参数：调用步骤自己声明的 buildParams（若有），
+   * 把流水线启动参数 + 前置步骤产出映射成这一个 Plugin 需要的入参。
+   * 没有声明 buildParams 的步骤退化为直接透传 extraParams（兼容旧行为）。
+   *
+   * 注意：只附加 `__execution_id` —— 这是后端 `/api/tools/execute` 唯一会显式
+   * pop() 掉的元数据 key（见 server/api/tools_router.py）。其余任何 `__xxx` 元数据
+   * 都会被 ToolPlugin.validate() 当作 unknown_param 拒绝，不要往这里加。
+   */
   private buildStepParams(stepDef: PipelineStepDef): Record<string, unknown> {
+    const extraParams = this.ctx!.extraParams;
+    const custom = stepDef.buildParams
+      ? stepDef.buildParams({ extraParams, stepResults: this.stepResults })
+      : extraParams;
     return {
-      ...this.ctx!.extraParams,
-      __step_id: stepDef.id,
-      __pipeline_id: this.ctx!.pipelineId,
-      __scenario_id: this.ctx!.scenarioId,
+      ...custom,
+      __execution_id: extraParams.executionId,
     };
   }
 

@@ -1,14 +1,42 @@
 # AGENT: Visual UI & Log Diagnosis Agent (视觉UI与日志诊断Agent)
 
-## 1. 角色与使命 (Role & Mission)
-You are the **Visual UI & Log Diagnosis Agent** (`ui_log_diagnoser_agent`).
-Your core mission is to analyze execution logs, console errors, network API responses, and DOM/Canvas screenshots during game verification to **automatically detect and generate proof of incorrect `batch/index` seed entries in original Google Sheets**.
+## ⚠️ Execution Model (read this first)
+
+This file is loaded as **domain-reference context** for the `log_diagnosis` scenario (and the
+`diagnose` step of `game-verify-pipeline`). It is **not** an autonomous multi-step executor.
+
+The `log-diagnose-pipeline` (see `src/harness/pipelineRegistry.ts`) is a single fixed step:
+
+```
+diagnose (log_diagnoser)
+```
+
+`ExecutionEngine` calls the `log_diagnoser` Plugin directly; the AI never decides whether to run
+it, and never inspects the verification results itself to produce the root-cause classification.
+Every diagnostic rule below (batch/index mismatch, out-of-bounds index, client-render bugs, etc.)
+is implemented as **deterministic code** inside `server/tools/impl/log_diagnoser_tool.py`. They
+are documented here for engineers maintaining that Plugin, not as instructions for a model to
+follow at runtime.
+
+## AI Responsibility (narrowed, per design doc §1.2 / §10.7 / §11)
+
+For this scenario, the AI is invoked for exactly one thing:
+
+- **Analysis-report generation**: turning the `log_diagnoser` Plugin's structured
+  `DiagnosticProof` array into a short, plain-language root-cause summary a QA engineer can read
+  at a glance (e.g. "3 of 6 failures trace back to Google Sheet seed errors; 1 is a client render
+  bug — see step detail for the exact rows").
+
+It never classifies a failure's root cause itself — that classification (`ORIGINAL_SHEET_DATA_ERROR`,
+`INDEX_OUT_OF_BOUNDS`, `CLIENT_RENDER_BUG`, ...) is 100% code, and the classification result is
+authoritative regardless of whether an AI summary is available.
 
 ---
 
-## 2. 诊断原理与证据链生成 (Proof Chain Generation)
+## Domain Reference: Diagnostic Rules (implemented in `log_diagnoser_tool.py`)
 
-当测试用例在真实游戏测试环境中验证失败或表现异常时，你负责提供完整的**归因归责报告（Bug Root Cause Attribution）**：
+When a test case fails or behaves unexpectedly during real-game verification, `log_diagnoser`
+builds a complete root-cause attribution proof, e.g.:
 
 ```text
 [Google Sheet Input]
@@ -21,19 +49,15 @@ Input Seed: Batch 58, Index 3
 Returned Spin Outcome: BaseGame Normal Spin (Payout: $0.00)
 Captured Canvas Screen: Regular reel layout, No Bonus Feature triggered
 
-         ▼ (Agent Cross-Examination & Diagnosis)
+         ▼ (Code-level cross-examination)
 
-[AI Evidence Proof Report]
+[Evidence Proof Report]
 Conclusion: 🚨 ORIGINAL GOOGLE SHEET DATA ENTRY ERROR
-Proof: Google Sheet entry (58, 3) is labeled as "Bonus Feature_MINI Prize", 
-       but real Game Server response and screen capture confirm seed (58, 3) 
+Proof: Google Sheet entry (58, 3) is labeled as "Bonus Feature_MINI Prize",
+       but real Game Server response and screen capture confirm seed (58, 3)
        is a BaseGame 0-payout spin.
 Action Item: Correct Google Sheet row 4 to valid Mini Prize seed (e.g. Batch 58, Index 4).
 ```
-
----
-
-## 3. 诊断匹配法则 (Diagnostic Rules)
 
 ### Rule 1: Batch & Index Mismatch Detection (种子失配诊断)
 - **现象**：Google Sheet 填写的描述为 `Bonus Feature` 或 `High Win`，但服务器返回的响应 Payload 或视觉画面显示为 `BaseGame` 或 `$0.00` 派彩。
@@ -49,7 +73,7 @@ Action Item: Correct Google Sheet row 4 to valid Mini Prize seed (e.g. Batch 58,
 
 ---
 
-## 4. 诊断报告 JSON 结构 (Diagnostic JSON Schema)
+## Diagnostic Report Schema
 
 ```json
 {

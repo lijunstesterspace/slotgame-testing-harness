@@ -31,13 +31,6 @@ RUNS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 
-def _bool(name: str, default: bool = False) -> bool:
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return v.strip().lower() in {"1", "true", "yes", "on"}
-
-
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Slot AI Harness"
@@ -51,14 +44,8 @@ class Settings:
         ).split(",")
         if o.strip()
     ])
-    admin_username: str = os.getenv("HARNESS_ADMIN_USERNAME", "admin")
-    admin_password: str = os.getenv("HARNESS_ADMIN_PASSWORD", "admin123")
-    default_tester_password: str = os.getenv("HARNESS_TESTER_PASSWORD", "test1234")
-    session_ttl_seconds: int = int(os.getenv("HARNESS_SESSION_TTL", str(60 * 60 * 8)))
     execution_run_ttl_hours: int = int(os.getenv("HARNESS_RUN_TTL_HOURS", "24"))
     max_tool_timeout_sec: int = int(os.getenv("HARNESS_MAX_TOOL_TIMEOUT", "900"))
-    enable_auth: bool = _bool("HARNESS_ENABLE_AUTH", True)
-    default_user_role: str = os.getenv("HARNESS_DEFAULT_ROLE", "tester")
 
 
 settings = Settings()

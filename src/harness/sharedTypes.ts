@@ -60,19 +60,6 @@ export interface ToolResultDto {
   artifacts: string[];
 }
 
-export interface UserDto {
-  id: string;
-  username: string;
-  role: "tester" | "admin" | string;
-  created_at?: number;
-  token?: string;
-}
-
-export interface LoginResponse {
-  session_token: string;
-  user: UserDto;
-}
-
 export type ToolCallLogType =
   | "THOUGHT"
   | "TOOL_CALL"
@@ -171,6 +158,14 @@ export interface TestScenario {
   icon: "zap" | "shield" | "bug" | "file-text" | "globe";
 }
 
+/** 单个步骤构建调用参数时可见的上下文：流水线启动参数 + 之前各步骤的产出 */
+export interface PipelineParamContext {
+  /** 启动流水线时传入的参数（用户输入、UI 状态等） */
+  extraParams: Record<string, unknown>;
+  /** 之前每个步骤成功执行后的 result.content，key 为 stepId */
+  stepResults: Record<string, unknown>;
+}
+
 /** 流水线步骤定义 */
 export interface PipelineStepDef {
   id: string;
@@ -180,6 +175,12 @@ export interface PipelineStepDef {
   dependsOn: string[];
   retryOnFail: boolean;
   maxRetries: number;
+  /**
+   * 声明式参数构建函数：把启动参数 + 前置步骤产出，映射成这个 Plugin 调用所需的入参。
+   * 新增/调整一个场景的执行只需要在这里写映射规则，不需要改 ExecutionEngine 代码，
+   * 也不需要让 AI 自己决定"这一步该传什么参数"。
+   */
+  buildParams?: (ctx: PipelineParamContext) => Record<string, unknown>;
 }
 
 /** 流水线定义 */

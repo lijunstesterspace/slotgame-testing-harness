@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Settings, RotateCcw, LogOut, Volume2, VolumeX,
+  Settings, RotateCcw, Volume2, VolumeX,
   Bot, Activity, Sparkles, Shield, CheckCircle2, Wrench, FileText, Zap
 } from 'lucide-react';
 import { WorkflowStage, WorkflowState } from '../types';
@@ -12,8 +12,6 @@ interface HeaderProps {
   setIsMuted: (v: boolean) => void;
   onReset: () => void;
   onOpenConfig: () => void;
-  user: { id: string; username: string; role: string; isAdmin: boolean } | null;
-  onLogout: () => void;
 }
 
 const STAGE_META: Record<number, { label: string; icon: React.ReactNode }> = {
@@ -31,8 +29,6 @@ export const Header: React.FC<HeaderProps> = ({
   setIsMuted,
   onReset,
   onOpenConfig,
-  user,
-  onLogout,
 }) => {
   return (
     <header className="bg-slate-900/90 border-b border-slate-800 px-5 py-2.5 flex items-center justify-between shadow-lg">
@@ -110,20 +106,6 @@ export const Header: React.FC<HeaderProps> = ({
           title="Reset workflow"
         >
           <RotateCcw className="w-3.5 h-3.5" />
-        </button>
-
-        <div className="h-5 w-px bg-slate-700 mx-1" />
-
-        <span className="text-[10px] font-mono text-slate-400">
-          {user?.username}
-        </span>
-
-        <button
-          onClick={onLogout}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-slate-800 transition"
-          title="Logout"
-        >
-          <LogOut className="w-3.5 h-3.5" />
         </button>
       </div>
     </header>

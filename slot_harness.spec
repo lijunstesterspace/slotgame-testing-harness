@@ -51,8 +51,7 @@ hidden_imports = [
     "aiosqlite",
     "sqlite3",
 
-    # ---- C 扩展 / bcrypt ----
-    "bcrypt",
+    # ---- C 扩展 ----
     "_cffi_backend",
     "cffi",
     "pycparser",
@@ -131,7 +130,6 @@ hidden_imports = [
     "server.config",
     "server.main",
     "server.api",
-    "server.api.auth_router",
     "server.api.tools_router",
     "server.api.executions_router",
     "server.api.records_router",
@@ -142,7 +140,6 @@ hidden_imports = [
     "server.infra.storage",
     "server.services",
     "server.services.execution_queue",
-    "server.services.session_manager",
     "server.tools",
     "server.tools.base",
     "server.tools.impl",
@@ -154,11 +151,10 @@ hidden_imports = [
 ]
 
 # ---------------------------------------------------------------------------
-# collect_all 辅助：将 bcrypt / _cffi_backend 的 .pyd 文件一并打包
+# collect_all 辅助：将 _cffi_backend 的 .pyd 文件一并打包
 # ---------------------------------------------------------------------------
 from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
-bcrypt_datas, bcrypt_binaries, _ = collect_all("bcrypt")
 cffi_datas, cffi_binaries, _ = collect_all("_cffi_backend")
 aiosqlite_datas, aiosqlite_binaries, _ = collect_all("aiosqlite")
 
@@ -215,8 +211,8 @@ for script_name in ("verify_testdata.py", "generate_testdata.py"):
 a = Analysis(
     [os.path.join(ROOT, "build.py")],
     pathex=[ROOT],
-    binaries=bcrypt_binaries + cffi_binaries + aiosqlite_binaries + impl_binaries,
-    datas=bcrypt_datas + cffi_datas + aiosqlite_datas + impl_datas + static_datas + env_datas + script_datas,
+    binaries=cffi_binaries + aiosqlite_binaries + impl_binaries,
+    datas=cffi_datas + aiosqlite_datas + impl_datas + static_datas + env_datas + script_datas,
     hiddenimports=hidden_imports + impl_hidden,
     hookspath=[],
     hooksconfig={},

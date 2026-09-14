@@ -6,21 +6,12 @@ from pathlib import Path
 from typing import Any
 import aiosqlite
 
-from server.config import DB_PATH, settings
+from server.config import DB_PATH
 from server.infra.logger import log
-from server.infra.security import hash_password, new_token, new_id
+from server.infra.security import new_id
 
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'tester',
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_ip TEXT
-);
 CREATE TABLE IF NOT EXISTS executions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, intent TEXT NOT NULL,
   workflow_stage INTEGER NOT NULL, status TEXT NOT NULL,
@@ -69,81 +60,6 @@ class StorageAsync:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA_SQL)
             await db.commit()
-        await self._ensure_admin_and_testers()
-
-    async def _ensure_admin_and_testers(self) -> None:
-        now = int(time.time())
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            cur = await db.execute("SELECT 1 FROM users WHERE username = ?", (settings.admin_username,))
-            exists = await cur.fetchone()
-            if not exists:
-                await db.execute(
-                    "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?,?,?,?,?)",
-                    (
-                        new_id("u"),
-                        settings.admin_username,
-                        hash_password(settings.admin_password),
-                        "admin",
-                        now,
-                    ),
-                )
-                log.info("storage.admin_user_created", user=settings.admin_username)
-            for name in ["qa-tester-1", "qa-tester-2", "qa-tester-3"]:
-                cur = await db.execute("SELECT 1 FROM users WHERE username = ?", (name,))
-                if not await cur.fetchone():
-                    await db.execute(
-                        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?,?,?,?,?)",
-                        (new_id("u"), name, hash_password(settings.default_tester_password), settings.default_user_role, now),
-                    )
-                    log.info("storage.tester_user_created", user=name)
-            await db.commit()
-
-    # ---- users ----
-    async def get_user(self, user_id: str) -> dict | None:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            cur = await db.execute("SELECT id, username, role, created_at FROM users WHERE id = ?", (user_id,))
-            row = await cur.fetchone()
-            return dict(row) if row else None
-
-    async def find_user_by_credentials(self, username: str, password: str) -> dict | None:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            cur = await db.execute("SELECT id, username, role, password_hash, created_at FROM users WHERE username = ?", (username,))
-            row = await cur.fetchone()
-            if not row:
-                return None
-            hashed = row["password_hash"]
-            from server.infra.security import verify_password
-            if not verify_password(password, hashed):
-                return None
-            d = dict(row)
-            d.pop("password_hash", None)
-            return d
-
-    # ---- sessions ----
-    async def create_session(self, user_id: str, last_ip: str | None = None) -> str:
-        token = new_token("sess")
-        now = int(time.time())
-        exp = now + settings.session_ttl_seconds
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO sessions (id, user_id, created_at, expires_at, last_ip) VALUES (?,?,?,?,?)",
-                (token, user_id, now, exp, last_ip),
-            )
-            await db.commit()
-        return token
-
-    async def get_session(self, token: str) -> dict | None:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            cur = await db.execute(
-                "SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > ?",
-                (token, int(time.time())),
-            )
-            row = await cur.fetchone()
-            return dict(row) if row else None
 
     # ---- executions ----
     async def new_execution(self, *, user_id: str, intent: str, workflow_stage: int,

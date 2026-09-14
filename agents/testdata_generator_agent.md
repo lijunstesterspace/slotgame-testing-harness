@@ -1,33 +1,42 @@
 # AGENT: TestData Generator Agent
 
-## 1. Role & Identity (角色与定位)
-You are the **TestData Generator Agent** for Slot Machine Test Automation.
-Your mission is to parse user-provided Google Sheets paytable testdata specs, execute data cleaning, schema validation, and generate standardized, game-prefixed `.testdata` XML specification files (up to 22 distinct test files per module) and package them into a ZIP archive.
+## ⚠️ Execution Model (read this first)
 
----
+This file is loaded as **domain-reference context** for the `testdata_generation` scenario. It is
+**not** an autonomous multi-step executor, and it is not a system prompt that tells a model to call
+tools on its own.
 
-## 2. System Prompt (系统提示词)
+Execution is owned entirely by the fixed pipeline `testdata-gen-pipeline`
+(see `src/harness/pipelineRegistry.ts`), driven step-by-step by `ExecutionEngine`
+(`src/harness/executionEngine.ts`):
 
-```text
-You are the TestData Generator Agent for Slot Machine QA Automation.
-Your objective is to:
-1. Parse target Google Sheets containing test case mappings (Single Spins, Double PreGen Bonus Pairs, and Bet Lines ID blocks).
-2. Clean and sanitize all input data:
-   - Extract Module ID from cell A1 (e.g. "Module ID 105359" -> "105359").
-   - Strip accidental trailing prose from Batch/Index cells (e.g. "371,0 with max meter" -> "371,0").
-   - Classify cases into Single Spin, Double PreGen (Bonus Feature) pairs, or Multi-Spin Bet Lines ID blocks.
-3. Apply standard file naming conventions with Game Code Prefix (default "P5P_"):
-   - Group Regular Wins (micro win ~ Large win) into "{GamePrefix}_Base game_Regular Wins.testdata".
-   - Group Big Wins (Big win ~ Super Win) into "{GamePrefix}_Base game_Big Wins.testdata".
-   - Group Bet Lines 0..19 into "{GamePrefix}_Base game_Betlines.testdata".
-   - Dedicated files for each specific Feature Trigger (e.g. "{GamePrefix}_Bonus Feature_MINI Prize.testdata").
-4. Construct standard XML nodes (<Spin>, <PreGen>, <Feature>) according to schema requirements.
-5. Package all 22 output files into a ZIP archive with manifest metadata.
+```
+parse (testdata_parser)  →  generate (testdata_generator)  →  package (zip_packager)
 ```
 
+`ExecutionEngine` calls these three Plugins in this exact order, every time, with no exceptions.
+The AI never decides which Plugin runs next, never emits a `<tool_call>`, and never decides "is
+this task done yet" — all of that is code. All of the parsing / classification / file-naming / XML
+rules described below are already implemented as **deterministic Python code** inside
+`server/tools/impl/testdata_parser_tool.py` and `server/tools/impl/testdata_generator_tool.py`.
+They are documented here for engineers maintaining those Plugins, not as instructions for a model
+to follow at runtime.
+
+## AI Responsibility (narrowed, per design doc §1.2 / §10.7 / §11)
+
+For this scenario, the AI (`PlannerAgent`) is invoked for exactly one thing:
+
+- **Analysis-report generation**: after the pipeline finishes, `PlannerAgent.summarizeStepResult()`
+  turns the `zip_packager` step's structured result into a short, plain-language note for the user
+  (e.g. "22 files generated, N total records, packaged as outcome_testdata.zip").
+
+It never reads the Google Sheet, never decides file grouping, and never constructs XML — all of
+that is 100% code, and the pipeline never blocks on the AI step (if the LLM is unavailable, the
+pipeline still completes; only the summary note is skipped).
+
 ---
 
-## 3. Data Cleaning & Parsing Rules (数据清洗与解析规范)
+## Domain Reference: Data Cleaning & Parsing Rules (implemented in `testdata_parser_tool.py`)
 
 ### Rule 1: Module ID Extraction
 - Read cell `A1`. Match regex `Module\s*ID\s*#?:?\s*(\d+)`. Extract integer module ID (e.g., `105359`).
@@ -68,7 +77,7 @@ Your objective is to:
 
 ---
 
-## 4. Output Specification (输出规范)
+## Output Specification
 
 Generated ZIP package: `outcome_testdata_module_{moduleID}.zip` containing **22 distinct `.testdata` files**:
 1. `P5P_Base game_Betlines.testdata`

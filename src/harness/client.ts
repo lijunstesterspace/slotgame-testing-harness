@@ -2,12 +2,10 @@ import type {
   FunctionCallingSchema,
   HarnessSseEvent,
   LLMAuditReq,
-  LoginResponse,
   SkillInfoDto,
   ToolInfoDto,
   ToolListResponse,
   ToolResultDto,
-  UserDto,
   ExecutionRow,
   ExecutionDetailResponse,
   TestRecordDto,
@@ -16,25 +14,13 @@ import type {
 
 const DEFAULT_BASE = import.meta.env.VITE_HARNESS_API_BASE ?? "";
 
-function readToken(): string {
-  return window.sessionStorage.getItem("harness_token") ?? "";
-}
-
-export function saveToken(tok: string) {
-  window.sessionStorage.setItem("harness_token", tok);
-}
-
-export function clearAuth() {
-  window.sessionStorage.removeItem("harness_token");
-}
-
+// No login in this build (see design doc §4.1) — every request is just a plain fetch,
+// no auth header attached.
 async function jsonFetch<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = readToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(init.headers as Record<string, string> | undefined ?? {}),
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
   const url = `${DEFAULT_BASE}${path}`;
   const res = await fetch(url, { ...init, headers });
   const text = await res.text();
@@ -70,24 +56,6 @@ export class HarnessClient {
     this.base = base;
   }
 
-  // ---- auth ----
-  async login(username: string, password: string): Promise<LoginResponse> {
-    const res = await jsonFetch<LoginResponse>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ username, password }),
-    });
-    if (res?.session_token) saveToken(res.session_token);
-    return res;
-  }
-
-  async me(): Promise<UserDto> {
-    return jsonFetch<UserDto>("/api/auth/me", { method: "GET" });
-  }
-
-  logout() {
-    clearAuth();
-  }
-
   // ---- tools ----
   async listTools(scenarioId?: string): Promise<{ tools: ToolInfoDto[]; schema: FunctionCallingSchema[] }> {
     const qs = scenarioId ? `?scenario_id=${encodeURIComponent(scenarioId)}` : "";
@@ -120,6 +88,24 @@ export class HarnessClient {
   }
 
   // ---- executions ----
+  async newExecution(opts: {
+    intent: string;
+    workflowStage?: number;
+    llmProvider?: string | null;
+    llmModel?: string | null;
+  }): Promise<string> {
+    const res = await jsonFetch<{ execution_id: string }>("/api/executions/new", {
+      method: "POST",
+      body: JSON.stringify({
+        intent: opts.intent,
+        workflow_stage: opts.workflowStage ?? 1,
+        llm_provider: opts.llmProvider ?? null,
+        llm_model: opts.llmModel ?? null,
+      }),
+    });
+    return res.execution_id;
+  }
+
   async listExecutions(page = 1, size = 20): Promise<{ items: ExecutionRow[]; page: number; size: number }> {
     return jsonFetch(`/api/executions/mine?page=${page}&size=${size}`);
   }
@@ -129,9 +115,7 @@ export class HarnessClient {
   }
 
   streamExecution(eid: string, cb: HarnessStreamCallback): () => void {
-    const token = readToken();
-    // EventSource cannot carry custom headers, pass token via ?token= query param (backend SSE already supports query token auth)
-    const url = `${this.base}/api/executions/stream/${encodeURIComponent(eid)}?token=${encodeURIComponent(token)}`;
+    const url = `${this.base}/api/executions/stream/${encodeURIComponent(eid)}`;
     const es = new EventSource(url, { withCredentials: false });
 
     const onMsg = (type: string) => (e: MessageEvent) => {
@@ -178,3 +162,22 @@ export class HarnessClient {
 
 // singleton
 export const harnessClient = new HarnessClient();
+
+/** Coerce raw plugin-output records (e.g. testdata_parser's `records`) into TestRecordDto[]. */
+export function coerceTestRecords(arr: Record<string, unknown>[], executionId: string): TestRecordDto[] {
+  return arr.map((r, i) => ({
+    id: (r.id as string) ?? `rec-${executionId}-${i}`,
+    execution_id: (r.execution_id as string) ?? executionId,
+    user_id: (r.user_id as string) ?? null,
+    case_name: String(r.case_name ?? `Case ${i + 1}`),
+    format_type: (r.format_type === "DOUBLE_PREGEN" ? "DOUBLE_PREGEN" : "SINGLE") as "SINGLE" | "DOUBLE_PREGEN",
+    module_id: String(r.module_id ?? "105359"),
+    base_batch: Number(r.base_batch ?? 1),
+    base_index: Number(r.base_index ?? 1),
+    bonus_batch: r.bonus_batch != null ? Number(r.bonus_batch) : null,
+    bonus_index: r.bonus_index != null ? Number(r.bonus_index) : null,
+    file_name: (r.file_name as string) ?? null,
+    xml_snippet: String(r.xml_snippet ?? (r as Record<string, unknown>).xml ?? ""),
+    created_at: (r.created_at as number) ?? Date.now(),
+  }));
+}

@@ -127,10 +127,15 @@ export function routeIntent(userInput: string): RouteResult | null {
 }
 
 /**
- * Compose the full System Prompt for a scenario:
- *   1. Agent role definition (from agents/*.md)
+ * Compose the read-only "domain context" for a scenario, from:
+ *   1. Agent role definition (from agents/*.md) — domain knowledge only, no tool-calling instructions
  *   2. Skill rules (from skills/*.md) — behavior constraints for the small model
- *   3. Tool call format instructions
+ *
+ * This context is NOT a tool-calling system prompt. Execution order is owned entirely by
+ * ExecutionEngine + pipelineRegistry.ts (see design doc §10.7); the AI never decides which
+ * plugin runs next. This context is only fed to PlannerAgent's narrow helper methods
+ * (`clarify` / `summarizeStepResult`) so their dialogue/report output stays grounded in the
+ * scenario's domain rules.
  */
 export function getScenarioSystemPrompt(scenarioId: string): string {
   const parts: string[] = [];
@@ -138,7 +143,7 @@ export function getScenarioSystemPrompt(scenarioId: string): string {
   // ─ Part 1: Agent role & rules ──
   const agentMd = AGENT_CONTENT[scenarioId];
   if (agentMd) {
-    parts.push("=== AGENT ROLE & RULES ===");
+    parts.push("=== AGENT ROLE & DOMAIN RULES (reference only, not tool-calling instructions) ===");
     parts.push(agentMd.trim());
     parts.push("");
   }
@@ -156,13 +161,6 @@ export function getScenarioSystemPrompt(scenarioId: string): string {
       }
     }
   }
-
-  // ── Part 3: Tool call format (universal) ──
-  parts.push("=== TOOL CALL FORMAT ===");
-  parts.push("When calling a tool, output exactly:");
-  parts.push('<tool_call><name>tool_name</name><params>{"key": "value"}</params></tool_call>');
-  parts.push("After all tasks are complete, output: <task_complete />");
-  parts.push("If the task fails, output: <task_complete success=\"false\" reason=\"...\" />");
 
   const prompt = parts.join("\n\n");
 

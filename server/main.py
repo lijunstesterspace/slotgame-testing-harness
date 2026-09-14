@@ -92,7 +92,6 @@ shared = SharedDeps()
 
 # NOTE: routers 模块级执行 `from server.main import shared`，
 # 必须在 shared 定义之后再导入，否则部分初始化的模块会导致 ImportError。
-from server.api.auth_router import router as auth_router  # noqa: E402
 from server.api.tools_router import router as tools_router  # noqa: E402
 from server.api.executions_router import router as executions_router  # noqa: E402
 from server.api.records_router import router as records_router  # noqa: E402
@@ -122,7 +121,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
 app.include_router(tools_router)
 app.include_router(executions_router)
 app.include_router(records_router)

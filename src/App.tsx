@@ -11,7 +11,7 @@ import { AgentPage } from "./pages/AgentPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, Loader2, ChevronDown, FolderOpen, ArrowUp, Square, RefreshCw, FileText } from "lucide-react";
+import { AlertCircle, Sparkles, Loader2, ChevronDown, ArrowUp, Square, RefreshCw, FileText, Plus } from "lucide-react";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { harnessClient, coerceTestRecords } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
@@ -101,11 +101,19 @@ const Workbench: React.FC = () => {
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>("");
   const [folderPath, setFolderPath] = useState<string>("");
-  const [manualFolderPath, setManualFolderPath] = useState<string>("");
-  const [scanningFolder, setScanningFolder] = useState(false);
+  const [uploadingFolder, setUploadingFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderUploadInputRef = useRef<HTMLInputElement>(null);
+  // Attach ("+") for testdata_generation: read a local paytable text/CSV file client-side and
+  // fold its content into the intent box — no backend round-trip needed for this one.
+  const rawTextUploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingRawText, setUploadingRawText] = useState(false);
+  // Attach ("+") for log_diagnosis: load a previously-saved verification-results JSON file,
+  // so diagnosis isn't only possible right after a same-session TestData Verification run.
+  const diagnosisUploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingDiagnosis, setUploadingDiagnosis] = useState(false);
+  const [uploadedDiagnosisResults, setUploadedDiagnosisResults] = useState<Record<string, unknown>[] | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
@@ -301,8 +309,8 @@ const Workbench: React.FC = () => {
         return { field: "folderPath", message: "the absolute folder path containing the HTML help files to convert" };
       }
     } else if (scenarioId === "log_diagnosis") {
-      if (!verificationReport?.results?.length) {
-        return { field: "verificationResults", message: "a prior TestData Verification run's results" };
+      if (!uploadedDiagnosisResults?.length && !verificationReport?.results?.length) {
+        return { field: "verificationResults", message: "a prior TestData Verification run's results (attach a saved results JSON via + , or run TestData Verification first)" };
       }
     }
     return null;
@@ -424,7 +432,7 @@ const Workbench: React.FC = () => {
         extraParams.gamePrefix = "P5P";
         extraParams.moduleId = "105359";
       } else if (selectedScenarioId === "log_diagnosis") {
-        extraParams.results = verificationReport?.results ?? [];
+        extraParams.results = uploadedDiagnosisResults ?? verificationReport?.results ?? [];
       } else if (selectedScenarioId === "easyhelp_checking") {
         extraParams.sourceFolder = folderPath;
         extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
@@ -512,6 +520,10 @@ const Workbench: React.FC = () => {
     setSheetUrl("");
     setError(null);
     setSelectedScenarioId("testdata_generation");
+    setFolderPath("");
+    setTestdataFiles([]);
+    setSelectedTestdataFiles([]);
+    setUploadedDiagnosisResults(null);
   };
 
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
@@ -523,72 +535,40 @@ const Workbench: React.FC = () => {
 
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
-  // ── Folder selection (general-purpose, used by multiple scenarios) 
-  const handleFolderSelect = () => folderInputRef.current?.click();
-
-  const handleFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = (e.target.files as any)?.[0];
-    if (!file) return;
-    
-    // In browsers, we can't get the absolute path from file picker
-    // We use webkitRelativePath to show the folder structure
-    const relativePath = file.webkitRelativePath || '';
-    if (relativePath) {
-      const folderName = relativePath.split('/')[0];
-      setFolderPath(folderName);
-      setTestdataFiles([]);
-      setSelectedTestdataFiles([]);
-      // Show instruction to paste full path
-      setError(`Folder "${folderName}" selected. Please paste the full path in the input box (e.g., C:\\Users\\...\\${folderName}) and click Scan.`);
-    }
-    e.target.value = '';
-  };
-
   const handleOpenAgentPage = () => setPage("agent");
 
-  // Scan folder using manual path input
-  const handleScanFolder = async () => {
-    if (!manualFolderPath.trim()) {
-      setError("Please enter a folder path");
-      return;
-    }
-    const pathToScan = manualFolderPath.trim();
-    console.log('[Scan] Requesting scan for path:', pathToScan);
-    setFolderPath(pathToScan);
-    setScanningFolder(true);
+  // ── Folder upload (easyhelp_checking): browsers never expose a folder's absolute path, only
+  // its files' *content* (plus each file's relative path via webkitRelativePath). So we upload
+  // the content and let the backend recreate the subdir/index.html structure at a real path —
+  // no manual path typing, no "please paste the path" system alert. ──
+  const handleSelectFolderUpload = () => folderUploadInputRef.current?.click();
+
+  const handleFolderFilesChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadingFolder(true);
     setError(null);
     try {
-      const res = await fetch('/api/tools/scan-testdata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: pathToScan }),
-      });
-      console.log('[Scan] Response status:', res.status);
+      const form = new FormData();
+      for (const f of Array.from(files)) {
+        form.append("files", f, (f as any).webkitRelativePath || f.name);
+      }
+      const res = await fetch("/api/tools/upload-folder", { method: "POST", body: form });
       if (res.ok) {
         const data = await res.json();
-        console.log('[Scan] Response data:', data);
-        setTestdataFiles(data.files || []);
-        // Auto-select all files by default
-        setSelectedTestdataFiles(data.files || []);
-        if (data.files?.length === 0) {
-          setError(`No .testdata files found in: ${pathToScan}. Make sure the folder contains .testdata XML files.`);
-        } else {
-          setError(null);
+        setFolderPath(data.folder || "");
+        if (!data.count) {
+          setError("No files were recognized (expected a folder containing subfolders with index.html).");
         }
       } else {
-        const err = await res.json().catch(() => ({ detail: 'Scan failed' }));
-        console.error('[Scan] Error:', err);
-        setError(`Scan failed: ${err.detail || 'Folder not found or inaccessible'}`);
-        setTestdataFiles([]);
-        setSelectedTestdataFiles([]);
+        const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+        setError(`Upload failed: ${err.detail ?? "Unknown error"}`);
       }
-    } catch (e: any) {
-      console.error('[Scan] Exception:', e);
-      setError(`Network error: ${e?.message ?? 'Unknown error'}. Is the backend server running?`);
-      setTestdataFiles([]);
-      setSelectedTestdataFiles([]);
+    } catch (err: any) {
+      setError(`Network error: ${err?.message ?? "Unknown error"}. Is the backend server running?`);
     } finally {
-      setScanningFolder(false);
+      setUploadingFolder(false);
+      e.target.value = "";
     }
   };
 
@@ -631,6 +611,76 @@ const Workbench: React.FC = () => {
       e.target.value = "";
     }
   };
+
+  // ── Raw-text file upload (testdata_generation): purely client-side — a local paytable
+  // text/CSV file's content is just folded into the intent box, no backend round-trip needed. ──
+  const handleSelectRawTextFile = () => rawTextUploadInputRef.current?.click();
+
+  const handleRawTextFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingRawText(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      setPromptIntent((prev) => (prev.trim() ? `${prev}\n${text}` : text));
+    } catch (err: any) {
+      setError(`Failed to read file: ${err?.message ?? "Unknown error"}`);
+    } finally {
+      setUploadingRawText(false);
+      e.target.value = "";
+    }
+  };
+
+  // ── Verification-results file upload (log_diagnosis): lets diagnosis run from a saved
+  // report, not only right after a same-session TestData Verification run. ──
+  const handleSelectDiagnosisFile = () => diagnosisUploadInputRef.current?.click();
+
+  const handleDiagnosisFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingDiagnosis(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const results = Array.isArray(parsed) ? parsed : parsed?.results;
+      if (!Array.isArray(results)) {
+        throw new Error("Expected a JSON array of results, or an object with a \"results\" array");
+      }
+      setUploadedDiagnosisResults(results);
+    } catch (err: any) {
+      setError(`Failed to read results file: ${err?.message ?? "Unknown error"}`);
+    } finally {
+      setUploadingDiagnosis(false);
+      e.target.value = "";
+    }
+  };
+
+  /** The "+" attach button is a persistent, general "import test data" affordance — same
+   * position/style in every scenario — but what it lets you attach depends on what that
+   * scenario's fixed pipeline actually consumes. */
+  const handleAttachClick = () => {
+    if (selectedScenarioId === "game_verification") handleSelectTestdataFiles();
+    else if (selectedScenarioId === "easyhelp_checking") handleSelectFolderUpload();
+    else if (selectedScenarioId === "log_diagnosis") handleSelectDiagnosisFile();
+    else handleSelectRawTextFile(); // testdata_generation (and any future scenario's default)
+  };
+
+  const attaching = uploadingTestdata || uploadingFolder || uploadingRawText || uploadingDiagnosis;
+  const attachBadgeCount =
+    selectedScenarioId === "game_verification" ? testdataFiles.length
+    : selectedScenarioId === "easyhelp_checking" ? (folderPath ? 1 : 0)
+    : selectedScenarioId === "log_diagnosis" ? (uploadedDiagnosisResults?.length ?? 0)
+    : 0;
+  const attachTitle =
+    selectedScenarioId === "game_verification"
+      ? (testdataFiles.length > 0 ? `${testdataFiles.length} .testdata file(s) attached — click to change` : "Attach .testdata file(s) to verify")
+    : selectedScenarioId === "easyhelp_checking"
+      ? (folderPath ? "Folder attached — click to change" : "Attach the folder containing your help file subdirectories")
+    : selectedScenarioId === "log_diagnosis"
+      ? (uploadedDiagnosisResults ? `${uploadedDiagnosisResults.length} result(s) attached — click to change` : "Attach a saved verification-results JSON file")
+      : "Attach a local paytable text/CSV file";
 
   // ── Verification handler ──────────────────────────────────────
   const handleStartVerification = async (config: VerificationConfig) => {
@@ -800,101 +850,61 @@ const Workbench: React.FC = () => {
               {/* Bottom row: Folder button + Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {selectedScenarioId === 'game_verification' ? (
-                    <>
-                      {/* Direct multi-file upload: browser only ever gives us file *content*,
-                          never an absolute path, so we upload it — no manual path typing. */}
-                      <button
-                        type="button"
-                        onClick={handleSelectTestdataFiles}
-                        disabled={uploadingTestdata}
-                        className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
-                          testdataFiles.length > 0
-                            ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
-                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
-                        }`}
-                        title="Select .testdata file(s) to verify"
-                      >
-                        {uploadingTestdata ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <FolderOpen className="w-3.5 h-3.5" />
-                        )}
-                        <span className="max-w-[220px] truncate">
-                          {testdataFiles.length > 0 ? `${testdataFiles.length} file(s) selected` : 'Select .testdata files'}
-                        </span>
-                      </button>
-                      <input
-                        ref={testdataUploadInputRef}
-                        type="file"
-                        className="hidden"
-                        multiple
-                        accept=".testdata"
-                        onChange={handleTestdataFilesChosen}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      {/* Folder selection button - opens folder picker for reference */}
-                      <button
-                        type="button"
-                        onClick={handleFolderSelect}
-                        className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
-                          folderPath
-                            ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
-                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
-                        }`}
-                        title="Select folder to see structure (then paste full path below)"
-                      >
-                        {scanningFolder ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <FolderOpen className="w-3.5 h-3.5" />
-                        )}
-                        <span className="max-w-[120px] truncate">{folderPath || 'Browse'}</span>
-                      </button>
-                      <input
-                        ref={folderInputRef}
-                        type="file"
-                        className="hidden"
-                        onChange={handleFolderChange}
-                        {...({ webkitdirectory: '', directory: '' } as any)}
-                      />
-
-                      {/* Manual folder path input */}
-                      <input
-                        type="text"
-                        value={manualFolderPath}
-                        onChange={(e) => setManualFolderPath(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleScanFolder();
-                          }
-                        }}
-                        placeholder="Paste full path, e.g., C:\\Users\\...\\features"
-                        className="flex-1 min-w-[250px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleScanFolder}
-                        disabled={scanningFolder || !manualFolderPath.trim()}
-                        className={`flex items-center gap-1.5 px-4 h-10 rounded-xl border text-xs font-medium transition-all ${
-                          scanningFolder
-                            ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
-                            : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:border-emerald-500/70'
-                        }`}
-                        title="Scan folder for .testdata files"
-                      >
-                        {scanningFolder ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <FolderOpen className="w-3.5 h-3.5" />
-                        )}
-                        <span>Scan</span>
-                      </button>
-                    </>
-                  )}
+                  {/* "+" attach: a persistent, general "import test data" affordance — same
+                      position/style in every scenario (including future ones). What it opens
+                      depends on what the current scenario's fixed pipeline consumes; browsers
+                      never expose an absolute file/folder path, so every path below uploads
+                      actual content instead of asking the user to type one. */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={handleAttachClick}
+                      disabled={attaching}
+                      className={`flex items-center justify-center w-10 h-10 rounded-full border transition-all ${
+                        attachBadgeCount > 0
+                          ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
+                          : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                      }`}
+                      title={attachTitle}
+                    >
+                      {attaching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    </button>
+                    {attachBadgeCount > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-slate-950 text-[9px] font-bold flex items-center justify-center">
+                        {selectedScenarioId === 'easyhelp_checking' ? '✓' : attachBadgeCount}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    ref={testdataUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    accept=".testdata"
+                    onChange={handleTestdataFilesChosen}
+                  />
+                  <input
+                    ref={folderUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    onChange={handleFolderFilesChosen}
+                    {...({ webkitdirectory: '', directory: '' } as any)}
+                  />
+                  <input
+                    ref={rawTextUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".txt,.csv,.tsv,.paytable"
+                    onChange={handleRawTextFileChosen}
+                  />
+                  <input
+                    ref={diagnosisUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".json"
+                    onChange={handleDiagnosisFileChosen}
+                  />
 
                   {/* Preview/Generate or Stop button */}
                   <button

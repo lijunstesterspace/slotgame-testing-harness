@@ -31,10 +31,6 @@ class ExecuteAsyncReq(BaseModel):
     execution_id: str | None = None
 
 
-class ScanTestdataReq(BaseModel):
-    folder_path: str
-
-
 @router.get("/list")
 async def list_tools(
     scenario_id: str | None = Query(None, description="Filter tools by scenario's requiredPlugins"),
@@ -124,31 +120,11 @@ async def execute_async(req: ExecuteAsyncReq, request: Request, user=Depends(req
     return {"ok": True, "execution_id": eid}
 
 
-@router.post("/scan-testdata")
-async def scan_testdata_files(req: ScanTestdataReq, user=Depends(require_user())):
-    """Scan a folder for .testdata XML files and return their paths + basic info."""
-    folder = Path(req.folder_path)
-    if not folder.exists() or not folder.is_dir():
-        raise HTTPException(status_code=400, detail=f"Folder not found: {req.folder_path}")
-
-    files = []
-    for f in sorted(folder.glob("*.testdata")):
-        stat = f.stat()
-        files.append({
-            "name": f.name,
-            "path": str(f.resolve()),
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified": stat.st_mtime,
-        })
-    return {"folder": str(folder.resolve()), "count": len(files), "files": files}
-
-
 @router.post("/upload-testdata")
 async def upload_testdata_files(files: list[UploadFile] = File(...), user=Depends(require_user())):
     """Accept .testdata files uploaded directly from the browser — no server-side folder path
-    required. Files are staged into a fresh temp directory so Selenium (which needs a real path
-    to hand to a native file-upload dialog) can reference them, exactly like scan-testdata's
-    output. Returns the same {folder, count, files} shape as /scan-testdata."""
+    required, and no manual path typing. Files are staged into a fresh temp directory so Selenium
+    (which needs a real path to hand to a native file-upload dialog) can reference them."""
     from server.config import RUNS_DIR
     import uuid
 
@@ -170,6 +146,38 @@ async def upload_testdata_files(files: list[UploadFile] = File(...), user=Depend
         })
 
     return {"folder": str(upload_dir.resolve()), "count": len(saved), "files": saved}
+
+
+@router.post("/upload-folder")
+async def upload_folder(files: list[UploadFile] = File(...), user=Depends(require_user())):
+    """Accept a whole folder's worth of files uploaded via a <input webkitdirectory> picker —
+    no server-side folder path typed by the user. The frontend sends each file's relative path
+    (from File.webkitRelativePath) as the multipart filename; this endpoint recreates that
+    subdirectory structure under a fresh staging directory (dropping only the synthetic top-level
+    folder name the browser prepends), since e.g. html_to_text_converter needs a real
+    source_folder containing <subdir>/index.html files."""
+    from server.config import RUNS_DIR
+    import uuid
+
+    upload_dir = (RUNS_DIR / "uploads" / uuid.uuid4().hex).resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_count = 0
+    for f in files:
+        raw = (f.filename or "").replace("\\", "/")
+        # Drop the browser's synthetic top-level folder name; keep subdir/filename only.
+        # Also drop ".." segments so a crafted filename can't escape upload_dir.
+        parts = [p for p in raw.split("/") if p and p != ".."]
+        if len(parts) < 2:
+            continue
+        dest = (upload_dir / Path(*parts[1:])).resolve()
+        if upload_dir not in dest.parents:
+            continue  # defense in depth against path traversal
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(await f.read())
+        saved_count += 1
+
+    return {"folder": str(upload_dir), "count": saved_count}
 
 
 # ---------------------------------------------------------------------------

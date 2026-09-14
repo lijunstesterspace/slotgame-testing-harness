@@ -2,10 +2,12 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from server.config import RUNS_DIR
 from server.infra.security import require_user
 from server.main import shared
 from server.infra.storage import StorageAsync
@@ -110,6 +112,22 @@ async def new_execution(req: NewExecutionReq, user=Depends(require_user())):
                                       status="RUNNING",
                                       llm_provider=req.llm_provider, llm_model=req.llm_model)
     return {"execution_id": eid}
+
+
+@router.get("/runs/{execution_id}/{tool_name}/{filename:path}")
+async def download_run_file(execution_id: str, tool_name: str, filename: str, user=Depends(require_user())):
+    """Serve a file a Plugin wrote into its own work_dir (RUNS_DIR/<execution_id>/<tool_name>/...) —
+    e.g. testdata_verifier's standalone report.html, which previously had no download route at
+    all and just sat on disk unreachable from the UI."""
+    base = (RUNS_DIR / execution_id / tool_name).resolve()
+    target = (base / filename).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_filename")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file_not_found")
+    return FileResponse(target, filename=target.name)
 
 
 # ---- helpers ----

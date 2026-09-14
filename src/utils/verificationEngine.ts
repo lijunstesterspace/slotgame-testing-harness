@@ -73,6 +73,7 @@ export async function runRealGameVerification(
   // Extract verifier output
   let totalSummary = { passed: 0, failed: 0, total: 0 };
   let allParsedCases: any[] = [];
+  let reportUrl: string | undefined;
   try {
     const snippet = lastCall?.result_snippet ?? "";
     if (snippet) {
@@ -86,6 +87,7 @@ export async function runRealGameVerification(
             total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
           };
           if (Array.isArray(inner.cases)) allParsedCases = inner.cases;
+          if (typeof inner.report_url === "string") reportUrl = inner.report_url;
         }
       }
     }
@@ -165,6 +167,7 @@ export async function runRealGameVerification(
     executedAt: new Date().toISOString(),
     results,
     aiDiagnosis,
+    reportUrl,
   };
 }
 

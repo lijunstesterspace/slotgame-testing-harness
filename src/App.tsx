@@ -11,7 +11,7 @@ import { AgentPage } from "./pages/AgentPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
-import { AlertCircle, Sparkles, Loader2, ChevronDown, ArrowUp, Square, RefreshCw, FileText, Plus } from "lucide-react";
+import { AlertCircle, Sparkles, Loader2, ChevronDown, ArrowUp, Square, RefreshCw, FileText, Plus, Folder } from "lucide-react";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { harnessClient, coerceTestRecords } from "./harness/client";
 import type { TestRecordDto } from "./harness/sharedTypes";
@@ -105,6 +105,9 @@ const Workbench: React.FC = () => {
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
+  // easyhelp_checking's "Add file(s)" alternative: loose HTML files with no folder structure —
+  // each gets a synthetic subdir derived from its filename (see uploadFilesAsFolder).
+  const helpFilesFlatUploadInputRef = useRef<HTMLInputElement>(null);
   // Attach ("+") for testdata_generation: read a local paytable text/CSV file client-side and
   // fold its content into the intent box — no backend round-trip needed for this one.
   const rawTextUploadInputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +117,10 @@ const Workbench: React.FC = () => {
   const diagnosisUploadInputRef = useRef<HTMLInputElement>(null);
   const [uploadingDiagnosis, setUploadingDiagnosis] = useState(false);
   const [uploadedDiagnosisResults, setUploadedDiagnosisResults] = useState<Record<string, unknown>[] | null>(null);
+  // game_verification's "Add folder" alternative: pick an entire directory of .testdata files
+  // at once instead of multi-selecting them (same upload-testdata endpoint either way).
+  const testdataFolderUploadInputRef = useRef<HTMLInputElement>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
@@ -542,23 +549,22 @@ const Workbench: React.FC = () => {
   // the content and let the backend recreate the subdir/index.html structure at a real path —
   // no manual path typing, no "please paste the path" system alert. ──
   const handleSelectFolderUpload = () => folderUploadInputRef.current?.click();
+  const handleSelectHelpFilesFlat = () => helpFilesFlatUploadInputRef.current?.click();
 
-  const handleFolderFilesChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  /** Shared by both easyhelp_checking upload modes — only how each file's relative path is
+   * derived differs (a real folder pick already has one; loose files get a synthetic one). */
+  const uploadFilesAsFolder = async (files: FileList, filenameFor: (f: File) => string) => {
     setUploadingFolder(true);
     setError(null);
     try {
       const form = new FormData();
-      for (const f of Array.from(files)) {
-        form.append("files", f, (f as any).webkitRelativePath || f.name);
-      }
+      for (const f of Array.from(files)) form.append("files", f, filenameFor(f));
       const res = await fetch("/api/tools/upload-folder", { method: "POST", body: form });
       if (res.ok) {
         const data = await res.json();
         setFolderPath(data.folder || "");
         if (!data.count) {
-          setError("No files were recognized (expected a folder containing subfolders with index.html).");
+          setError("No files were recognized (expected help files with index.html, or loose HTML files).");
         }
       } else {
         const err = await res.json().catch(() => ({ detail: "Upload failed" }));
@@ -568,8 +574,23 @@ const Workbench: React.FC = () => {
       setError(`Network error: ${err?.message ?? "Unknown error"}. Is the backend server running?`);
     } finally {
       setUploadingFolder(false);
-      e.target.value = "";
     }
+  };
+
+  const handleFolderFilesChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    await uploadFilesAsFolder(files, (f) => (f as any).webkitRelativePath || f.name);
+    e.target.value = "";
+  };
+
+  const handleHelpFilesFlatChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    // No real folder structure — synthesize one so the backend's "drop the first segment,
+    // keep subdir/filename" rule still lands each file at <stem>/index.html.
+    await uploadFilesAsFolder(files, (f) => `upload/${f.name.replace(/\.[^/.]+$/, "")}/index.html`);
+    e.target.value = "";
   };
 
   // ── TestData file upload (game_verification): the browser gives us file *content*, never an
@@ -658,13 +679,23 @@ const Workbench: React.FC = () => {
   };
 
   /** The "+" attach button is a persistent, general "import test data" affordance — same
-   * position/style in every scenario — but what it lets you attach depends on what that
-   * scenario's fixed pipeline actually consumes. */
-  const handleAttachClick = () => {
+   * position/style in every scenario. Clicking it opens a small menu (à la Claude's "+") with
+   * "Add file(s)" / "Add folder"; which underlying picker each one opens depends on what the
+   * current scenario's fixed pipeline actually consumes. */
+  const folderModeAvailable = selectedScenarioId === "game_verification" || selectedScenarioId === "easyhelp_checking";
+
+  const handleAttachFileMode = () => {
+    setAttachMenuOpen(false);
     if (selectedScenarioId === "game_verification") handleSelectTestdataFiles();
-    else if (selectedScenarioId === "easyhelp_checking") handleSelectFolderUpload();
+    else if (selectedScenarioId === "easyhelp_checking") handleSelectHelpFilesFlat();
     else if (selectedScenarioId === "log_diagnosis") handleSelectDiagnosisFile();
     else handleSelectRawTextFile(); // testdata_generation (and any future scenario's default)
+  };
+
+  const handleAttachFolderMode = () => {
+    setAttachMenuOpen(false);
+    if (selectedScenarioId === "game_verification") testdataFolderUploadInputRef.current?.click();
+    else if (selectedScenarioId === "easyhelp_checking") handleSelectFolderUpload();
   };
 
   const attaching = uploadingTestdata || uploadingFolder || uploadingRawText || uploadingDiagnosis;
@@ -675,9 +706,9 @@ const Workbench: React.FC = () => {
     : 0;
   const attachTitle =
     selectedScenarioId === "game_verification"
-      ? (testdataFiles.length > 0 ? `${testdataFiles.length} .testdata file(s) attached — click to change` : "Attach .testdata file(s) to verify")
+      ? (testdataFiles.length > 0 ? `${testdataFiles.length} .testdata file(s) attached — click to change` : "Attach .testdata file(s) or a folder to verify")
     : selectedScenarioId === "easyhelp_checking"
-      ? (folderPath ? "Folder attached — click to change" : "Attach the folder containing your help file subdirectories")
+      ? (folderPath ? "Folder attached — click to change" : "Attach help files or a folder")
     : selectedScenarioId === "log_diagnosis"
       ? (uploadedDiagnosisResults ? `${uploadedDiagnosisResults.length} result(s) attached — click to change` : "Attach a saved verification-results JSON file")
       : "Attach a local paytable text/CSV file";
@@ -858,7 +889,7 @@ const Workbench: React.FC = () => {
                   <div className="relative">
                     <button
                       type="button"
-                      onClick={handleAttachClick}
+                      onClick={() => setAttachMenuOpen((o) => !o)}
                       disabled={attaching}
                       className={`flex items-center justify-center w-10 h-10 rounded-full border transition-all ${
                         attachBadgeCount > 0
@@ -874,6 +905,31 @@ const Workbench: React.FC = () => {
                         {selectedScenarioId === 'easyhelp_checking' ? '✓' : attachBadgeCount}
                       </span>
                     )}
+                    {attachMenuOpen && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setAttachMenuOpen(false)} />
+                        <div className="absolute bottom-full left-0 mb-2 z-20 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden py-1">
+                          <button
+                            type="button"
+                            onClick={handleAttachFileMode}
+                            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800 transition text-left"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-slate-400" />
+                            Add file(s)
+                          </button>
+                          {folderModeAvailable && (
+                            <button
+                              type="button"
+                              onClick={handleAttachFolderMode}
+                              className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800 transition text-left"
+                            >
+                              <Folder className="w-3.5 h-3.5 text-slate-400" />
+                              Add folder
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                   <input
                     ref={testdataUploadInputRef}
@@ -884,12 +940,28 @@ const Workbench: React.FC = () => {
                     onChange={handleTestdataFilesChosen}
                   />
                   <input
+                    ref={testdataFolderUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    onChange={handleTestdataFilesChosen}
+                    {...({ webkitdirectory: '', directory: '' } as any)}
+                  />
+                  <input
                     ref={folderUploadInputRef}
                     type="file"
                     className="hidden"
                     multiple
                     onChange={handleFolderFilesChosen}
                     {...({ webkitdirectory: '', directory: '' } as any)}
+                  />
+                  <input
+                    ref={helpFilesFlatUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    accept=".html,.htm"
+                    onChange={handleHelpFilesFlatChosen}
                   />
                   <input
                     ref={rawTextUploadInputRef}

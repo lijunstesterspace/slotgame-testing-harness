@@ -705,6 +705,17 @@ class TestdataVerifierTool(ToolPlugin):
             )
             artifacts.append(str(output.resolve()))
 
+            # report_html above is an absolute local path — not directly downloadable from the
+            # UI. report_url is the same file served through the API (see executions_router.py's
+            # /runs/{execution_id}/{tool_name}/{filename} route), for an actual "Download HTML
+            # Report" button in the frontend.
+            report_url = None
+            try:
+                rel = Path(report_path).resolve().relative_to(Path(ctx.work_dir).resolve())
+                report_url = f"/api/executions/runs/{ctx.execution_id}/testdata_verifier/{rel.as_posix()}"
+            except ValueError:
+                pass
+
             return ToolResult(
                 success=passed_count == total,
                 content={
@@ -712,6 +723,7 @@ class TestdataVerifierTool(ToolPlugin):
                     "failed": total - passed_count,
                     "passRate": round(passed_count / total * 100, 1) if total else 0,
                     "report_html": report_path,
+                    "report_url": report_url,
                     "files_processed": len(testdata_files_list),
                     "cases": [
                         {"spinIndex": rec["spinIndex"], "stage": rec["stage"],

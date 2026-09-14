@@ -115,6 +115,9 @@ export interface VerificationReport {
   executedAt: string;
   results: VerificationResult[];
   aiDiagnosis?: AIDiagnosisResult;
+  /** Server-relative URL for the standalone HTML verification report (with embedded
+   * screenshots), if the backend produced one — see testdata_verifier_tool.py's report_url. */
+  reportUrl?: string;
 }
 
 export interface AIDiagnosisResult {

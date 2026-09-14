@@ -49,14 +49,20 @@ class SerialExecutionQueue(ExecutionQueue):
 
             result = await plugin.execute(params, ctx)
 
+            # NOTE: this is stored as-is and re-fetched later as the *actual data channel* for
+            # async tool results (see verificationEngine.ts's runRealGameVerification, which has
+            # no other way to get testdata_verifier's output back). It must NOT be truncated —
+            # a single failure/bonus screenshot's base64 payload alone is tens of KB, far past
+            # any "preview snippet" length, and a truncated cut mid-JSON silently fails to parse
+            # on the frontend, producing an all-zero report despite the tool having genuinely run.
             snippet: str | None = None
             if isinstance(result.content, (dict, list)):
                 try:
-                    snippet = json.dumps(result.content, ensure_ascii=False)[:2000]
+                    snippet = json.dumps(result.content, ensure_ascii=False)
                 except Exception:
-                    snippet = str(result.content)[:2000]
+                    snippet = str(result.content)
             elif result.content is not None:
-                snippet = str(result.content)[:2000]
+                snippet = str(result.content)
 
             await self._storage.complete_tool_call(
                 tc_id, success=result.success, result_snippet=snippet,

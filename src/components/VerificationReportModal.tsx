@@ -15,7 +15,8 @@ import {
   Brain,
   Lightbulb,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Download
 } from 'lucide-react';
 import { VerificationReport } from '../types';
 import { diagnoseVerificationResult } from '../utils/logVisionDiagnoser';
@@ -401,13 +402,25 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
 
         {/* Footer Toolbar */}
         <div className="bg-slate-950 px-6 py-3 border-t border-slate-800 flex items-center justify-between">
-          <button
-            onClick={onReRun}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-            Re-run Verification & Diagnosis
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onReRun}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+              Re-run Verification & Diagnosis
+            </button>
+            {report.reportUrl && (
+              <a
+                href={report.reportUrl}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-1.5"
+                title="Download the standalone HTML report (with embedded screenshots)"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                Download HTML Report
+              </a>
+            )}
+          </div>
 
           <button
             onClick={onClose}

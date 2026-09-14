@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from server.config import RUNS_DIR
+from server.infra import cancellation
 from server.infra.security import require_user
 from server.main import shared
 from server.infra.storage import StorageAsync
@@ -112,6 +113,20 @@ async def new_execution(req: NewExecutionReq, user=Depends(require_user())):
                                       status="RUNNING",
                                       llm_provider=req.llm_provider, llm_model=req.llm_model)
     return {"execution_id": eid}
+
+
+@router.post("/{eid}/cancel")
+async def cancel_execution(eid: str, user=Depends(require_user())):
+    """Stop a running execution. Only takes effect for tools that registered a cancel callback
+    (see server/infra/cancellation.py) — currently just testdata_verifier's Selenium session.
+    The execution's own exception handling (not this endpoint) is what finalizes its status once
+    the cancelled call unwinds, so this only reports whether a cancellable task was found."""
+    storage: StorageAsync = shared.storage
+    row = await storage.get_execution(eid)
+    if row is None or row["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    cancelled = cancellation.request_cancel(eid)
+    return {"ok": cancelled}
 
 
 @router.get("/runs/{execution_id}/{tool_name}/{filename:path}")

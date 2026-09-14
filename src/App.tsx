@@ -122,6 +122,10 @@ const Workbench: React.FC = () => {
   const testdataFolderUploadInputRef = useRef<HTMLInputElement>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Set as soon as a game_verification run's execution_id is known (see runRealGameVerification's
+  // onStarted callback) so handleStop has something to send a real cancel request for — that
+  // flow has no AbortController of its own since the actual work runs server-side (Selenium).
+  const verificationExecutionIdRef = useRef<string | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("testdata_generation");
   
   // Test plan preview state
@@ -506,6 +510,13 @@ const Workbench: React.FC = () => {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    if (verificationExecutionIdRef.current) {
+      const eid = verificationExecutionIdRef.current;
+      addLog({ type: "HARNESS_EVENT", content: "Stop requested — cancelling the running browser verification...", status: "warning" });
+      harnessClient.cancelExecution(eid).catch((e: any) => {
+        addLog({ type: "HARNESS_EVENT", content: `Cancel request failed: ${e?.message ?? e}`, status: "warning" });
+      });
+    }
   };
 
   const handleRegenerate = () => {
@@ -737,7 +748,8 @@ const Workbench: React.FC = () => {
             detail: result.errorMessage ?? "OK",
             status: result.passed ? "success" : "error",
           });
-        }
+        },
+        (executionId) => { verificationExecutionIdRef.current = executionId; }
       );
       setVerificationReport(report);
       setWorkflowState("VERIFIED");
@@ -749,6 +761,7 @@ const Workbench: React.FC = () => {
       addLog({ type: "HARNESS_EVENT", content: `Verification failed: ${e?.message ?? e}`, status: "error" });
     } finally {
       setIsGenerating(false);
+      verificationExecutionIdRef.current = null;
     }
   };
 

@@ -56,6 +56,39 @@ def _derive_admin_testdata_url(game_url: str) -> str:
     return f"{parsed.scheme}://{admin_host}/TestData"
 
 
+def _force_kill_driver(driver) -> None:
+    """Hard-kill the browser session for cancellation.
+
+    driver.quit() waits for the browser to respond over its normal control channel — this does
+    NOT interrupt an in-flight blocked call. Measured directly: a driver.get() stuck on an
+    unreachable host ran to its own ~20s OS-level network timeout regardless of quit() being
+    called from another thread while it was blocked. Killing chromedriver's OS process instead
+    breaks the underlying connection immediately, which does interrupt it (~3s in the same test).
+
+    `/T` (tree-kill) is required, not optional: chromedriver spawns the actual Chrome process as
+    a child, and killing only chromedriver orphans that Chrome window running (and consuming
+    memory) indefinitely instead of closing it — confirmed by inspecting the process tree.
+    """
+    import platform
+    import subprocess
+    pid = None
+    try:
+        pid = driver.service.process.pid
+    except Exception:
+        pass
+    if pid and platform.system() == "Windows":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=5)
+            return
+        except Exception:
+            pass
+    # Non-Windows, or taskkill unavailable: best effort via the normal (non-instant) path.
+    try:
+        driver.quit()
+    except Exception:
+        pass
+
+
 def _parse_testdata(filepath: Path) -> list[dict]:
     """Parse .testdata XML and return a list of expected spin records.
 
@@ -434,10 +467,21 @@ class TestdataVerifierTool(ToolPlugin):
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
+        """Selenium's calls below (driver.get, time.sleep, execute_script, ...) are all
+        synchronous and block the calling thread for the whole verification run (minutes).
+        Running that directly in this coroutine would freeze the *entire* asyncio event loop —
+        no other request, including a user's "stop" request, could be served until it finished.
+        Offloading to a worker thread keeps the server responsive so cancellation can actually
+        reach this execution (see server/infra/cancellation.py)."""
+        import asyncio
+        return await asyncio.to_thread(self._run_verification_sync, params, ctx)
+
+    def _run_verification_sync(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.common.by import By
         from server.infra.logger import log
+        from server.infra import cancellation
 
         # ── Extract params (support single file + batch) ──────────
         testdata_files_list: list[Path] = []
@@ -505,14 +549,24 @@ class TestdataVerifierTool(ToolPlugin):
         if user_data_dir.exists():
             default_profile = user_data_dir / "Default"
             if default_profile.exists():
-                temp_profile = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
-                local_state = user_data_dir / "Local State"
-                if local_state.exists():
-                    shutil.copy2(local_state, temp_profile / "Local State")
-                (temp_profile / "Default").symlink_to(default_profile)
-                chrome_options.add_argument(f"--user-data-dir={temp_profile}")
-                chrome_options.add_argument("--profile-directory=Default")
-                log.info("verifier.chrome_profile_symlinked", path=str(temp_profile))
+                candidate = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
+                try:
+                    local_state = user_data_dir / "Local State"
+                    if local_state.exists():
+                        shutil.copy2(local_state, candidate / "Local State")
+                    (candidate / "Default").symlink_to(default_profile)
+                    chrome_options.add_argument(f"--user-data-dir={candidate}")
+                    chrome_options.add_argument("--profile-directory=Default")
+                    temp_profile = candidate
+                    log.info("verifier.chrome_profile_symlinked", path=str(candidate))
+                except OSError as e:
+                    # Symlink creation needs Developer Mode or admin rights on Windows
+                    # (SeCreateSymbolicLinkPrivilege) — without it this raises WinError 1314.
+                    # Degrade to a fresh, unauthenticated Chrome profile instead of crashing the
+                    # whole verification run; the admin-page login check further below will
+                    # surface the resulting "not logged in" state on its own.
+                    shutil.rmtree(candidate, ignore_errors=True)
+                    log.warning("verifier.chrome_profile_symlink_failed", error=str(e))
             else:
                 log.warning("verifier.chrome_profile_not_found", path=str(default_profile))
         else:
@@ -524,6 +578,12 @@ class TestdataVerifierTool(ToolPlugin):
             chrome_options.add_argument("--ignore-certificate-errors")
 
         driver = webdriver.Chrome(options=chrome_options)
+        # Registering driver.quit as the cancel callback right after the session exists is what
+        # actually makes "Stop" work: calling it from the main event loop while this worker
+        # thread is blocked mid Selenium-call invalidates the session, which raises in this
+        # thread and unwinds through the except/finally below — there is no other way to
+        # interrupt a synchronous Selenium call from outside its own thread.
+        cancellation.register(ctx.execution_id, lambda: _force_kill_driver(driver))
         driver.maximize_window()
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
 
@@ -546,7 +606,10 @@ class TestdataVerifierTool(ToolPlugin):
             driver.get(admin_url)
             admin_host = urlparse(admin_url).hostname or ""
             for waited in range(30):
-                if urlparse(driver.current_url).hostname or "" == admin_host:
+                # Parenthesize explicitly: `X or "" == Y` parses as `X or ("" == Y)`, which is
+                # truthy for almost any non-empty hostname — the intended equality check never
+                # actually ran, so a failed/redirected login was never detected here.
+                if (urlparse(driver.current_url).hostname or "") == admin_host:
                     break
                 time.sleep(1)
             else:
@@ -738,6 +801,7 @@ class TestdataVerifierTool(ToolPlugin):
         except Exception as e:
             return ToolResult(success=False, error=f"verification_error:{type(e).__name__}:{e}")
         finally:
+            cancellation.unregister(ctx.execution_id)
             try:
                 driver.quit()
             except Exception:

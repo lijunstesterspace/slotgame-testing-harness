@@ -106,6 +106,12 @@ export class HarnessClient {
     return res.execution_id;
   }
 
+  /** Requests cancellation of a running execution (currently only effective for
+   * testdata_verifier's Selenium session — see server/infra/cancellation.py). */
+  async cancelExecution(eid: string): Promise<{ ok: boolean }> {
+    return jsonFetch(`/api/executions/${encodeURIComponent(eid)}/cancel`, { method: "POST" });
+  }
+
   async listExecutions(page = 1, size = 20): Promise<{ items: ExecutionRow[]; page: number; size: number }> {
     return jsonFetch(`/api/executions/mine?page=${page}&size=${size}`);
   }

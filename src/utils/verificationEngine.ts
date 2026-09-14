@@ -13,7 +13,8 @@ import { loadStoredLlmConfig, streamUniversalLlmChat } from "./llmGateway";
 export async function runRealGameVerification(
   records: TestRecord[],
   config: VerificationConfig,
-  onProgress?: (completedCount: number, currentResult: VerificationResult) => void
+  onProgress?: (completedCount: number, currentResult: VerificationResult) => void,
+  onStarted?: (executionId: string) => void
 ): Promise<VerificationReport> {
   const startTime = Date.now();
   const results: VerificationResult[] = [];
@@ -41,6 +42,7 @@ export async function runRealGameVerification(
     spin_delay_sec: spinDelayMs / 1000,
   });
   const eid = prepared.execution_id;
+  onStarted?.(eid);
 
   await new Promise<void>((resolve) => {
     const unsub = harnessClient.streamExecution(eid, (evt, payload) => {

@@ -3,7 +3,7 @@ import asyncio
 import os
 import re
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from server.infra.security import require_user
@@ -141,6 +141,35 @@ async def scan_testdata_files(req: ScanTestdataReq, user=Depends(require_user())
             "modified": stat.st_mtime,
         })
     return {"folder": str(folder.resolve()), "count": len(files), "files": files}
+
+
+@router.post("/upload-testdata")
+async def upload_testdata_files(files: list[UploadFile] = File(...), user=Depends(require_user())):
+    """Accept .testdata files uploaded directly from the browser — no server-side folder path
+    required. Files are staged into a fresh temp directory so Selenium (which needs a real path
+    to hand to a native file-upload dialog) can reference them, exactly like scan-testdata's
+    output. Returns the same {folder, count, files} shape as /scan-testdata."""
+    from server.config import RUNS_DIR
+    import uuid
+
+    upload_dir = RUNS_DIR / "uploads" / uuid.uuid4().hex
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for f in files:
+        name = Path(f.filename or "").name  # strip any path components for safety
+        if not name.lower().endswith(".testdata"):
+            continue
+        content = await f.read()
+        dest = upload_dir / name
+        dest.write_bytes(content)
+        saved.append({
+            "name": dest.name,
+            "path": str(dest.resolve()),
+            "size_kb": round(len(content) / 1024, 1),
+        })
+
+    return {"folder": str(upload_dir.resolve()), "count": len(saved), "files": saved}
 
 
 # ---------------------------------------------------------------------------

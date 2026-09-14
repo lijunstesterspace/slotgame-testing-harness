@@ -1,5 +1,12 @@
 import type { LlmProviderConfig, LlmProviderType, LlmModelEntry } from "../types";
 
+// Design doc §5.1: the 7B model must run at a converged low temperature, not free-form —
+// every LLM call in this gateway shares these two knobs so nobody has to remember to set
+// them per call site. (server/tools/impl/helpfile_analyzer_tool.py has its own separate
+// direct Ollama call and sets its own equivalents; this constant is for the frontend gateway.)
+export const HARNESS_LLM_TEMPERATURE = 0.3;
+export const HARNESS_LLM_MAX_OUTPUT_TOKENS = 512;
+
 export const STORAGE_KEY = "slot_harness_llm_config";
 export const MODELS_LIST_KEY = "slot_harness_llm_models";
 
@@ -206,7 +213,12 @@ export async function streamUniversalLlmChat(
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: config.selectedModel, messages, stream: true }),
+      body: JSON.stringify({
+        model: config.selectedModel,
+        messages,
+        stream: true,
+        options: { temperature: HARNESS_LLM_TEMPERATURE, num_predict: HARNESS_LLM_MAX_OUTPUT_TOKENS },
+      }),
       signal,
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
@@ -240,7 +252,8 @@ export async function streamUniversalLlmChat(
         model: config.selectedModel,
         system: systemMsg,
         messages: userOnly,
-        max_tokens: 4096,
+        max_tokens: HARNESS_LLM_MAX_OUTPUT_TOKENS,
+        temperature: HARNESS_LLM_TEMPERATURE,
         stream: true,
       }),
       signal,
@@ -280,7 +293,13 @@ export async function streamUniversalLlmChat(
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: config.selectedModel, messages, stream: true }),
+      body: JSON.stringify({
+        model: config.selectedModel,
+        messages,
+        stream: true,
+        temperature: HARNESS_LLM_TEMPERATURE,
+        max_tokens: HARNESS_LLM_MAX_OUTPUT_TOKENS,
+      }),
       signal,
     });
     if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);

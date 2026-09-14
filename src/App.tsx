@@ -117,6 +117,7 @@ const Workbench: React.FC = () => {
   // decides pipeline order — see PlannerAgent.clarify()) ──
   const [clarifyState, setClarifyState] = useState<{ field: "rawText" | "folderPath"; question: string } | null>(null);
   const [clarifyReply, setClarifyReply] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
 
   const chime = () => {
     if (isMuted) return;
@@ -355,6 +356,29 @@ const Workbench: React.FC = () => {
     setClarifyReply("");
   };
 
+  /**
+   * Enter key in the intent box = simple dialogue (bucket 1 of the AI's role, design doc
+   * §1.2/§10.7/§11) — a casual back-and-forth with the model, logged to the console. It never
+   * decides pipeline order or submits a test task; that stays the arrow button's job.
+   */
+  const handleChatMessage = async () => {
+    const message = promptIntent.trim();
+    if (!message || chatLoading || isGenerating) return;
+    setPromptIntent("");
+    addLog({ type: "HARNESS_EVENT", content: `You: ${message}` });
+    setChatLoading(true);
+    try {
+      const planner = new PlannerAgent({ ...llmConfig, selectedModel });
+      const scenarioContext = getScenarioSystemPrompt(selectedScenarioId);
+      const reply = await planner.clarify(scenarioContext, message);
+      addLog({ type: "HARNESS_EVENT", content: `AI: ${reply || "(no response)"}` });
+    } catch (e: any) {
+      addLog({ type: "HARNESS_EVENT", content: `AI chat unavailable: ${e?.message ?? e}`, status: "warning" });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   /** Drives the fixed pipeline for the currently selected scenario via ExecutionEngine. */
   const runPipeline = async () => {
     if (isGenerating) return;
@@ -425,28 +449,29 @@ const Workbench: React.FC = () => {
         setTestRecords(toFrontendRecords(recs));
       }
 
+      // The real work (parse/generate/package etc.) is already done — let the user see
+      // "completed" immediately. The AI summary below is decorative and must never make
+      // them wait on a slow/cold-starting LLM for something that already succeeded.
+      setWorkflowState("REVIEW");
+      setWorkflowStage(3);
+      setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
+
       // Best-effort analysis-report generation (bucket 3 of the AI's role) over the last step's
-      // result. Never blocks pipeline success if the LLM is unavailable or misconfigured.
+      // result — fire-and-forget, appends to the log whenever it resolves. Never blocks pipeline
+      // success if the LLM is unavailable, misconfigured, or just slow.
       const lastStage = pipeline.stages[pipeline.stages.length - 1];
       const lastStep = lastStage[lastStage.length - 1];
       const lastResult = stepResults[lastStep.id];
       if (lastResult !== undefined) {
-        try {
-          const summary = await planner.summarizeStepResult(
-            getScenarioSystemPrompt(selectedScenarioId),
-            lastStep.label,
-            lastResult,
-            controller.signal,
-          );
-          if (summary) addLog({ type: "HARNESS_EVENT", content: `AI summary: ${summary}` });
-        } catch (e: any) {
-          addLog({ type: "HARNESS_EVENT", content: `AI summary unavailable: ${e?.message ?? e}`, status: "warning" });
-        }
+        planner
+          .summarizeStepResult(getScenarioSystemPrompt(selectedScenarioId), lastStep.label, lastResult, controller.signal)
+          .then((summary) => {
+            if (summary) addLog({ type: "HARNESS_EVENT", content: `AI summary: ${summary}` });
+          })
+          .catch((e: any) => {
+            addLog({ type: "HARNESS_EVENT", content: `AI summary unavailable: ${e?.message ?? e}`, status: "warning" });
+          });
       }
-
-      setWorkflowState("REVIEW");
-      setWorkflowStage(3);
-      setTasks((prev) => prev.map((t) => (t.status === "active" || t.status === "pending" ? { ...t, status: "completed" } : t)));
     } catch (e: any) {
       if (e?.name === "AbortError") {
         addLog({ type: "HARNESS_EVENT", content: " Execution stopped by user.", status: "warning" });
@@ -519,25 +544,6 @@ const Workbench: React.FC = () => {
     e.target.value = '';
   };
 
-  // Browse for a .testdata file directly to extract folder path
-  const testdataFileInputRef = useRef<HTMLInputElement>(null);
-  const handleTestdataFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = (e.target.files as any)?.[0];
-    if (!file) return;
-    
-    const relativePath = file.webkitRelativePath || '';
-    if (relativePath) {
-      // Extract folder path from relative path (remove filename)
-      const parts = relativePath.split('/');
-      parts.pop(); // Remove filename
-      const folderRelativePath = parts.join('/');
-      
-      // Show instruction with the relative path structure
-      setError(`Selected file: ${file.name}. Folder structure: ${folderRelativePath}. Please paste the full absolute path in the input box (e.g., C:\\Users\\...\\${folderRelativePath}) and click Scan.`);
-    }
-    e.target.value = '';
-  };
-
   const handleOpenAgentPage = () => setPage("agent");
 
   // Scan folder using manual path input
@@ -583,6 +589,46 @@ const Workbench: React.FC = () => {
       setSelectedTestdataFiles([]);
     } finally {
       setScanningFolder(false);
+    }
+  };
+
+  // ── TestData file upload (game_verification): the browser gives us file *content*, never an
+  // absolute path, so we upload the content and let the backend stage it to a real path that
+  // Selenium can hand to the admin panel's upload dialog. No manual path typing required. ──
+  const testdataUploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingTestdata, setUploadingTestdata] = useState(false);
+  const handleSelectTestdataFiles = () => testdataUploadInputRef.current?.click();
+
+  const handleTestdataFilesChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadingTestdata(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      for (const f of Array.from(files)) form.append("files", f);
+      const res = await fetch("/api/tools/upload-testdata", { method: "POST", body: form });
+      if (res.ok) {
+        const data = await res.json();
+        setTestdataFiles(data.files || []);
+        setSelectedTestdataFiles(data.files || []);
+        setFolderPath(data.folder || "");
+        if (!data.files?.length) {
+          setError("None of the selected files were recognized as .testdata files.");
+        }
+      } else {
+        const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+        setError(`Upload failed: ${err.detail ?? "Unknown error"}`);
+        setTestdataFiles([]);
+        setSelectedTestdataFiles([]);
+      }
+    } catch (err: any) {
+      setError(`Network error: ${err?.message ?? "Unknown error"}. Is the backend server running?`);
+      setTestdataFiles([]);
+      setSelectedTestdataFiles([]);
+    } finally {
+      setUploadingTestdata(false);
+      e.target.value = "";
     }
   };
 
@@ -643,7 +689,10 @@ const Workbench: React.FC = () => {
     setTasks((STAGE1_TASKS[selectedScenarioId] ?? STAGE1_TASKS["testdata_generation"] ?? []).map(t => ({ ...t })));
   }, [selectedScenarioId]);
 
-  const showCenterFooter = workflowStage >= 3;
+  // TestDataPreview shows the testdata_generation scenario's generated records — it has
+  // nothing to do with game_verification's input (a folder of pre-existing .testdata files),
+  // so it must never render there (it would otherwise show stale/unrelated mock records).
+  const showCenterFooter = workflowStage >= 3 && selectedScenarioId !== "game_verification";
 
   const errorBanner = error ? (
     <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
@@ -705,89 +754,147 @@ const Workbench: React.FC = () => {
                 value={sheetUrl ? `${sheetUrl}\n${promptIntent}` : promptIntent}
                 onChange={(e) => {
                   const value = e.target.value;
-                  // Auto-detect and split URL from intent
+                  // Auto-detect and split URL from intent. Only the URL-detection check uses a
+                  // trimmed copy — the lines kept for the intent are pushed verbatim, so a space
+                  // (or blank line) the user just typed is never silently stripped mid-typing.
                   const lines = value.split('\n');
                   let detectedUrl = '';
-                  let detectedIntent = '';
-                  
+                  const intentLines: string[] = [];
+
                   for (const line of lines) {
                     const trimmed = line.trim();
                     if (!detectedUrl && /^https?:\/\//i.test(trimmed)) {
                       detectedUrl = trimmed;
-                    } else if (trimmed) {
-                      detectedIntent += (detectedIntent ? '\n' : '') + trimmed;
+                    } else {
+                      intentLines.push(line);
                     }
                   }
-                  
+
                   setSheetUrl(detectedUrl);
-                  setPromptIntent(detectedIntent);
+                  setPromptIntent(intentLines.join('\n'));
                 }}
-                disabled={isGenerating}
+                onKeyDown={(e) => {
+                  // Enter = simple dialogue with the AI (bucket 1 of its role — see design doc
+                  // §1.2/§10.7/§11); it never decides pipeline order. Shift+Enter still inserts
+                  // a newline for multi-line task descriptions. Submitting a test task is a
+                  // separate, explicit action (the arrow button below), untouched by this.
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChatMessage();
+                  }
+                }}
+                disabled={isGenerating || chatLoading}
                 rows={4}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono resize-none"
               />
+              <div className="text-[10px] text-slate-500 font-mono -mt-1.5">
+                {chatLoading ? (
+                  <span className="text-cyan-400 flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin" /> AI is replying...
+                  </span>
+                ) : (
+                  <span>Press <kbd className="px-1 rounded bg-slate-800 border border-slate-700">Enter</kbd> to chat with the AI · <kbd className="px-1 rounded bg-slate-800 border border-slate-700">Shift+Enter</kbd> for a new line · click ▲ to run a test task</span>
+                )}
+              </div>
 
               {/* Bottom row: Folder button + Generate button (left) | Model selector (right) */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {/* Folder selection button - opens folder picker for reference */}
-                  <button
-                    type="button"
-                    onClick={handleFolderSelect}
-                    className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
-                      folderPath
-                        ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
-                        : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
-                    }`}
-                    title="Select folder to see structure (then paste full path below)"
-                  >
-                    {scanningFolder ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <FolderOpen className="w-3.5 h-3.5" />
-                    )}
-                    <span className="max-w-[120px] truncate">{folderPath || 'Browse'}</span>
-                  </button>
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    className="hidden"
-                    onChange={handleFolderChange}
-                    {...({ webkitdirectory: '', directory: '' } as any)}
-                  />
+                  {selectedScenarioId === 'game_verification' ? (
+                    <>
+                      {/* Direct multi-file upload: browser only ever gives us file *content*,
+                          never an absolute path, so we upload it — no manual path typing. */}
+                      <button
+                        type="button"
+                        onClick={handleSelectTestdataFiles}
+                        disabled={uploadingTestdata}
+                        className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
+                          testdataFiles.length > 0
+                            ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
+                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                        }`}
+                        title="Select .testdata file(s) to verify"
+                      >
+                        {uploadingTestdata ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <FolderOpen className="w-3.5 h-3.5" />
+                        )}
+                        <span className="max-w-[220px] truncate">
+                          {testdataFiles.length > 0 ? `${testdataFiles.length} file(s) selected` : 'Select .testdata files'}
+                        </span>
+                      </button>
+                      <input
+                        ref={testdataUploadInputRef}
+                        type="file"
+                        className="hidden"
+                        multiple
+                        accept=".testdata"
+                        onChange={handleTestdataFilesChosen}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      {/* Folder selection button - opens folder picker for reference */}
+                      <button
+                        type="button"
+                        onClick={handleFolderSelect}
+                        className={`flex items-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-medium transition-all ${
+                          folderPath
+                            ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:border-amber-500/70'
+                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                        }`}
+                        title="Select folder to see structure (then paste full path below)"
+                      >
+                        {scanningFolder ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <FolderOpen className="w-3.5 h-3.5" />
+                        )}
+                        <span className="max-w-[120px] truncate">{folderPath || 'Browse'}</span>
+                      </button>
+                      <input
+                        ref={folderInputRef}
+                        type="file"
+                        className="hidden"
+                        onChange={handleFolderChange}
+                        {...({ webkitdirectory: '', directory: '' } as any)}
+                      />
 
-                  {/* Manual folder path input */}
-                  <input
-                    type="text"
-                    value={manualFolderPath}
-                    onChange={(e) => setManualFolderPath(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleScanFolder();
-                      }
-                    }}
-                    placeholder="Paste full path, e.g., C:\\Users\\...\\features"
-                    className="flex-1 min-w-[250px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleScanFolder}
-                    disabled={scanningFolder || !manualFolderPath.trim()}
-                    className={`flex items-center gap-1.5 px-4 h-10 rounded-xl border text-xs font-medium transition-all ${
-                      scanningFolder
-                        ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
-                        : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:border-emerald-500/70'
-                    }`}
-                    title="Scan folder for .testdata files"
-                  >
-                    {scanningFolder ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <FolderOpen className="w-3.5 h-3.5" />
-                    )}
-                    <span>Scan</span>
-                  </button>
+                      {/* Manual folder path input */}
+                      <input
+                        type="text"
+                        value={manualFolderPath}
+                        onChange={(e) => setManualFolderPath(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleScanFolder();
+                          }
+                        }}
+                        placeholder="Paste full path, e.g., C:\\Users\\...\\features"
+                        className="flex-1 min-w-[250px] px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleScanFolder}
+                        disabled={scanningFolder || !manualFolderPath.trim()}
+                        className={`flex items-center gap-1.5 px-4 h-10 rounded-xl border text-xs font-medium transition-all ${
+                          scanningFolder
+                            ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                            : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:border-emerald-500/70'
+                        }`}
+                        title="Scan folder for .testdata files"
+                      >
+                        {scanningFolder ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <FolderOpen className="w-3.5 h-3.5" />
+                        )}
+                        <span>Scan</span>
+                      </button>
+                    </>
+                  )}
 
                   {/* Preview/Generate or Stop button */}
                   <button

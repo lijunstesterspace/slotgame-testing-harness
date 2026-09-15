@@ -84,7 +84,20 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto flex flex-col gap-6">
-          
+
+          {/* Run-level error: the tool errored out before producing a single case (e.g. admin
+              login timeout) — shown instead of letting the "0%, 0/0" KPI cards below look like a
+              normal, successful, empty run. */}
+          {report.runError && (
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3.5 flex items-start gap-2.5 text-rose-300">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <span className="font-bold">This run did not complete: </span>
+                <span className="font-mono">{report.runError}</span>
+              </div>
+            </div>
+          )}
+
           {/* Top KPI Metric Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">

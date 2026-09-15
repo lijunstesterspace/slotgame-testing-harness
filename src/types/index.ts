@@ -118,6 +118,11 @@ export interface VerificationReport {
   /** Server-relative URL for the standalone HTML verification report (with embedded
    * screenshots), if the backend produced one — see testdata_verifier_tool.py's report_url. */
   reportUrl?: string;
+  /** Set only when the run produced zero cases because testdata_verifier errored out before
+   * ever uploading/spinning (e.g. admin login timeout) — surfaced in the modal as a banner
+   * instead of silently rendering an empty "0%, 0/0" report. See buildReportFromExecutionDetail
+   * in verificationEngine.ts. */
+  runError?: string;
 }
 
 export interface AIDiagnosisResult {

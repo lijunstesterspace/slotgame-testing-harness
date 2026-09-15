@@ -7,8 +7,119 @@ import type {
   AIDiagnosisResult,
   AIDiagnosis,
 } from "../types";
+import type { ExecutionDetailResponse, ToolCallRow } from "../harness/sharedTypes";
 import { harnessClient } from "../harness/client";
 import { loadStoredLlmConfig, streamUniversalLlmChat } from "./llmGateway";
+
+/** Pull {passed, failed, total, cases, report_url} out of a testdata_verifier tool_call's
+ * result_snippet — shared by the live-run path and the history-reopen path below. */
+function parseVerifierResultSnippet(lastCall: ToolCallRow | undefined): {
+  totalSummary: { passed: number; failed: number; total: number };
+  allParsedCases: any[];
+  reportUrl?: string;
+} {
+  let totalSummary = { passed: 0, failed: 0, total: 0 };
+  let allParsedCases: any[] = [];
+  let reportUrl: string | undefined;
+  try {
+    const snippet = lastCall?.result_snippet ?? "";
+    if (snippet) {
+      const parsed = JSON.parse(snippet);
+      if (parsed && typeof parsed === "object") {
+        const inner = typeof parsed.output === "string" ? safeParse(parsed.output) : parsed.output ?? parsed;
+        if (inner && typeof inner === "object") {
+          totalSummary = {
+            passed: Number(inner.passed ?? 0),
+            failed: Number(inner.failed ?? 0),
+            total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
+          };
+          if (Array.isArray(inner.cases)) allParsedCases = inner.cases;
+          if (typeof inner.report_url === "string") reportUrl = inner.report_url;
+        }
+      }
+    }
+  } catch {}
+  return { totalSummary, allParsedCases, reportUrl };
+}
+
+/** Map testdata_verifier's raw per-case objects into VerificationResult[] — shared by the
+ * live-run path and the history-reopen path below. */
+function mapCasesToResults(allParsedCases: any[]): VerificationResult[] {
+  return allParsedCases.map((c, idx) => {
+    const passed = !!(c.passed ?? c.status === "passed");
+    const caseName = c.caseName ?? c.stage ?? `Spin #${c.spinIndex ?? idx + 1}`;
+    const status = deriveStatus(c, passed);
+    const result: VerificationResult = {
+      recordId: c.recordId ?? c.caseId ?? `case-${idx + 1}`,
+      caseName,
+      passed,
+      status,
+      httpStatus: c.httpStatus ?? (passed ? 200 : 0),
+      responseTimeMs: c.durationMs ?? c.responseTimeMs ?? 0,
+      serverPayout: c.actualWin,
+      batchIndexString: `batch=${c.expectedBatch ?? c.batch ?? "?"}, index=${c.expectedIndex ?? c.index ?? "?"}`,
+      responseBodySnippet: c.actualStage ? `stage=${c.actualStage}` : undefined,
+      errorMessage: c.issues?.join("; ") ?? c.error ?? undefined,
+      screenshotB64: c.screenshot_b64 ?? undefined,
+      isBonus: c.isBonus ?? false,
+      actualBatch: c.actualBatch ?? null,
+      actualIndex: c.actualIndex ?? null,
+      actualStage: c.actualStage ?? undefined,
+      expectedBatch: c.expectedBatch ?? c.batch ?? undefined,
+      expectedIndex: c.expectedIndex ?? c.index ?? undefined,
+    };
+    (result as any).sourceFile = c.source_file ?? undefined;
+    return result;
+  });
+}
+
+/**
+ * Rebuild a VerificationReport from an already-finished execution's detail — used to reopen a
+ * past TestData Verification run from the History page. Unlike runRealGameVerification, this:
+ *   - never throws (a history view has no live try/catch banner to route errors into — a failed
+ *     run is surfaced via `runError` on the returned report instead, rendered as a banner in
+ *     VerificationReportModal);
+ *   - never re-runs AI diagnosis (that would mean waiting on the local LLM again, every single
+ *     time someone just wants to glance back at an old report — the report shows the raw
+ *     verification data; a fresh diagnosis was never persisted anywhere to "restore" instead).
+ */
+export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse): VerificationReport {
+  const lastCall = detail.tool_calls
+    .slice()
+    .reverse()
+    .find((tc) => tc.tool_name === "testdata_verifier");
+
+  let targetUrl = "";
+  try {
+    const params = lastCall ? JSON.parse(lastCall.params_json) : null;
+    if (params && typeof params.target_url === "string") targetUrl = params.target_url;
+  } catch {}
+
+  const { totalSummary, allParsedCases, reportUrl } = parseVerifierResultSnippet(lastCall);
+  const results = mapCasesToResults(allParsedCases);
+
+  const runError =
+    results.length === 0 && totalSummary.total === 0 && lastCall && !lastCall.success
+      ? lastCall.error_message || "testdata_verifier failed with no result data"
+      : undefined;
+
+  const failedCount = results.filter((r) => !r.passed).length;
+  const passedCount = results.filter((r) => r.passed).length;
+  const totalCases = totalSummary.total || results.length;
+
+  return {
+    targetUrl,
+    totalCases,
+    passedCount,
+    failedCount,
+    totalTimeMs: lastCall?.execution_ms ?? detail.execution.total_ms ?? 0,
+    passRate: totalCases ? Math.round((passedCount / totalCases) * 100) : 0,
+    executedAt: new Date(detail.execution.started_at).toISOString(),
+    results,
+    reportUrl,
+    runError,
+  };
+}
 
 export async function runRealGameVerification(
   records: TestRecord[],
@@ -72,61 +183,13 @@ export async function runRealGameVerification(
     .reverse()
     .find((tc) => tc.tool_name === "testdata_verifier");
 
-  // Extract verifier output
-  let totalSummary = { passed: 0, failed: 0, total: 0 };
-  let allParsedCases: any[] = [];
-  let reportUrl: string | undefined;
-  try {
-    const snippet = lastCall?.result_snippet ?? "";
-    if (snippet) {
-      const parsed = JSON.parse(snippet);
-      if (parsed && typeof parsed === "object") {
-        const inner = typeof parsed.output === "string" ? safeParse(parsed.output) : parsed.output ?? parsed;
-        if (inner && typeof inner === "object") {
-          totalSummary = {
-            passed: Number(inner.passed ?? 0),
-            failed: Number(inner.failed ?? 0),
-            total: Number(inner.total ?? (inner.passed ?? 0) + (inner.failed ?? 0)),
-          };
-          if (Array.isArray(inner.cases)) allParsedCases = inner.cases;
-          if (typeof inner.report_url === "string") reportUrl = inner.report_url;
-        }
-      }
-    }
-  } catch {}
+  const { totalSummary, allParsedCases, reportUrl } = parseVerifierResultSnippet(lastCall);
 
-  // Step C: map cases back into VerificationResult[]
-  allParsedCases.forEach((c, idx) => {
-      const passed = !!(c.passed ?? c.status === "passed");
-      const caseName = c.caseName ?? c.stage ?? `Spin #${c.spinIndex ?? idx + 1}`;
-
-      // Derive fine-grained status from backend issues / verdict
-      const status = deriveStatus(c, passed);
-
-      const result: VerificationResult = {
-        recordId: c.recordId ?? c.caseId ?? `case-${idx + 1}`,
-        caseName,
-        passed,
-        status,
-        httpStatus: c.httpStatus ?? (passed ? 200 : 0),
-        responseTimeMs: c.durationMs ?? c.responseTimeMs ?? 0,
-        serverPayout: c.actualWin,
-        batchIndexString: `batch=${c.expectedBatch ?? c.batch ?? "?"}, index=${c.expectedIndex ?? c.index ?? "?"}`,
-        responseBodySnippet: c.actualStage ? `stage=${c.actualStage}` : undefined,
-        errorMessage: c.issues?.join("; ") ?? c.error ?? undefined,
-        screenshotB64: c.screenshot_b64 ?? undefined,
-        isBonus: c.isBonus ?? false,
-        actualBatch: c.actualBatch ?? null,
-        actualIndex: c.actualIndex ?? null,
-        actualStage: c.actualStage ?? undefined,
-        expectedBatch: c.expectedBatch ?? c.batch ?? undefined,
-        expectedIndex: c.expectedIndex ?? c.index ?? undefined,
-      };
-      // Attach source file for progress display
-      (result as any).sourceFile = c.source_file ?? undefined;
-      results.push(result);
-      onProgress?.(results.length, result);
-  });
+  // Step C: map cases back into VerificationResult[], reporting progress as each one lands
+  for (const result of mapCasesToResults(allParsedCases)) {
+    results.push(result);
+    onProgress?.(results.length, result);
+  }
 
   // The tool failed before producing a single case (e.g. it errored out during admin-panel
   // login, before ever uploading a file or spinning). Neither the per-case mapping above nor

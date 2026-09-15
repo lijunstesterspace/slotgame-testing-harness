@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Puzzle, CheckCircle2, Loader2, Circle,
   ChevronDown, ChevronRight, Brain, Bot,
-  Zap, Shield, Bug, FileText, Globe,
+  Zap, Shield, Bug, FileText, Globe, History,
 } from 'lucide-react';
 import { TaskItem } from '../types';
 import { SCENARIOS } from '../harness/intentRouter';
@@ -22,12 +22,13 @@ interface SidebarProps {
   tasks: TaskItem[];
   onOpenPlugin?: () => void;
   onOpenAgent?: () => void;
+  onOpenHistory?: () => void;
   selectedScenarioId?: string;
   onSelectScenario?: (scenarioId: string) => void;
 }
 
 // ── Component ──────────────────────────────────────────────────
-export const Sidebar: React.FC<SidebarProps> = ({ tasks, onOpenPlugin, onOpenAgent, selectedScenarioId, onSelectScenario }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ tasks, onOpenPlugin, onOpenAgent, onOpenHistory, selectedScenarioId, onSelectScenario }) => {
   const [taskOpen, setTaskOpen] = useState(true);
   const [scenarioOpen, setScenarioOpen] = useState(true);
 
@@ -57,6 +58,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ tasks, onOpenPlugin, onOpenAge
             <Bot className="w-3.5 h-3.5" />
           </div>
           <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Agents</span>
+        </button>
+      </div>
+
+      {/* ── History (navigates to HistoryPage, reopens a past Verification report) ── */}
+      <div className="border-b border-slate-800">
+        <button
+          onClick={onOpenHistory}
+          className="w-full flex items-center gap-2 px-3 py-3 hover:bg-slate-800/50 transition-colors"
+        >
+          <div className="p-1 rounded-md bg-amber-950/60 border border-amber-800/40 text-amber-400">
+            <History className="w-3.5 h-3.5" />
+          </div>
+          <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">History</span>
         </button>
       </div>
 

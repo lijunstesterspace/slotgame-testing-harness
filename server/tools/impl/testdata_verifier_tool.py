@@ -827,6 +827,20 @@ class TestdataVerifierTool(ToolPlugin):
                 driver.get(target_url)
                 time.sleep(5)
 
+                # Many slot games show a "feature splash" screen right after load — a features
+                # overview with a "PRESS ANYWHERE TO CONTINUE" prompt — before the real, playable
+                # UI (and its Spin button) exists at all. This is a common industry pattern, not
+                # specific to any one game, so it's cheap to always try dismissing it: a body
+                # click is a harmless no-op on a game that has no splash screen and skips
+                # straight to the reels. Repeated a few times with pauses because some splash
+                # sequences are more than one screen deep.
+                for _ in range(3):
+                    try:
+                        driver.find_element(By.TAG_NAME, "body").click()
+                    except Exception:
+                        pass
+                    time.sleep(1)
+
                 # Reset interceptor response count for fresh game session
                 driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")
 

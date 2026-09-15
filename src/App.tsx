@@ -9,6 +9,7 @@ import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
 import { PluginPage } from "./pages/PluginPage";
 import { AgentPage } from "./pages/AgentPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
 import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
@@ -95,7 +96,7 @@ const Workbench: React.FC = () => {
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<"workbench" | "llm-config" | "plugin" | "agent">("workbench");
+  const [page, setPage] = useState<"workbench" | "llm-config" | "plugin" | "agent" | "history">("workbench");
   const [showLlmConfig, setShowLlmConfig] = useState(false);
   const [llmConfig, setLlmConfig] = useState<LlmProviderConfig>(() => loadStoredLlmConfig());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadStoredLlmConfig().selectedModel);
@@ -561,6 +562,7 @@ const Workbench: React.FC = () => {
   const handleOpenModelPage = () => setPage("llm-config");
   const handleOpenPluginPage = () => setPage("plugin");
   const handleOpenAgentPage = () => setPage("agent");
+  const handleOpenHistoryPage = () => setPage("history");
 
   // ── Folder upload (easyhelp_checking): browsers never expose a folder's absolute path, only
   // its files' *content* (plus each file's relative path via webkitRelativePath). So we upload
@@ -815,6 +817,18 @@ const Workbench: React.FC = () => {
     return <AgentPage onBack={() => setPage("workbench")} />;
   }
 
+  if (page === "history") {
+    return (
+      <HistoryPage
+        onBack={() => setPage("workbench")}
+        onOpenReport={(report) => {
+          setVerificationReport(report);
+          setPage("workbench");
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
       <Header
@@ -833,6 +847,7 @@ const Workbench: React.FC = () => {
           tasks={tasks}
           onOpenPlugin={handleOpenPluginPage}
           onOpenAgent={handleOpenAgentPage}
+          onOpenHistory={handleOpenHistoryPage}
           selectedScenarioId={selectedScenarioId}
           onSelectScenario={setSelectedScenarioId}
         />

@@ -66,8 +66,12 @@ export interface VerificationConfig {
    * entirely and hit the game's own session/play APIs directly via testdata_verifier_api —
    * needs oktaAccessToken. See testdata_verifier_api_tool.py for the confirmed auth chain. */
   verificationMethod?: "selenium" | "api";
-  /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". */
+  /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". Bootstraps
+   * the *game* session (api5-rhel1) — unrelated to axiomApiKey below. */
   oktaAccessToken?: string;
+  /** Long-lived Axiom API Key (from Axiom's ApiKeys page), required when verificationMethod is
+   * "api". Authenticates the testdata upload call (axiomcore-app1) — rarely needs repasting. */
+  axiomApiKey?: string;
 }
 
 export interface TestdataFileInfo {

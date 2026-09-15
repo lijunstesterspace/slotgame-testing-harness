@@ -1,36 +1,39 @@
 """
 API-direct TestData verification — bypasses Selenium/the browser entirely.
 
-Talks straight to the same backend APIs the game's own frontend uses (reverse-engineered via
-live network capture during real debugging sessions): an Okta-issued access_token bootstraps a
-short-lived game "userToken", which is then used to call the game's own /play endpoint directly
-and to upload testdata via Axiom's API. No browser, no Selenium, no clicking through a splash
-screen or an admin panel, no guessing CSS selectors — just HTTP calls.
+Talks straight to the same backend APIs the game's own frontend (and a colleague's separate
+Playwright automation suite, for the upload half) use. No browser, no Selenium, no clicking
+through a splash screen or an admin panel, no guessing CSS selectors — just HTTP calls.
 
-Confirmed authentication chain (see design-doc verification-history discussion for the captures
-this was derived from):
-  1. A human logs into Okta once (2-hour access_token, scope includes offline_access).
-  2. GET .../casino/user/public/v1/accounts/real?fields=core,balance,session
-     with `Authorization: Bearer <okta_token>` returns tokens.userToken (600s lifetime) and
-     tokens.refreshTokens[0].
-  3. `Authorization: Bearer <userToken>` on .../casino/play/.../play — confirmed byte-for-byte
-     identical to what the real browser sent on a live capture.
-  4. POST .../accounts/refreshUserToken?fields=none with body
-     {"numLaunchTokens": 10, "refreshToken": "<current refresh token>"} returns a *new*
-     userToken + a *new*, rotated refreshToken — repeatable indefinitely without ever touching
-     Okta again.
+Two independent auth mechanisms are in play here, for two independent systems:
+  - Axiom (game deployment/ops platform, host axiomcore-app1-<env>): authenticates with a
+    long-lived static API Key (`x-api-key` header, generated from Axiom's own ApiKeys page —
+    good for ~1 year, no Okta involved at all). Confirmed against a colleague's working
+    automation suite (jftw-game-client-sdk-automation-axiom), which uses this exact header and
+    the exact multipart field name below for /Upload/TestDataFile.
+  - The game's own player-session API (host api5-rhel1-<env>): bootstrapped from a *separate*,
+    short-lived Okta access_token (2 hours, obtained interactively — see the design-doc
+    verification-history discussion for the network captures this chain was derived from):
+      1. A human logs into Okta once (2-hour access_token, scope includes offline_access).
+      2. GET .../casino/user/public/v1/accounts/real?fields=core,balance,session
+         with `Authorization: Bearer <okta_token>` returns tokens.userToken (600s lifetime) and
+         tokens.refreshTokens[0].
+      3. `Authorization: Bearer <userToken>` on .../casino/play/.../play — confirmed
+         byte-for-byte identical to what the real browser sent on a live capture.
+      4. POST .../accounts/refreshUserToken?fields=none with body
+         {"numLaunchTokens": 10, "refreshToken": "<current refresh token>"} returns a *new*
+         userToken + a *new*, rotated refreshToken — repeatable indefinitely without ever
+         touching Okta again.
+    These two tokens (Axiom API Key, Okta access_token) are unrelated and both required.
 
 Known limitations vs. the Selenium-based testdata_verifier:
   - No screenshots (there is no rendered page to capture in this mode).
   - A human still has to paste a fresh Okta access_token to start a run; after that this tool
-    refreshes its own game-session token on its own.
-  - Three details below were inferred from a single live capture and were never independently
-    confirmed — each is called out at its call site with an ASSUMPTION comment. If this tool
-    401s/400s/404s on a real run, these are the first things to check against a fresh capture:
-      * the session-bootstrap call (`real?fields=...`) is a GET, not a POST
-      * the multipart field name for /Upload/TestDataFile is "file"
-      * /Upload/TestDataFile accepts the same Okta access_token as Authorization (vs. requiring
-        the separate long-lived Axiom API Key instead)
+    refreshes its own game-session token on its own. The Axiom API Key does not expire nearly
+    as often and does not need repasting every run.
+  - One remaining detail was inferred from a single live capture and was never independently
+    confirmed: the session-bootstrap call (`real?fields=...`) is assumed to be a GET, not a
+    POST. If this tool 404s/405s on that call, try switching it to POST.
 """
 from __future__ import annotations
 import asyncio
@@ -142,8 +145,15 @@ class TestdataVerifierApiTool(ToolPlugin):
                               description="Full game environment URL (must contain username, moduleId, clientId, productId)."),
                 ToolParameter(name="okta_access_token", type="string", required=True,
                               description="Okta JWT access_token (from Axiom's Profile page, or the browser's "
-                                          "own Local Storage), valid ~2 hours. Bootstraps the game session; the "
-                                          "tool refreshes its own game-session token on its own after that."),
+                                          "own Local Storage), valid ~2 hours. Bootstraps the *game* session "
+                                          "(api5-rhel1); the tool refreshes its own game-session token on its "
+                                          "own after that. Unrelated to axiom_api_key below."),
+                ToolParameter(name="axiom_api_key", type="string", required=True,
+                              description="Long-lived Axiom API Key (from Axiom's ApiKeys page — the "
+                                          "'x-api-key' header, not a Bearer token). Authenticates the "
+                                          "*Axiom* testdata upload call (axiomcore-app1); does not expire "
+                                          "anywhere near as often as okta_access_token, so it rarely needs "
+                                          "repasting."),
                 ToolParameter(name="chip_size", type="number", default=10,
                               description="Bet chipSize sent on each Spin request."),
                 ToolParameter(name="num_chips", type="number", default=1,
@@ -177,6 +187,7 @@ class TestdataVerifierApiTool(ToolPlugin):
 
         target_url: str = params["target_url"]
         okta_token: str = params["okta_access_token"]
+        axiom_api_key: str = params["axiom_api_key"]
         chip_size = str(params.get("chip_size", 10))
         num_chips = str(params.get("num_chips", 1))
         spin_delay: float = float(params.get("spin_delay_sec", 0.5))
@@ -288,21 +299,15 @@ class TestdataVerifierApiTool(ToolPlugin):
                 file_label = f"[{file_idx + 1}/{len(all_records_by_file)}] {testdata_file.name}"
                 log.info("verifier_api.file_start", file=file_label, spins=len(records))
 
-                # ASSUMPTIONS (never directly confirmed on a capture — only the fact that this
-                # call is multipart/form-data was observed, not its field name or auth header):
-                #   - multipart field name is "file"
-                #   - the same Okta access_token authenticates this Axiom endpoint (plausible
-                #     since Axiom and the game share the same Okta tenant, but unconfirmed —
-                #     the alternative is the separate long-lived Axiom API Key from Axiom's
-                #     ApiKeys page).
-                # If this 400s/401s, capture the real Upload/TestDataFile request's field name
-                # and Authorization header and fix these two lines.
+                # Auth header, field name, and endpoint all confirmed against a colleague's
+                # working Playwright automation suite (jftw-game-client-sdk-automation-axiom's
+                # src/js/axiomAPI/upload.js) — this is a real, exercised code path, not a guess.
                 try:
                     with open(testdata_file, "rb") as fh:
                         upload_resp = await client.post(
                             f"https://{axiomcore_host}/Upload/TestDataFile",
-                            headers={"Authorization": f"Bearer {okta_token}"},
-                            files={"file": (testdata_file.name, fh, "application/octet-stream")},
+                            headers={"x-api-key": axiom_api_key},
+                            files={"testDataFormFile": (testdata_file.name, fh, "application/octet-stream")},
                         )
                 except httpx.HTTPError as e:
                     return ToolResult(success=False, error=f"testdata_upload_request_failed:{file_label}:{e}")

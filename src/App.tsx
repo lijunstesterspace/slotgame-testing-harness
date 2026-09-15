@@ -111,6 +111,10 @@ const Workbench: React.FC = () => {
   // see testdata_verifier_api_tool.py for the confirmed auth chain this bypasses Selenium with).
   const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api">("selenium");
   const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
+  // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call separately
+  // from oktaAccessToken (which authenticates the game-session/play calls). See
+  // testdata_verifier_api_tool.py's module docstring for why these are two unrelated tokens.
+  const [axiomApiKey, setAxiomApiKey] = useState<string>("");
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   // easyhelp_checking's "Add file(s)" alternative: loose HTML files with no folder structure —
   // each gets a synthetic subdir derived from its filename (see uploadFilesAsFolder).
@@ -282,6 +286,10 @@ const Workbench: React.FC = () => {
         setError("API-direct method needs an Okta access_token — paste one in below, or switch back to Browser (Selenium).");
         return;
       }
+      if (verificationMethod === 'api' && !axiomApiKey.trim()) {
+        setError("API-direct method needs an Axiom API Key — paste one in below, or switch back to Browser (Selenium).");
+        return;
+      }
       setShowPreview(false);
 
       // Pass all selected files to verification engine
@@ -302,6 +310,7 @@ const Workbench: React.FC = () => {
         testdataFilePaths: selectedTestdataFiles.map(f => f.path),
         verificationMethod,
         oktaAccessToken: verificationMethod === 'api' ? oktaAccessToken.trim() : undefined,
+        axiomApiKey: verificationMethod === 'api' ? axiomApiKey.trim() : undefined,
       });
       return;
     }
@@ -1044,7 +1053,7 @@ const Workbench: React.FC = () => {
                     </button>
                   </div>
                   {verificationMethod === 'api' && (
-                    <div>
+                    <div className="space-y-2">
                       <textarea
                         value={oktaAccessToken}
                         onChange={(e) => setOktaAccessToken(e.target.value)}
@@ -1052,7 +1061,14 @@ const Workbench: React.FC = () => {
                         rows={2}
                         className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50 font-mono resize-none"
                       />
-                      <div className="text-[9px] text-slate-500 mt-1">
+                      <input
+                        type="text"
+                        value={axiomApiKey}
+                        onChange={(e) => setAxiomApiKey(e.target.value)}
+                        placeholder="Paste Axiom API Key here (Axiom's ApiKeys page — long-lived, rarely needs updating)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50 font-mono"
+                      />
+                      <div className="text-[9px] text-slate-500">
                         No screenshots in this mode (nothing is rendered) — otherwise same report format as Browser mode.
                       </div>
                     </div>

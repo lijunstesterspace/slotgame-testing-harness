@@ -161,7 +161,11 @@ export async function runRealGameVerification(
     if (!config.oktaAccessToken) {
       throw new Error("API-direct verification needs an Okta access_token — paste one in before running.");
     }
+    if (!config.axiomApiKey) {
+      throw new Error("API-direct verification needs an Axiom API Key — paste one in before running.");
+    }
     toolParams.okta_access_token = config.oktaAccessToken;
+    toolParams.axiom_api_key = config.axiomApiKey;
   }
   const prepared = await harnessClient.executeToolAsync(toolName, toolParams);
   const eid = prepared.execution_id;

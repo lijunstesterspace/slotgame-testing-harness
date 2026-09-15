@@ -62,6 +62,12 @@ export interface VerificationConfig {
   folderPath?: string;
   testdataFilePath?: string;
   testdataFilePaths?: string[];  // Support multiple testdata files
+  /** "selenium" (default): drive a real Chrome via testdata_verifier. "api": skip the browser
+   * entirely and hit the game's own session/play APIs directly via testdata_verifier_api —
+   * needs oktaAccessToken. See testdata_verifier_api_tool.py for the confirmed auth chain. */
+  verificationMethod?: "selenium" | "api";
+  /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". */
+  oktaAccessToken?: string;
 }
 
 export interface TestdataFileInfo {

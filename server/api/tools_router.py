@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/tools", tags=["Tools"])
 # ── Scenario → required plugins mapping (mirrors frontend intentRouter.ts) ──
 SCENARIO_PLUGINS: dict[str, list[str]] = {
     "testdata_generation": ["testdata_parser", "testdata_generator", "zip_packager"],
-    "game_verification": ["testdata_verifier", "log_diagnoser"],
+    "game_verification": ["testdata_verifier", "testdata_verifier_api", "log_diagnoser"],
     "log_diagnosis": ["log_diagnoser"],
     "easyhelp_checking": ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
 }

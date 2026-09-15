@@ -87,7 +87,7 @@ export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse):
   const lastCall = detail.tool_calls
     .slice()
     .reverse()
-    .find((tc) => tc.tool_name === "testdata_verifier");
+    .find((tc) => tc.tool_name === "testdata_verifier" || tc.tool_name === "testdata_verifier_api");
 
   let targetUrl = "";
   try {
@@ -146,12 +146,24 @@ export async function runRealGameVerification(
     throw new Error("No testdata file selected. Please select a folder with .testdata files.");
   }
 
-  // Step B: launch testdata_verifier ONCE with all files (batch mode)
-  const prepared = await harnessClient.executeToolAsync("testdata_verifier", {
+  // Step B: launch the verifier tool ONCE with all files (batch mode). Same backend contract
+  // (params in, ToolResult.content shape out) for both tools — see testdata_verifier_api_tool.py
+  // — so everything below this point (waiting, parsing, report building) is identical regardless
+  // of which one actually ran.
+  const useApiDirect = config.verificationMethod === "api";
+  const toolName = useApiDirect ? "testdata_verifier_api" : "testdata_verifier";
+  const toolParams: Record<string, unknown> = {
     testdata_files: testdataFiles,
     target_url: config.targetUrl,
     spin_delay_sec: spinDelayMs / 1000,
-  });
+  };
+  if (useApiDirect) {
+    if (!config.oktaAccessToken) {
+      throw new Error("API-direct verification needs an Okta access_token — paste one in before running.");
+    }
+    toolParams.okta_access_token = config.oktaAccessToken;
+  }
+  const prepared = await harnessClient.executeToolAsync(toolName, toolParams);
   const eid = prepared.execution_id;
   onStarted?.(eid);
 
@@ -181,7 +193,7 @@ export async function runRealGameVerification(
   const lastCall = detail.tool_calls
     .slice()
     .reverse()
-    .find((tc) => tc.tool_name === "testdata_verifier");
+    .find((tc) => tc.tool_name === toolName);
 
   const { totalSummary, allParsedCases, reportUrl } = parseVerifierResultSnippet(lastCall);
 

@@ -106,6 +106,11 @@ const Workbench: React.FC = () => {
   const [uploadingFolder, setUploadingFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
+  // game_verification: choose between driving a real Chrome (testdata_verifier) or calling the
+  // game's own session/play APIs directly (testdata_verifier_api, needs a pasted Okta token —
+  // see testdata_verifier_api_tool.py for the confirmed auth chain this bypasses Selenium with).
+  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api">("selenium");
+  const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   // easyhelp_checking's "Add file(s)" alternative: loose HTML files with no folder structure —
   // each gets a synthetic subdir derived from its filename (see uploadFilesAsFolder).
@@ -273,8 +278,12 @@ const Workbench: React.FC = () => {
         setError("Please select at least one testdata file");
         return;
       }
+      if (verificationMethod === 'api' && !oktaAccessToken.trim()) {
+        setError("API-direct method needs an Okta access_token — paste one in below, or switch back to Browser (Selenium).");
+        return;
+      }
       setShowPreview(false);
-      
+
       // Pass all selected files to verification engine
       await handleStartVerification({
         targetUrl: sheetUrl,
@@ -291,6 +300,8 @@ const Workbench: React.FC = () => {
         loginName,
         folderPath,
         testdataFilePaths: selectedTestdataFiles.map(f => f.path),
+        verificationMethod,
+        oktaAccessToken: verificationMethod === 'api' ? oktaAccessToken.trim() : undefined,
       });
       return;
     }
@@ -996,6 +1007,54 @@ const Workbench: React.FC = () => {
                   ) : (
                     <div className="text-xs text-slate-500 px-3 py-2 text-center">
                       No .testdata files found. Please select a folder with testdata files.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Verification method: drive a real browser, or skip it entirely via the
+                  game's own APIs directly (see testdata_verifier_api_tool.py). */}
+              {selectedScenarioId === 'game_verification' && (
+                <div className="mb-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">
+                    Verification Method
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setVerificationMethod('selenium')}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                        verificationMethod === 'selenium'
+                          ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+                          : 'bg-slate-950/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      Browser (Selenium)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVerificationMethod('api')}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                        verificationMethod === 'api'
+                          ? 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200'
+                          : 'bg-slate-950/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      Direct API (fast, no browser)
+                    </button>
+                  </div>
+                  {verificationMethod === 'api' && (
+                    <div>
+                      <textarea
+                        value={oktaAccessToken}
+                        onChange={(e) => setOktaAccessToken(e.target.value)}
+                        placeholder="Paste Okta access_token here (Axiom Profile page, or the game page's browser Local Storage — valid ~2 hours)"
+                        rows={2}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50 font-mono resize-none"
+                      />
+                      <div className="text-[9px] text-slate-500 mt-1">
+                        No screenshots in this mode (nothing is rendered) — otherwise same report format as Browser mode.
+                      </div>
                     </div>
                   )}
                 </div>

@@ -11,11 +11,12 @@ interface Props {
   onOpenReport: (report: VerificationReport) => void;
 }
 
-// runPipeline()/executeToolAsync() give testdata_verifier's own async-tool executions this
-// fixed intent string when no execution_id is passed in (see server/api/tools_router.py's
-// execute_async) — it's how this page tells "a TestData Verification run" apart from every
-// other scenario's executions without needing a dedicated column or a backend change.
-const VERIFICATION_INTENT = "async_tool:testdata_verifier";
+// executeToolAsync() gives a verifier tool's async-tool executions this fixed intent string
+// when no execution_id is passed in (see server/api/tools_router.py's execute_async) — it's how
+// this page tells "a TestData Verification run" apart from every other scenario's executions
+// without needing a dedicated column or a backend change. Covers both the Selenium-based tool
+// and the API-direct one, since either can produce a report this page should be able to reopen.
+const VERIFICATION_INTENTS = new Set(["async_tool:testdata_verifier", "async_tool:testdata_verifier_api"]);
 
 const STATUS_META: Record<ExecutionRow["status"], { icon: React.ReactNode; cls: string; label: string }> = {
   SUCCESS: { icon: <CheckCircle2 className="w-3.5 h-3.5" />, cls: "text-emerald-400 bg-emerald-950/30 border-emerald-800/40", label: "Success" },
@@ -35,7 +36,7 @@ export const HistoryPage: React.FC<Props> = ({ onBack, onOpenReport }) => {
     setError(null);
     harnessClient
       .listExecutions(1, 50)
-      .then((res) => setRows(res.items.filter((r) => r.intent === VERIFICATION_INTENT)))
+      .then((res) => setRows(res.items.filter((r) => VERIFICATION_INTENTS.has(r.intent))))
       .catch((e) => setError(e?.message ?? String(e)))
       .finally(() => setLoading(false));
   };

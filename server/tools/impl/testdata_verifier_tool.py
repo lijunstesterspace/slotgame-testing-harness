@@ -830,13 +830,28 @@ class TestdataVerifierTool(ToolPlugin):
                 # Many slot games show a "feature splash" screen right after load — a features
                 # overview with a "PRESS ANYWHERE TO CONTINUE" prompt — before the real, playable
                 # UI (and its Spin button) exists at all. This is a common industry pattern, not
-                # specific to any one game, so it's cheap to always try dismissing it: a body
-                # click is a harmless no-op on a game that has no splash screen and skips
-                # straight to the reels. Repeated a few times with pauses because some splash
-                # sequences are more than one screen deep.
+                # specific to any one game, so it's cheap to always try dismissing it.
+                #
+                # IMPORTANT: don't use driver.find_element(By.TAG_NAME, "body").click() for this.
+                # WebDriver's native click() targets the element's "in-view center point", which
+                # for a full-viewport <body> is browser-computed and not something this code
+                # controls — on this game that landed on a QA-only "key" icon fixed in a screen
+                # corner, which opened a "Mock Server / F2 Dev Panel" overlay instead of
+                # dismissing the splash (confirmed from a live run that got diverted into that
+                # panel instead of ever reaching the Spin button). Dispatching a synthetic click
+                # via JS at an explicit coordinate — as a *fraction* of the current window size,
+                # so it still lands centrally regardless of screen size — avoids whatever
+                # fixed-position chrome lives in the corners, where such icons conventionally sit.
                 for _ in range(3):
                     try:
-                        driver.find_element(By.TAG_NAME, "body").click()
+                        driver.execute_script(
+                            "const x = Math.round(window.innerWidth * 0.5);"
+                            "const y = Math.round(window.innerHeight * 0.6);"
+                            "const el = document.elementFromPoint(x, y);"
+                            "if (el) { for (const t of ['mousedown','mouseup','click']) {"
+                            "  el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: x, clientY: y}));"
+                            "} }"
+                        )
                     except Exception:
                         pass
                     time.sleep(1)

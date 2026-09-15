@@ -280,6 +280,13 @@ const Workbench: React.FC = () => {
         targetUrl: sheetUrl,
         spinDelayMs: 3000,
         timeoutMs: 5000,
+        // runRealGameVerification actually reads `timeoutSeconds` (not `timeoutMs` above, which
+        // is dead — nothing reads it) to decide how long to keep waiting on the backend before
+        // giving up and reporting "no result data". It must comfortably exceed
+        // testdata_verifier's own admin_login_timeout_sec (default 240s — a human may still be
+        // completing SSO + Okta Verify) plus real spin time, or the frontend times out and gives
+        // up *before* a run that would have genuinely succeeded ever gets to finish.
+        timeoutSeconds: 600,
         autoRetryServerError: true,
         loginName,
         folderPath,

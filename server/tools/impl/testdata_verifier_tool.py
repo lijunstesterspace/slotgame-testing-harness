@@ -556,6 +556,9 @@ class TestdataVerifierTool(ToolPlugin):
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.common.exceptions import TimeoutException
         from server.infra.logger import log
         from server.infra import cancellation
 
@@ -788,11 +791,35 @@ class TestdataVerifierTool(ToolPlugin):
                         continue
                     time.sleep(1)  # Let page fully settle
 
-                # Upload testdata
-                file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+                # Upload testdata. Two robustness fixes over a plain find_element() here:
+                #   1. The admin page can still be rendering its upload form for a moment even
+                #      after the URL has already switched to the admin host (React-style client
+                #      render), so both elements need an explicit wait, not an immediate lookup.
+                #   2. contains(text(),'UPLOAD') is case-sensitive — the button is very likely
+                #      styled UPPERCASE via CSS (text-transform) while its actual DOM text is
+                #      mixed/lower case (e.g. "Upload File"), which silently matches nothing and
+                #      is exactly what surfaced as a NoSuchElementException in practice. Uppercase
+                #      both sides of the comparison so styling can't affect the match.
+                file_input = WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+                )
                 file_input.send_keys(str(testdata_file.resolve()))
                 time.sleep(1)
-                upload_btn = driver.find_element(By.XPATH, "//button[contains(text(),'UPLOAD')]")
+                try:
+                    upload_btn = WebDriverWait(driver, 20).until(
+                        EC.element_to_be_clickable((
+                            By.XPATH,
+                            "//button[contains("
+                            "translate(normalize-space(.), "
+                            "'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), "
+                            "'UPLOAD')]",
+                        ))
+                    )
+                except TimeoutException:
+                    # Last resort: whatever submit-type button exists on the page.
+                    upload_btn = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit']"))
+                    )
                 upload_btn.click()
                 time.sleep(3)
 

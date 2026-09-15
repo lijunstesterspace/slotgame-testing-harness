@@ -982,6 +982,13 @@ class TestdataVerifierTool(ToolPlugin):
     @staticmethod
     def _click_spin(driver) -> None:
         """Click the game's spin button. Tries multiple selectors."""
+        # `By` is only ever imported locally inside _run_verification_sync — a plain Python
+        # local import binds the name only in that function's own scope, not across other
+        # methods of the same class, so this staticmethod needs its own import or every `By.*`
+        # reference below raises NameError. This went unnoticed until now because every prior
+        # run failed earlier (admin login timeout, then the upload-button lookup) before
+        # execution ever reached this method.
+        from selenium.webdriver.common.by import By
         selectors = [
             # Common spin button selectors
             (By.CSS_SELECTOR, "button.spin-button"),

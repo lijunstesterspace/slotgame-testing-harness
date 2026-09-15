@@ -128,6 +128,17 @@ export async function runRealGameVerification(
       onProgress?.(results.length, result);
   });
 
+  // The tool failed before producing a single case (e.g. it errored out during admin-panel
+  // login, before ever uploading a file or spinning). Neither the per-case mapping above nor
+  // the aggregate fallback below has anything to work with in that situation, and silently
+  // falling through to a "0%, 0/0 cases" report looks exactly like a normal, successful, empty
+  // run — the tester has no way to tell "nothing needed verifying" apart from "verification
+  // never actually started". Throwing here routes the real backend error message into
+  // handleStartVerification's existing catch block (an error banner) instead.
+  if (results.length === 0 && totalSummary.total === 0 && lastCall && !lastCall.success) {
+    throw new Error(lastCall.error_message || "testdata_verifier failed with no result data");
+  }
+
   // Fallback: SSE did not parse cases
   if (results.length === 0 && totalSummary.total > 0) {
     const passed = totalSummary.failed === 0;

@@ -19,7 +19,7 @@ import type { TestRecordDto } from "./harness/sharedTypes";
 import { PlannerAgent } from "./harness/plannerAgent";
 import { ExecutionEngine, EngineCallbacks } from "./harness/executionEngine";
 import { getPipeline } from "./harness/pipelineRegistry";
-import { routeIntent, SCENARIOS, getScenarioSystemPrompt } from "./harness/intentRouter";
+import { routeIntent, SCENARIOS, getScenarioSystemPrompt, getScenarioLiteSystemPrompt, isCasualChatMessage } from "./harness/intentRouter";
 
 // No login in this build (see design doc §4.1) — the app opens straight into the Workbench.
 export const App: React.FC = () => <Workbench />;
@@ -389,7 +389,13 @@ const Workbench: React.FC = () => {
     setChatLoading(true);
     try {
       const planner = new PlannerAgent({ ...llmConfig, selectedModel });
-      const scenarioContext = getScenarioSystemPrompt(selectedScenarioId);
+      // Plain small talk ("hello") doesn't need the full Agent+Skill domain context — that's
+      // several KB the local model would otherwise have to re-process just to say hi back. Any
+      // real task description still gets the full prompt so the AI stays grounded in the
+      // scenario's actual rules.
+      const scenarioContext = isCasualChatMessage(message)
+        ? getScenarioLiteSystemPrompt(selectedScenarioId)
+        : getScenarioSystemPrompt(selectedScenarioId);
       const reply = await planner.clarify(scenarioContext, message);
       addLog({ type: "HARNESS_EVENT", content: `AI: ${reply || "(no response)"}` });
     } catch (e: any) {

@@ -217,6 +217,10 @@ export async function streamUniversalLlmChat(
         model: config.selectedModel,
         messages,
         stream: true,
+        // Ollama unloads a model from memory 5 minutes after its last request by default; the
+        // next call then pays the full model-load cost again on top of prompt processing. Every
+        // Harness call reuses the same model, so keep it resident for the whole session instead.
+        keep_alive: "30m",
         options: { temperature: HARNESS_LLM_TEMPERATURE, num_predict: HARNESS_LLM_MAX_OUTPUT_TOKENS },
       }),
       signal,

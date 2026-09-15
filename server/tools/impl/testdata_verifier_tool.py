@@ -529,10 +529,17 @@ class TestdataVerifierTool(ToolPlugin):
                               description="Take screenshot for bonus-trigger spins."),
                 ToolParameter(name="screenshot_on_fail", type="boolean", default=True,
                               description="Take screenshot for failed spins."),
+                ToolParameter(name="admin_login_timeout_sec", type="number", default=240,
+                              description="Seconds to wait for the admin TestData page to finish loading "
+                                          "after navigating to it, before giving up. Needs to comfortably "
+                                          "cover a human completing SSO login (password + an MFA/Okta "
+                                          "Verify push approval on their phone), not just a page redirect — "
+                                          "too short and this tool closes the browser out from under a "
+                                          "tester who hasn't finished logging in yet."),
             ]),
             permissions=["filesystem:write", "selenium", "network:outbound"],
-            timeout_seconds=900,
-            version="2.0.0",
+            timeout_seconds=1800,
+            version="2.1.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -572,6 +579,7 @@ class TestdataVerifierTool(ToolPlugin):
         spin_delay: float = float(params.get("spin_delay_sec", 3.0))
         screenshot_bonus: bool = bool(params.get("screenshot_on_bonus", True))
         screenshot_fail: bool = bool(params.get("screenshot_on_fail", True))
+        admin_login_timeout: int = int(params.get("admin_login_timeout_sec", 240))
 
         output = (
             Path(params["output_report"])
@@ -720,19 +728,29 @@ class TestdataVerifierTool(ToolPlugin):
             log.info("verifier.navigate_admin", url=admin_url)
             driver.get(admin_url)
             admin_host = urlparse(admin_url).hostname or ""
-            for waited in range(30):
+            for waited in range(admin_login_timeout):
                 # Parenthesize explicitly: `X or "" == Y` parses as `X or ("" == Y)`, which is
                 # truthy for almost any non-empty hostname — the intended equality check never
                 # actually ran, so a failed/redirected login was never detected here.
                 if (urlparse(driver.current_url).hostname or "") == admin_host:
                     break
+                # A human may still be typing a password or approving an Okta Verify push on
+                # their phone right now. NOTE: log.info only reaches the server-side log stream
+                # (structlog / terminal) — ToolPlugin._run_impl has no way to push live progress
+                # into the app's own Execution Console (that only gets one TOOL_CALL/TOOL_RES
+                # event per whole tool invocation, from execution_queue.py). This is a breadcrumb
+                # for anyone tailing server logs, not something the tester watching the UI sees.
+                if waited > 0 and waited % 10 == 0:
+                    log.info("verifier.awaiting_admin_login", waited_sec=waited, timeout_sec=admin_login_timeout)
                 time.sleep(1)
             else:
                 return ToolResult(
                     success=False,
-                    error=f"Admin page login failed: Still redirected after 30s. "
+                    error=f"Admin page login failed: still redirected after {admin_login_timeout}s. "
                           f"Current URL: {driver.current_url}. "
-                          f"Please log in to the admin panel in your regular Chrome browser first.",
+                          f"Please log in to the admin panel (including any MFA/Okta Verify step) in "
+                          f"your regular Chrome browser first, then re-run — or raise "
+                          f"admin_login_timeout_sec if you just needed more time.",
                 )
 
             # ── Step 2: Process each file (reuse Chrome) ──────────
@@ -747,8 +765,10 @@ class TestdataVerifierTool(ToolPlugin):
                 if file_idx > 0:
                     log.info("verifier.navigate_admin_for_upload", file=file_label)
                     driver.get(admin_url)
-                    # Wait for admin page to load (check hostname)
-                    for _waited in range(30):
+                    # Wait for admin page to load (check hostname). Same generous timeout as the
+                    # first navigation — a long-running batch can outlast the session and force a
+                    # re-login (possibly with MFA again) partway through.
+                    for _waited in range(admin_login_timeout):
                         current_host = urlparse(driver.current_url).hostname or ""
                         if current_host == admin_host:
                             break

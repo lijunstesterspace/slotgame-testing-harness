@@ -171,3 +171,51 @@ export function getScenarioSystemPrompt(scenarioId: string): string {
 
   return prompt;
 }
+
+/**
+ * A short, few-sentence stand-in for getScenarioSystemPrompt(), used only for plain small-talk
+ * (see isCasualChatMessage below) — the full prompt concatenates the whole Agent .md + every
+ * Skill .md for the scenario (several KB), which a local 7B-and-under model has to fully
+ * re-process before it can answer even "hello". Real task messages still get the full prompt;
+ * this only trims the one path where a tester is just saying hi and doesn't need any of that
+ * domain detail to get a quick, friendly reply.
+ */
+export function getScenarioLiteSystemPrompt(scenarioId: string): string {
+  const scenario = SCENARIOS.find((s) => s.id === scenarioId);
+  if (!scenario) {
+    return "You are the AI assistant for a SLOT game testing tool. Keep replies short and friendly.";
+  }
+  return (
+    `You are the AI assistant for the "${scenario.label}" scenario in a SLOT game testing tool ` +
+    `(${scenario.description}). This is just casual small talk, not a task — reply in 1-2 short, ` +
+    `friendly sentences. Do not call tools or ask for task details unless the user brings them up.`
+  );
+}
+
+// ── Casual small-talk detector ──────────────────────────────────────────
+// Deliberately conservative: a false negative (treating chit-chat as a real task) only costs a
+// bit of extra prompt-processing time; a false positive (treating a real task description as
+// chit-chat) would starve the model of the domain rules it needs, so length alone already rules
+// out anything but a short message, and every pattern is anchored to match the *whole* trimmed
+// string rather than merely appearing inside it.
+// Chinese input commonly uses full-width punctuation (！。，？) instead of ASCII — both forms
+// need to match, so every trailing-punctuation class below includes both.
+const CASUAL_CHAT_PATTERNS: RegExp[] = [
+  /^(hi|hello|hey|yo|sup)[!！.。\s]*$/i,
+  /^(你好|您好|嗨|哈喽)[!！.。\s]*$/,
+  /^(thanks|thank you|thx|ty)[!！.。\s]*$/i,
+  /^(谢谢|感谢)[!！.。\s]*$/,
+  /^(bye|goodbye|see you|cya)[!！.。\s]*$/i,
+  /^(再见|拜拜)[!！.。\s]*$/,
+  /^(ok|okay|got it|sure|cool|nice|great)[!！.。\s]*$/i,
+  /^(好的?|嗯|收到|明白了?)[!！.。\s]*$/,
+  /^how are you[?？]*$/i,
+  /^(早|早上好|晚安|晚上好)[!！.。\s]*$/,
+];
+
+/** True only for short, unambiguous greetings/acknowledgements — see CASUAL_CHAT_PATTERNS. */
+export function isCasualChatMessage(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed || trimmed.length > 20) return false;
+  return CASUAL_CHAT_PATTERNS.some((re) => re.test(trimmed));
+}

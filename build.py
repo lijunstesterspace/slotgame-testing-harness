@@ -33,6 +33,13 @@ def _open_webview():
     import webview
     from server.config import settings
 
+    # pywebview 默认禁用下载（ALLOW_DOWNLOADS=False）：在 Windows 的 EdgeChromium 后端上，
+    # 点击一个会触发 Content-Disposition: attachment 的链接（比如"Download HTML Report"
+    # 按钮）时，on_download_starting 会直接 args.Cancel = True 静默取消，界面上完全没有
+    # 任何提示——这正是打包后的桌面版一直"点了下载链接却什么也拿不到"的原因。开启后会弹出
+    # 系统原生的另存为对话框。必须在 create_window() 之前设置。
+    webview.settings["ALLOW_DOWNLOADS"] = True
+
     # 等待服务启动
     import urllib.request
     url = f"http://127.0.0.1:{settings.api_port}"

@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
@@ -56,6 +56,55 @@ def _derive_admin_testdata_url(game_url: str) -> str:
     return f"{parsed.scheme}://{admin_host}/TestData"
 
 
+def _extract_url_identity(game_url: str) -> dict:
+    """Pull the `username` / `moduleId` query params off the game URL.
+
+    These are the two values the real game environment uses to decide *which* uploaded
+    .testdata file's seed queue to actually read from — see _check_key_matches_url()."""
+    qs = parse_qs(urlparse(game_url).query)
+    return {
+        "username": (qs.get("username") or [""])[0],
+        "moduleId": (qs.get("moduleId") or [""])[0],
+    }
+
+
+def _extract_testdata_key(filepath: Path) -> dict:
+    """Read just the <Key moduleID=".." loginName=".."/> identity out of a .testdata file,
+    without parsing the (possibly invalid, at this point still-unvalidated) spin records."""
+    tree = ET.parse(str(filepath))
+    key_elem = tree.getroot().find("Key")
+    return {
+        "moduleID": key_elem.get("moduleID", "") if key_elem is not None else "",
+        "loginName": key_elem.get("loginName", "") if key_elem is not None else "",
+    }
+
+
+def _check_key_matches_url(testdata_key: dict, url_identity: dict) -> list[str]:
+    """Verify a .testdata file's <Key> identity against the target game URL's query params.
+
+    The real game environment silently ignores an uploaded .testdata file whenever its
+    loginName/moduleID don't match the URL's username/moduleId — it just keeps serving
+    whatever seed was already queued for that login instead (confirmed empirically: an
+    uploaded batch/index only ever showed up in the game's response when both matched; a
+    moduleId mismatch made the game return a completely unrelated seed with no error at all).
+    Catching the mismatch here, before Selenium ever touches the browser, turns that silent
+    wrong-seed failure into an immediate, specific error instead of a misleading PASS/FAIL
+    report against data the game never actually used.
+    """
+    issues: list[str] = []
+    if testdata_key["loginName"] != url_identity["username"]:
+        issues.append(
+            f"loginName mismatch: testdata Key loginName={testdata_key['loginName']!r} "
+            f"!= URL username={url_identity['username']!r}"
+        )
+    if testdata_key["moduleID"] != url_identity["moduleId"]:
+        issues.append(
+            f"moduleID mismatch: testdata Key moduleID={testdata_key['moduleID']!r} "
+            f"!= URL moduleId={url_identity['moduleId']!r}"
+        )
+    return issues
+
+
 def _force_kill_driver(driver) -> None:
     """Hard-kill the browser session for cancellation.
 
@@ -87,6 +136,23 @@ def _force_kill_driver(driver) -> None:
         driver.quit()
     except Exception:
         pass
+
+
+def _detach_profile_link(link_path: Path, link_method: str | None) -> None:
+    """Remove just the reparse point at `link_path`, never its target.
+
+    CRITICAL: a Windows junction does NOT satisfy Path.is_symlink() (junctions use
+    IO_REPARSE_TAG_MOUNT_POINT, not IO_REPARSE_TAG_SYMLINK). Falling through to
+    shutil.rmtree() on a directory that still contains an un-detached junction walks straight
+    through it and deletes the *real* target directory's files — here, the tester's actual
+    Chrome profile. `link_method` (tracked at creation time, not re-detected) picks the correct
+    removal call; os.rmdir() on a junction detaches it without touching its target.
+    """
+    import os
+    if link_method == "junction":
+        os.rmdir(link_path)
+    elif link_method == "symlink" or link_path.is_symlink():
+        link_path.unlink()
 
 
 def _parse_testdata(filepath: Path) -> list[dict]:
@@ -440,6 +506,9 @@ class TestdataVerifierTool(ToolPlugin):
         return ToolInfo(
             name="testdata_verifier",
             description=(
+                "Validates each file's <Key> loginName/moduleID against target_url's "
+                "username/moduleId before touching the browser — a mismatch there makes the "
+                "real game silently ignore the upload and serve an unrelated seed instead. "
                 "Uploads .testdata to the game admin panel, opens the game in Chrome, "
                 "auto-spins and intercepts responseLogger via console.log. "
                 "Compares actual seed/payout against expected values. "
@@ -525,6 +594,23 @@ class TestdataVerifierTool(ToolPlugin):
         total_spins = sum(len(r) for r in all_records_by_file.values())
         log.info("verifier.batch_start", files=len(testdata_files_list), total_spins=total_spins)
 
+        # ── Pre-flight: reject any file/URL identity mismatch before touching Selenium ──
+        # (see _check_key_matches_url's docstring for why this matters: the game environment
+        # silently ignores a mismatched upload instead of erroring, so this is the only place
+        # that failure mode can actually be caught.)
+        url_identity = _extract_url_identity(target_url)
+        mismatch_lines: list[str] = []
+        for tf in testdata_files_list:
+            testdata_key = _extract_testdata_key(tf)
+            issues = _check_key_matches_url(testdata_key, url_identity)
+            if issues:
+                mismatch_lines.append(f"{tf.name}: " + "; ".join(issues))
+        if mismatch_lines:
+            return ToolResult(
+                success=False,
+                error="testdata_url_identity_mismatch:\n" + "\n".join(mismatch_lines),
+            )
+
         # ── Derive admin TestData URL from game URL ────────────────
         admin_url = _derive_admin_testdata_url(target_url)
 
@@ -539,6 +625,7 @@ class TestdataVerifierTool(ToolPlugin):
 
         import platform, tempfile, shutil
         temp_profile = None
+        link_method: str | None = None
         if platform.system() == "Windows":
             user_data_dir = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
         elif platform.system() == "Darwin":
@@ -550,23 +637,51 @@ class TestdataVerifierTool(ToolPlugin):
             default_profile = user_data_dir / "Default"
             if default_profile.exists():
                 candidate = Path(tempfile.mkdtemp(prefix="harness_chrome_"))
-                try:
-                    local_state = user_data_dir / "Local State"
-                    if local_state.exists():
-                        shutil.copy2(local_state, candidate / "Local State")
-                    (candidate / "Default").symlink_to(default_profile)
-                    chrome_options.add_argument(f"--user-data-dir={candidate}")
-                    chrome_options.add_argument("--profile-directory=Default")
-                    temp_profile = candidate
-                    log.info("verifier.chrome_profile_symlinked", path=str(candidate))
-                except OSError as e:
-                    # Symlink creation needs Developer Mode or admin rights on Windows
-                    # (SeCreateSymbolicLinkPrivilege) — without it this raises WinError 1314.
-                    # Degrade to a fresh, unauthenticated Chrome profile instead of crashing the
-                    # whole verification run; the admin-page login check further below will
-                    # surface the resulting "not logged in" state on its own.
+                link_path = candidate / "Default"
+
+                # Prefer an NTFS *junction* over a symlink on Windows: junctions are a plain
+                # directory reparse point that any standard (non-admin) account can create,
+                # whereas Path.symlink_to() needs Developer Mode or admin rights
+                # (SeCreateSymbolicLinkPrivilege) and raises WinError 1314 without it — which is
+                # exactly why testers kept hitting a fresh, logged-out Chrome profile (and had to
+                # log into the admin panel again every run) on machines without Dev Mode enabled.
+                if platform.system() == "Windows":
+                    try:
+                        import _winapi
+                        _winapi.CreateJunction(str(default_profile), str(link_path))
+                        link_method = "junction"
+                    except OSError as e:
+                        log.warning("verifier.chrome_profile_junction_failed", error=str(e))
+
+                if link_method is None:
+                    try:
+                        link_path.symlink_to(default_profile)
+                        link_method = "symlink"
+                    except OSError as e:
+                        log.warning("verifier.chrome_profile_symlink_failed", error=str(e))
+
+                if link_method is not None:
+                    try:
+                        local_state = user_data_dir / "Local State"
+                        if local_state.exists():
+                            shutil.copy2(local_state, candidate / "Local State")
+                        chrome_options.add_argument(f"--user-data-dir={candidate}")
+                        chrome_options.add_argument("--profile-directory=Default")
+                        temp_profile = candidate
+                        log.info("verifier.chrome_profile_linked", path=str(candidate), method=link_method)
+                    except OSError as e:
+                        log.warning("verifier.chrome_profile_setup_failed", error=str(e))
+                        try:
+                            _detach_profile_link(link_path, link_method)
+                        except OSError:
+                            pass
+                        shutil.rmtree(candidate, ignore_errors=True)
+                else:
+                    # Neither a junction nor a symlink could be created — degrade to a fresh,
+                    # unauthenticated Chrome profile instead of crashing the whole verification
+                    # run; the admin-page login check further below will surface the resulting
+                    # "not logged in" state on its own.
                     shutil.rmtree(candidate, ignore_errors=True)
-                    log.warning("verifier.chrome_profile_symlink_failed", error=str(e))
             else:
                 log.warning("verifier.chrome_profile_not_found", path=str(default_profile))
         else:
@@ -808,9 +923,10 @@ class TestdataVerifierTool(ToolPlugin):
                 pass
             try:
                 if temp_profile is not None and temp_profile.exists():
-                    default_link = temp_profile / "Default"
-                    if default_link.is_symlink():
-                        default_link.unlink()
+                    try:
+                        _detach_profile_link(temp_profile / "Default", link_method)
+                    except OSError:
+                        pass
                     shutil.rmtree(temp_profile, ignore_errors=True)
                     log.info("verifier.chrome_profile_cleaned", path=str(temp_profile))
             except Exception:

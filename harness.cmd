@@ -17,15 +17,15 @@ if not exist "%ROOT%\server\requirements.txt" (
 )
 
 :: ============================================================
-::   Slot AI Harness - EXE 打包工具
+::   Slot Game Testing Harness - EXE 打包工具
 ::   用途：打包成 exe 分享给同事使用
 :: ============================================================
 
 echo ============================================================
-echo   Slot AI Harness - EXE 打包工具
+echo   Slot Game Testing Harness - EXE 打包工具
 echo ============================================================
 echo.
-echo  此工具将生成 SlotAIHarness.exe
+echo  此工具将生成 SlotGameTestingHarness.exe
 echo  打包完成后可分享给同事直接运行
 echo.
 pause
@@ -134,12 +134,12 @@ if errorlevel 1 (
 :: 完成
 :: ============================================================
 echo.
-if exist "dist\SlotAIHarness.exe" (
+if exist "dist\SlotGameTestingHarness.exe" (
     echo ============================================================
     echo   打包完成！
     echo ============================================================
     echo.
-    echo 输出文件: dist\SlotAIHarness.exe
+    echo 输出文件: dist\SlotGameTestingHarness.exe
     echo.
     
     :: 复制 .env 到 dist 目录
@@ -156,12 +156,12 @@ if exist "dist\SlotAIHarness.exe" (
     echo ============================================================
     echo.
     echo  1. 将 dist 文件夹中的以下文件打包成 zip:
-    echo     - SlotAIHarness.exe
+    echo     - SlotGameTestingHarness.exe
     echo     - .env
     echo.
     echo  2. 将 zip 文件分享给同事
     echo.
-    echo  3. 同事解压后双击 SlotAIHarness.exe 即可使用
+    echo  3. 同事解压后双击 SlotGameTestingHarness.exe 即可使用
     echo     桌面窗口将自动打开
     echo.
     echo  注意: 同事电脑需要安装 Chrome 浏览器 (用于 Selenium)
@@ -173,7 +173,7 @@ if exist "dist\SlotAIHarness.exe" (
         explorer "dist"
     )
 ) else (
-    echo [错误] 未找到输出文件 dist\SlotAIHarness.exe
+    echo [错误] 未找到输出文件 dist\SlotGameTestingHarness.exe
 )
 
 echo.

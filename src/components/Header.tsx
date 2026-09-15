@@ -39,7 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
             <Bot className="w-4 h-4 text-slate-950" />
           </div>
           <div className="leading-tight">
-            <h1 className="text-sm font-bold text-white tracking-tight">Slot AI <span className="text-emerald-400">Harness</span></h1>
+            <h1 className="text-sm font-bold text-white tracking-tight">Slot Game Testing <span className="text-emerald-400">Harness</span></h1>
             <p className="text-[9px] text-slate-500 font-mono">v2 · PlannerAgent + ToolRegistry</p>
           </div>
         </div>

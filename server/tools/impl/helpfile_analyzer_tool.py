@@ -324,7 +324,7 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
     </div>
 
     <div class="footer">
-        Slot AI Harness &mdash; Helpfile AI Analysis Report (Local Ollama)
+        Slot Game Testing Harness &mdash; Helpfile AI Analysis Report (Local Ollama)
     </div>
 </div>
 </body>

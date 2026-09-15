@@ -420,7 +420,7 @@ def _generate_html_report(
     {case_rows}
 
     <div class="footer">
-        Slot AI Harness &mdash; TestData Verification Report
+        Slot Game Testing Harness &mdash; TestData Verification Report
     </div>
 </div>
 </body>

@@ -130,7 +130,7 @@ Skill文件永久固定为缓存前缀，本地调试、云端生产完全复用
 >
 > 既然 Harness 自身的登录/权限层**不能**带来"免登录游戏环境"的效果，就没有必要为此保留一套用户账号与角色体系——这与本节"无权限管理、无用户角色、无业务数据菜单"的原始定位是一致的。因此确定：**移除 Harness 自身的登录门槛**，打开即用；真实游戏/后台环境的登录仍由测试人员在自己的浏览器里按需手动完成，与 Harness 无关，Harness 不做、也不承诺做这件事。
 >
-> （注：本节描述的是目标状态。当前代码仍保留登录页面与后端认证机制 `server/api/auth_router.py` / `server/infra/security.py`，将在后续版本中移除以匹配此处的定位。）
+> （注：本节描述的目标状态**已在当前代码中落地**——登录页面与后端账号/角色认证机制已被移除：`server/infra/security.py` 的 `require_user()` 现直接返回一个固定的本地用户（`LOCAL_USER`），不再做任何密码校验或 session 鉴权，`server/api/auth_router.py` 已删除，前端 `client.ts` 与 `App.tsx` 亦注明“本构建不含登录”，打开即用。真实游戏/后台环境的登录仍与 Harness 无关，由测试人员在自己浏览器中按需手动完成。）
 
 - **中间：核心执行画布**
 
@@ -219,6 +219,8 @@ slot-ai-harness/
 └── frontend/              # TraeWork极简桌面UI
 
 ```
+
+> **实现说明**：本节为立项之初的**设计意图目录**，用于表达四层解耦的分层理念。经代码核查，项目实际落地遵循的是第 10.5 节的**升级后目录结构**：Harness 调度内核以 TypeScript 实现于 `src/harness/`（`intentRouter.ts` / `pipelineRegistry.ts` / `executionEngine.ts` / `plannerAgent.ts` / `plannerProvider.ts` / `client.ts` / `sharedTypes.ts`），而非本节的 `harness/*.py`；Plugin 执行层落地为 `server/tools/impl/*_tool.py`（经 `ToolRegistry` 注册），而非本节的 `plugins/*.py`；`agents/`、`skills/` 位于仓库根目录，实际文件名为 `testdata_generator_agent.md` 等（见第 10.2 节），Agent/Skill 分层职责不变；前端为 `src/` 下的 React + Vite 应用，对应本节的 `frontend/`。两处目录描述若有出入，**以第 10.5 节及实际代码为准**，本节保留仅作设计沿革记录。
 
 ---
 
@@ -458,6 +460,8 @@ const PIPELINES: Record<string, Pipeline> = {
   },
 };
 ```
+
+> 说明：二维数组的**外层 stage 严格串行**执行；**内层步骤按声明顺序串行执行**，stage 内并行执行能力为架构预留（当前所有流水线的每个 stage 仅含一个步骤，不触发并行）。
 
 #### 模块三：执行引擎 + 状态机（Execution Engine）
 
@@ -928,7 +932,7 @@ Fully aligned with the TraeWork desktop Harness minimalist design, discarding Wo
 >
 > Since Harness's own login/permission layer **cannot** deliver "no need to log into the game environment again," there is no reason to keep a user-account-and-role system for that purpose — this is consistent with this section's original positioning of "no permission management, no user roles, no business-data menus." The decision is therefore: **remove Harness's own login gate** — open it and use it directly; logging into the real game/admin environment remains something the tester does manually in their own browser as needed, unrelated to Harness — Harness does not do this, and does not claim to.
 >
-> (Note: this section describes the target state. The current code still retains the login page and backend auth mechanism — `server/api/auth_router.py` / `server/infra/security.py` — which will be removed in a later version to match the positioning described here.)
+> (Note: the target state described in this section **has already landed in the current code** — the login page and the backend account/role authentication mechanism have been removed: `require_user()` in `server/infra/security.py` now returns a single fixed local user (`LOCAL_USER`) with no password verification or session-token authentication, `server/api/auth_router.py` has been deleted, and the frontend `client.ts` / `App.tsx` both note that “this build contains no login” — open it and use it directly. Logging into the real game/admin environment remains unrelated to Harness and is still done manually by the tester in their own browser as needed.)
 
 - **Middle: core execution canvas**
 
@@ -1017,6 +1021,8 @@ slot-ai-harness/
 └── frontend/              # TraeWork minimalist desktop UI
 
 ```
+
+> **Implementation note**: This section is the original **design-intent directory layout** from project kick-off, expressing the four-layer decoupling philosophy. A code check confirms the project actually follows the **upgraded layout of section 10.5**: the Harness orchestration kernel is implemented in TypeScript under `src/harness/` (`intentRouter.ts` / `pipelineRegistry.ts` / `executionEngine.ts` / `plannerAgent.ts` / `plannerProvider.ts` / `client.ts` / `sharedTypes.ts`) rather than this section's `harness/*.py`; the Plugin execution layer lands as `server/tools/impl/*_tool.py` (registered via `ToolRegistry`) rather than this section's `plugins/*.py`; `agents/` and `skills/` live at the repository root with real filenames such as `testdata_generator_agent.md` (see section 10.2), and the Agent/Skill layering responsibilities are unchanged; the frontend is a React + Vite app under `src/`, corresponding to this section's `frontend/`. Wherever the two directory descriptions diverge, **section 10.5 and the actual code are authoritative**; this section is retained purely as a record of design evolution.
 
 ---
 
@@ -1256,6 +1262,8 @@ const PIPELINES: Record<string, Pipeline> = {
   },
 };
 ```
+
+> Note: the **outer stages of the 2D array execute strictly in sequence**; the **inner steps execute sequentially in their declared order** — the capability for intra-stage parallel execution is reserved by the architecture (every stage in all current pipelines contains exactly one step, so parallelism is never triggered).
 
 #### Module Three: Execution Engine + State Machine
 

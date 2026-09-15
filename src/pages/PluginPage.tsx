@@ -23,31 +23,49 @@ const PLUGIN_ICONS: Record<string, React.ReactNode> = {
 const SKILL_ICONS: Record<string, React.ReactNode> = {
   "skill-generator-plugin-contract": <Puzzle className="w-5 h-5" />,
   "skill-sheet-data-clean": <Table2 className="w-5 h-5" />,
-  "skill-task-dispatch-rule": <Zap className="w-5 h-5" />,
+  "skill-verification-protocol": <Wrench className="w-5 h-5" />,
+  "skill-helpfile-conversion": <FileText className="w-5 h-5" />,
+  "skill-helpfile-plugin-contract": <Puzzle className="w-5 h-5" />,
 };
 
 // ── Hardcoded skill data (from skills/*.md) ─────────────────────
+// Kept in sync with the skills actually wired into intentRouter.ts's SKILL_CONTENT map —
+// every entry here must correspond to a skill file some scenario in SCENARIOS references.
 const HARDCODED_SKILLS: SkillInfoDto[] = [
   {
     id: "skill-generator-plugin-contract",
     name: "Test Generation Plugin Interface Contract",
     description: "Defines the interface contract between the Plugin tool layer and the Agent layer, ensuring consistent parameter formats. Covers input/output specifications for five tools: testdata_parser, testdata_generator, zip_packager, game_verifier, and log_diagnoser.",
     file: "skill-generator-plugin-contract.md",
-    size_kb: 2.8,
+    size_kb: 2.6,
   },
   {
     id: "skill-sheet-data-clean",
     name: "SLOT Test Sheet Data Cleaning Rules",
     description: "Dedicated cleaning, filtering, and standardization skills for SLOT test sheets, providing constraint specifications for the data generation Agent. Includes Module ID extraction, Batch & Index cleanup, file classification naming rules, etc.",
     file: "skill-sheet-data-clean.md",
-    size_kb: 1.2,
+    size_kb: 1.3,
   },
   {
-    id: "skill-task-dispatch-rule",
-    name: "SLOT Test Task Packaging & Dispatch Rules",
-    description: "Rules for packaging, dispatching, and format constraints of SLOT test tasks, ensuring stable AI output formats. Defines a two-phase workflow (data generation + verification diagnosis) with mandatory tool invocation format constraints.",
-    file: "skill-task-dispatch-rule.md",
-    size_kb: 1.4,
+    id: "skill-verification-protocol",
+    name: "SLOT TestData Verification Protocol",
+    description: "Dedicated verification skill for the TestData Verification scenario: pre-flight environment checks, seed injection & spin execution timing, boundary conditions, exception classification, and result judgment criteria.",
+    file: "skill-verification-protocol.md",
+    size_kb: 4.0,
+  },
+  {
+    id: "skill-helpfile-conversion",
+    name: "Helpfile HTML Conversion & Diff Analysis Rules",
+    description: "Rules for batch-converting help-file HTML to text and diff/keyword analysis, constraining the Helpfile Conversion Agent's behavior.",
+    file: "skill-helpfile-conversion.md",
+    size_kb: 2.5,
+  },
+  {
+    id: "skill-helpfile-plugin-contract",
+    name: "Helpfile Conversion Plugin Interface Contract",
+    description: "Defines the interface contract between the helpfile conversion/analysis Plugins and the Agent layer, ensuring consistent parameter formats across html_to_text_converter, diff_comparator, and helpfile_analyzer.",
+    file: "skill-helpfile-plugin-contract.md",
+    size_kb: 3.7,
   },
 ];
 

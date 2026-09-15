@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec 文件 - Slot AI Harness 打包配置
+PyInstaller spec 文件 - Slot Game Testing Harness 打包配置
 用法：pyinstaller slot_harness.spec --noconfirm
 """
 import os
@@ -242,7 +242,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="SlotAIHarness",
+    name="SlotGameTestingHarness",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

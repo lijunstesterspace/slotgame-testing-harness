@@ -33,7 +33,7 @@ ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = "Slot AI Harness"
+    app_name: str = "Slot Game Testing Harness"
     api_host: str = os.getenv("HARNESS_API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("HARNESS_API_PORT", "8000"))
     cors_origins: list[str] = field(default_factory=lambda: [

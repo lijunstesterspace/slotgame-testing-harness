@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
-import { AgentCore } from "./components/AgentCore";
+import { PipelineVisualization } from "./components/PipelineVisualization";
+import { ExecutionConsole } from "./components/ExecutionConsole";
 import { TestDataPreview } from "./components/TestDataPreview";
 import { VerificationReportModal } from "./components/VerificationReportModal";
 import { LlmConfigModal } from "./components/LlmConfigModal";
@@ -830,11 +831,206 @@ const Workbench: React.FC = () => {
           onSelectScenario={setSelectedScenarioId}
         />
 
-        {/* Center: Input Dialog → Pipeline → Console → Preview */}
-        <div className="flex-1 flex flex-col overflow-y-auto p-4 gap-4 min-w-0">
+        {/* Center: chat-style column — Execution Console (transcript, fills available space)
+            sits above interactive panels and the Input Dialog, which is pinned at the bottom
+            like a typical AI chat window. Pipeline + TestData Preview live in the right column. */}
+        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4 min-w-0">
+
+          {/* ── Execution Console (chat transcript) ── */}
+          <ExecutionConsole logs={logs} />
+
+          {/* ── AI Clarify Panel: simple dialogue interaction, bounded to one question ── */}
+          {clarifyState && (
+            <div className="flex-shrink-0 bg-slate-900/70 border border-amber-700/40 rounded-2xl p-5 shadow-xl animate-in slide-in-from-top duration-300">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="p-1.5 rounded-lg bg-amber-950/60 border border-amber-800/50 text-amber-400">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">AI needs one more detail</span>
+              </div>
+              <div className="text-xs text-slate-200 mb-3 bg-slate-950/50 border border-slate-800 rounded-lg p-3">
+                {clarifyState.question}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={clarifyReply}
+                  onChange={(e) => setClarifyReply(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleClarifySubmit();
+                    }
+                  }}
+                  placeholder="Type your answer..."
+                  autoFocus
+                  className="flex-1 px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
+                />
+                <button
+                  onClick={handleClarifySubmit}
+                  className="px-4 h-10 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-slate-900 hover:shadow-lg hover:shadow-amber-500/20 transition"
+                >
+                  Send
+                </button>
+                <button
+                  onClick={handleClarifyCancel}
+                  className="px-3 h-10 rounded-xl text-xs text-slate-400 bg-slate-800 hover:bg-slate-700 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Test Plan Preview Panel ── */}
+          {showPreview && (
+            <div className="flex-shrink-0 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl overflow-y-auto max-h-[60%]">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/50 text-emerald-400">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Test Plan Preview</span>
+                </div>
+                <button
+                  onClick={() => setShowPreview(false)}
+                  className="text-slate-400 hover:text-slate-200 text-xs"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-400 mb-3">
+                {selectedScenarioId === 'testdata_generation'
+                  ? 'Select the test items you want to generate:'
+                  : selectedScenarioId === 'game_verification'
+                  ? 'Select the verification items to execute:'
+                  : selectedScenarioId === 'log_diagnosis'
+                  ? 'Select the diagnosis items to analyze:'
+                  : 'Select the test items to execute:'}
+              </div>
+
+              {/* Testdata file list for game_verification */}
+              {selectedScenarioId === 'game_verification' && (
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      Select testdata file(s) ({selectedTestdataFiles.length}/{testdataFiles.length} selected):
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedTestdataFiles.length === testdataFiles.length) {
+                          // Deselect all
+                          setSelectedTestdataFiles([]);
+                        } else {
+                          // Select all
+                          setSelectedTestdataFiles([...testdataFiles]);
+                        }
+                      }}
+                      className="text-[10px] text-cyan-400 hover:text-cyan-300 font-medium"
+                    >
+                      {selectedTestdataFiles.length === testdataFiles.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  </div>
+                  {testdataFiles.length > 0 ? (
+                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                      {testdataFiles.map((f) => {
+                        const isSelected = selectedTestdataFiles.some(sf => sf.path === f.path);
+                        return (
+                          <label
+                            key={f.path}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-xs ${
+                              isSelected
+                                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                                : 'bg-slate-950/50 border-slate-700 hover:border-slate-600 text-slate-300'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (isSelected) {
+                                  setSelectedTestdataFiles(selectedTestdataFiles.filter(sf => sf.path !== f.path));
+                                } else {
+                                  setSelectedTestdataFiles([...selectedTestdataFiles, f]);
+                                }
+                              }}
+                              className="accent-amber-400"
+                            />
+                            <FileText className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                            <span className="font-mono truncate flex-1">{f.name}</span>
+                            <span className="text-[10px] text-slate-500">{f.size_kb} KB</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 px-3 py-2 text-center">
+                      No .testdata files found. Please select a folder with testdata files.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {plannedTests.map((test) => (
+                  <label
+                    key={test.id}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${
+                      test.selected
+                        ? 'bg-emerald-950/20 border-emerald-800/50'
+                        : 'bg-slate-950/50 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={test.selected}
+                      onChange={(e) => {
+                        setPlannedTests((prev) =>
+                          prev.map((t) =>
+                            t.id === test.id ? { ...t, selected: e.target.checked } : t
+                          )
+                        );
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-slate-200">{test.name}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{test.description}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-800">
+                <div className="text-[11px] text-slate-400">
+                  {plannedTests.filter(t => t.selected).length} of {plannedTests.length} items selected
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowPreview(false)}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmGeneration}
+                    disabled={plannedTests.filter(t => t.selected).length === 0}
+                    className="px-4 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/20 transition"
+                  >
+                    {selectedScenarioId === 'testdata_generation' ? 'Confirm & Generate'
+                      : selectedScenarioId === 'game_verification' ? 'Confirm & Verify'
+                      : selectedScenarioId === 'log_diagnosis' ? 'Confirm & Diagnose'
+                      : 'Confirm & Execute'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ─ Input Dialog ── */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div className="flex-shrink-0 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
             <div className="flex flex-col gap-3">
               {/* Unified input: auto-detects URL and intent */}
               <textarea
@@ -1044,213 +1240,18 @@ const Workbench: React.FC = () => {
               </div>
             </div>
           </div>
+        </div>
 
-          {/* ── AI Clarify Panel: simple dialogue interaction, bounded to one question ── */}
-          {clarifyState && (
-            <div className="bg-slate-900/70 border border-amber-700/40 rounded-2xl p-5 shadow-xl animate-in slide-in-from-top duration-300">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="p-1.5 rounded-lg bg-amber-950/60 border border-amber-800/50 text-amber-400">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">AI needs one more detail</span>
-              </div>
-              <div className="text-xs text-slate-200 mb-3 bg-slate-950/50 border border-slate-800 rounded-lg p-3">
-                {clarifyState.question}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={clarifyReply}
-                  onChange={(e) => setClarifyReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleClarifySubmit();
-                    }
-                  }}
-                  placeholder="Type your answer..."
-                  autoFocus
-                  className="flex-1 px-3 h-10 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/50 font-mono"
-                />
-                <button
-                  onClick={handleClarifySubmit}
-                  className="px-4 h-10 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-slate-900 hover:shadow-lg hover:shadow-amber-500/20 transition"
-                >
-                  Send
-                </button>
-                <button
-                  onClick={handleClarifyCancel}
-                  className="px-3 h-10 rounded-xl text-xs text-slate-400 bg-slate-800 hover:bg-slate-700 transition"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+        {/* Right: Pipeline visualization + TestData Preview */}
+        <div className="w-[340px] min-w-[340px] flex flex-col overflow-y-auto p-4 gap-4 border-l border-slate-800">
+          <PipelineVisualization
+            workflowStage={workflowStage}
+            workflowState={workflowState}
+            isGenerating={isGenerating}
+          />
 
-          {/* ── Test Plan Preview Panel ── */}
-          {showPreview && (
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/50 text-emerald-400">
-                    <Sparkles className="w-4 h-4" />
-                  </div>
-                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Test Plan Preview</span>
-                </div>
-                <button
-                  onClick={() => setShowPreview(false)}
-                  className="text-slate-400 hover:text-slate-200 text-xs"
-                >
-                  ✕ Close
-                </button>
-              </div>
-
-              <div className="text-[11px] text-slate-400 mb-3">
-                {selectedScenarioId === 'testdata_generation'
-                  ? 'Select the test items you want to generate:'
-                  : selectedScenarioId === 'game_verification'
-                  ? 'Select the verification items to execute:'
-                  : selectedScenarioId === 'log_diagnosis'
-                  ? 'Select the diagnosis items to analyze:'
-                  : 'Select the test items to execute:'}
-              </div>
-
-              {/* Testdata file list for game_verification */}
-              {selectedScenarioId === 'game_verification' && (
-                <div className="mb-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                      Select testdata file(s) ({selectedTestdataFiles.length}/{testdataFiles.length} selected):
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedTestdataFiles.length === testdataFiles.length) {
-                          // Deselect all
-                          setSelectedTestdataFiles([]);
-                        } else {
-                          // Select all
-                          setSelectedTestdataFiles([...testdataFiles]);
-                        }
-                      }}
-                      className="text-[10px] text-cyan-400 hover:text-cyan-300 font-medium"
-                    >
-                      {selectedTestdataFiles.length === testdataFiles.length ? 'Deselect All' : 'Select All'}
-                    </button>
-                  </div>
-                  {testdataFiles.length > 0 ? (
-                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                      {testdataFiles.map((f) => {
-                        const isSelected = selectedTestdataFiles.some(sf => sf.path === f.path);
-                        return (
-                          <label
-                            key={f.path}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-xs ${
-                              isSelected
-                                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
-                                : 'bg-slate-950/50 border-slate-700 hover:border-slate-600 text-slate-300'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => {
-                                if (isSelected) {
-                                  setSelectedTestdataFiles(selectedTestdataFiles.filter(sf => sf.path !== f.path));
-                                } else {
-                                  setSelectedTestdataFiles([...selectedTestdataFiles, f]);
-                                }
-                              }}
-                              className="accent-amber-400"
-                            />
-                            <FileText className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                            <span className="font-mono truncate flex-1">{f.name}</span>
-                            <span className="text-[10px] text-slate-500">{f.size_kb} KB</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-500 px-3 py-2 text-center">
-                      No .testdata files found. Please select a folder with testdata files.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {plannedTests.map((test) => (
-                  <label
-                    key={test.id}
-                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${
-                      test.selected
-                        ? 'bg-emerald-950/20 border-emerald-800/50'
-                        : 'bg-slate-950/50 border-slate-700 hover:border-slate-600'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={test.selected}
-                      onChange={(e) => {
-                        setPlannedTests((prev) =>
-                          prev.map((t) =>
-                            t.id === test.id ? { ...t, selected: e.target.checked } : t
-                          )
-                        );
-                      }}
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-slate-200">{test.name}</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">{test.description}</div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-800">
-                <div className="text-[11px] text-slate-400">
-                  {plannedTests.filter(t => t.selected).length} of {plannedTests.length} items selected
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowPreview(false)}
-                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfirmGeneration}
-                    disabled={plannedTests.filter(t => t.selected).length === 0}
-                    className="px-4 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/20 transition"
-                  >
-                    {selectedScenarioId === 'testdata_generation' ? 'Confirm & Generate'
-                      : selectedScenarioId === 'game_verification' ? 'Confirm & Verify'
-                      : selectedScenarioId === 'log_diagnosis' ? 'Confirm & Diagnose'
-                      : 'Confirm & Execute'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Pipeline + Console ─ */}
-          <div className="flex-1 flex flex-col min-h-0">
-            <AgentCore
-              tasks={tasks}
-              logs={logs}
-              workflowStage={workflowStage}
-              workflowState={workflowState}
-              isGenerating={isGenerating}
-            />
-          </div>
-
-          {/* ── TestData Preview ── */}
           {showCenterFooter && (
-            <div className="flex-shrink-0 max-h-[40%] min-h-[200px] overflow-y-auto">
-              <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
-            </div>
+            <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
           )}
         </div>
       </main>

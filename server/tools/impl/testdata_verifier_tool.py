@@ -155,6 +155,34 @@ def _detach_profile_link(link_path: Path, link_method: str | None) -> None:
         link_path.unlink()
 
 
+def _dismiss_feature_splash(driver, attempts: int = 3) -> None:
+    """Dismiss the "feature splash" screen most slot games show right after load, before the
+    real playable UI (and its Spin button) exists at all.
+
+    IMPORTANT: don't use driver.find_element(By.TAG_NAME, "body").click() for this. WebDriver's
+    native click() targets the element's "in-view center point", which for a full-viewport
+    <body> is browser-computed and not something this code controls — on this game that landed
+    on a QA-only "key" icon fixed in a screen corner, which opened a "Mock Server / F2 Dev Panel"
+    overlay instead of dismissing the splash. Dispatching a synthetic click via JS at an explicit
+    coordinate — as a *fraction* of the current window size, so it still lands centrally
+    regardless of screen size — avoids whatever fixed-position chrome lives in the corners.
+    """
+    import time
+    for _ in range(attempts):
+        try:
+            driver.execute_script(
+                "const x = Math.round(window.innerWidth * 0.5);"
+                "const y = Math.round(window.innerHeight * 0.6);"
+                "const el = document.elementFromPoint(x, y);"
+                "if (el) { for (const t of ['mousedown','mouseup','click']) {"
+                "  el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: x, clientY: y}));"
+                "} }"
+            )
+        except Exception:
+            pass
+        time.sleep(1)
+
+
 def _parse_testdata(filepath: Path) -> list[dict]:
     """Parse .testdata XML and return a list of expected spin records.
 
@@ -842,19 +870,7 @@ class TestdataVerifierTool(ToolPlugin):
                 # via JS at an explicit coordinate — as a *fraction* of the current window size,
                 # so it still lands centrally regardless of screen size — avoids whatever
                 # fixed-position chrome lives in the corners, where such icons conventionally sit.
-                for _ in range(3):
-                    try:
-                        driver.execute_script(
-                            "const x = Math.round(window.innerWidth * 0.5);"
-                            "const y = Math.round(window.innerHeight * 0.6);"
-                            "const el = document.elementFromPoint(x, y);"
-                            "if (el) { for (const t of ['mousedown','mouseup','click']) {"
-                            "  el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: x, clientY: y}));"
-                            "} }"
-                        )
-                    except Exception:
-                        pass
-                    time.sleep(1)
+                _dismiss_feature_splash(driver)
 
                 # Reset interceptor response count for fresh game session
                 driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")

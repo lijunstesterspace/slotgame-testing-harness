@@ -87,12 +87,18 @@ export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse):
   const lastCall = detail.tool_calls
     .slice()
     .reverse()
-    .find((tc) => tc.tool_name === "testdata_verifier" || tc.tool_name === "testdata_verifier_api");
+    .find((tc) =>
+      tc.tool_name === "testdata_verifier" ||
+      tc.tool_name === "testdata_verifier_api" ||
+      tc.tool_name === "testdata_verifier_harness"
+    );
 
   let targetUrl = "";
   try {
     const params = lastCall ? JSON.parse(lastCall.params_json) : null;
+    // testdata_verifier_harness has no target_url — harness_url is the closest analog.
     if (params && typeof params.target_url === "string") targetUrl = params.target_url;
+    else if (params && typeof params.harness_url === "string") targetUrl = params.harness_url;
   } catch {}
 
   const { totalSummary, allParsedCases, reportUrl } = parseVerifierResultSnippet(lastCall);
@@ -147,25 +153,45 @@ export async function runRealGameVerification(
   }
 
   // Step B: launch the verifier tool ONCE with all files (batch mode). Same backend contract
-  // (params in, ToolResult.content shape out) for both tools — see testdata_verifier_api_tool.py
-  // — so everything below this point (waiting, parsing, report building) is identical regardless
-  // of which one actually ran.
-  const useApiDirect = config.verificationMethod === "api";
-  const toolName = useApiDirect ? "testdata_verifier_api" : "testdata_verifier";
+  // (params in, ToolResult.content shape out) for all three tools — see each tool's module
+  // docstring — so everything below this point (waiting, parsing, report building) is identical
+  // regardless of which one actually ran.
+  const method = config.verificationMethod ?? "selenium";
+  const toolName =
+    method === "api" ? "testdata_verifier_api" :
+    method === "harness" ? "testdata_verifier_harness" :
+    "testdata_verifier";
   const toolParams: Record<string, unknown> = {
     testdata_files: testdataFiles,
-    target_url: config.targetUrl,
     spin_delay_sec: spinDelayMs / 1000,
   };
-  if (useApiDirect) {
+  if (method === "api") {
     if (!config.oktaAccessToken) {
       throw new Error("API-direct verification needs an Okta access_token — paste one in before running.");
     }
     if (!config.axiomApiKey) {
       throw new Error("API-direct verification needs an Axiom API Key — paste one in before running.");
     }
+    toolParams.target_url = config.targetUrl;
     toolParams.okta_access_token = config.oktaAccessToken;
     toolParams.axiom_api_key = config.axiomApiKey;
+  } else if (method === "harness") {
+    if (!config.harnessUrl) {
+      throw new Error("Harness verification needs the Titan Harness launcher page URL — paste one in before running.");
+    }
+    if (!config.axiomApiKey) {
+      throw new Error("Harness verification needs an Axiom API Key — paste one in before running.");
+    }
+    if (!config.harnessProductId || !config.harnessClientId) {
+      throw new Error("Harness verification needs the harness form's Product Id and Client Id — fill both in before running.");
+    }
+    toolParams.harness_url = config.harnessUrl;
+    toolParams.axiom_api_key = config.axiomApiKey;
+    toolParams.product_id = config.harnessProductId;
+    toolParams.client_id = config.harnessClientId;
+    if (config.harnessBrand) toolParams.brand = config.harnessBrand;
+  } else {
+    toolParams.target_url = config.targetUrl;
   }
   const prepared = await harnessClient.executeToolAsync(toolName, toolParams);
   const eid = prepared.execution_id;
@@ -250,7 +276,7 @@ export async function runRealGameVerification(
   }
 
   return {
-    targetUrl: config.targetUrl,
+    targetUrl: method === "harness" ? config.harnessUrl ?? "" : config.targetUrl,
     totalCases,
     passedCount,
     failedCount,

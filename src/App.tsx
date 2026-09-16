@@ -106,15 +106,26 @@ const Workbench: React.FC = () => {
   const [uploadingFolder, setUploadingFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
-  // game_verification: choose between driving a real Chrome (testdata_verifier) or calling the
-  // game's own session/play APIs directly (testdata_verifier_api, needs a pasted Okta token —
-  // see testdata_verifier_api_tool.py for the confirmed auth chain this bypasses Selenium with).
-  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api">("selenium");
+  // game_verification: three independent methods — drive a real Chrome against the real game
+  // URL with Okta/MFA login (testdata_verifier), call the game's own session/play APIs directly
+  // over HTTP (testdata_verifier_api, needs a pasted Okta token), or drive a real Chrome through
+  // the QA-only Titan Harness launcher page instead of Okta (testdata_verifier_harness, keeps
+  // screenshots, no Okta). See each tool's module docstring for the confirmed mechanism.
+  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api" | "harness">("selenium");
   const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
-  // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call separately
-  // from oktaAccessToken (which authenticates the game-session/play calls). See
-  // testdata_verifier_api_tool.py's module docstring for why these are two unrelated tokens.
+  // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call, used by both
+  // "api" (alongside oktaAccessToken for the game-session/play calls) and "harness" (alongside
+  // the harness form fields below). See testdata_verifier_api_tool.py's module docstring for why
+  // this is unrelated to Okta.
   const [axiomApiKey, setAxiomApiKey] = useState<string>("");
+  // "harness" method only — see testdata_verifier_harness_tool.py's module docstring. Username
+  // and Module Id are NOT collected here: they're derived server-side from the testdata file's
+  // own <Key> element, since a harness login always targets whatever account/module the testdata
+  // was generated for.
+  const [harnessUrl, setHarnessUrl] = useState<string>("");
+  const [harnessProductId, setHarnessProductId] = useState<string>("");
+  const [harnessClientId, setHarnessClientId] = useState<string>("");
+  const [harnessBrand, setHarnessBrand] = useState<string>("");
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   // easyhelp_checking's "Add file(s)" alternative: loose HTML files with no folder structure —
   // each gets a synthetic subdir derived from its filename (see uploadFilesAsFolder).
@@ -290,6 +301,18 @@ const Workbench: React.FC = () => {
         setError("API-direct method needs an Axiom API Key — paste one in below, or switch back to Browser (Selenium).");
         return;
       }
+      if (verificationMethod === 'harness' && !harnessUrl.trim()) {
+        setError("Harness method needs the Titan Harness launcher page URL — paste one in below.");
+        return;
+      }
+      if (verificationMethod === 'harness' && !axiomApiKey.trim()) {
+        setError("Harness method needs an Axiom API Key — paste one in below.");
+        return;
+      }
+      if (verificationMethod === 'harness' && (!harnessProductId.trim() || !harnessClientId.trim())) {
+        setError("Harness method needs the harness form's Product Id and Client Id — fill both in below.");
+        return;
+      }
       setShowPreview(false);
 
       // Pass all selected files to verification engine
@@ -310,7 +333,11 @@ const Workbench: React.FC = () => {
         testdataFilePaths: selectedTestdataFiles.map(f => f.path),
         verificationMethod,
         oktaAccessToken: verificationMethod === 'api' ? oktaAccessToken.trim() : undefined,
-        axiomApiKey: verificationMethod === 'api' ? axiomApiKey.trim() : undefined,
+        axiomApiKey: verificationMethod === 'api' || verificationMethod === 'harness' ? axiomApiKey.trim() : undefined,
+        harnessUrl: verificationMethod === 'harness' ? harnessUrl.trim() : undefined,
+        harnessProductId: verificationMethod === 'harness' ? harnessProductId.trim() : undefined,
+        harnessClientId: verificationMethod === 'harness' ? harnessClientId.trim() : undefined,
+        harnessBrand: verificationMethod === 'harness' && harnessBrand.trim() ? harnessBrand.trim() : undefined,
       });
       return;
     }
@@ -1051,6 +1078,17 @@ const Workbench: React.FC = () => {
                     >
                       Direct API (fast, no browser)
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setVerificationMethod('harness')}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                        verificationMethod === 'harness'
+                          ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
+                          : 'bg-slate-950/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      Harness (browser, no Okta)
+                    </button>
                   </div>
                   {verificationMethod === 'api' && (
                     <div className="space-y-2">
@@ -1070,6 +1108,51 @@ const Workbench: React.FC = () => {
                       />
                       <div className="text-[9px] text-slate-500">
                         No screenshots in this mode (nothing is rendered) — otherwise same report format as Browser mode.
+                      </div>
+                    </div>
+                  )}
+                  {verificationMethod === 'harness' && (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={harnessUrl}
+                        onChange={(e) => setHarnessUrl(e.target.value)}
+                        placeholder="Titan Harness launcher page URL (e.g. https://mobile-app1-gtp537.installprogram.eu/htmlGames/4.54.0/harness/apexDragonPowerComboV94)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
+                      />
+                      <input
+                        type="text"
+                        value={axiomApiKey}
+                        onChange={(e) => setAxiomApiKey(e.target.value)}
+                        placeholder="Paste Axiom API Key here (Axiom's ApiKeys page — long-lived, rarely needs updating)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={harnessProductId}
+                          onChange={(e) => setHarnessProductId(e.target.value)}
+                          placeholder="Product Id (e.g. 5001)"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={harnessClientId}
+                          onChange={(e) => setHarnessClientId(e.target.value)}
+                          placeholder="Client Id (e.g. 40300)"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={harnessBrand}
+                        onChange={(e) => setHarnessBrand(e.target.value)}
+                        placeholder="Brand (optional — defaults to IslandParadise)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
+                      />
+                      <div className="text-[9px] text-slate-500">
+                        Username &amp; Module Id come from the selected testdata file's own &lt;Key&gt; — no need to enter them here.
+                        Product Id / Client Id are fixed per game version; open the harness page once manually if unsure.
                       </div>
                     </div>
                   )}

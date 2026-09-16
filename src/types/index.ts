@@ -62,16 +62,32 @@ export interface VerificationConfig {
   folderPath?: string;
   testdataFilePath?: string;
   testdataFilePaths?: string[];  // Support multiple testdata files
-  /** "selenium" (default): drive a real Chrome via testdata_verifier. "api": skip the browser
-   * entirely and hit the game's own session/play APIs directly via testdata_verifier_api —
-   * needs oktaAccessToken. See testdata_verifier_api_tool.py for the confirmed auth chain. */
-  verificationMethod?: "selenium" | "api";
+  /** "selenium" (default): drive a real Chrome via testdata_verifier (real game URL + Okta/MFA
+   * login). "api": skip the browser entirely and hit the game's own session/play APIs directly
+   * via testdata_verifier_api — needs oktaAccessToken. "harness": drive a real Chrome via
+   * testdata_verifier_harness, but through the QA-only Titan Harness launcher page instead of
+   * the real game URL — no Okta/MFA, keeps screenshots. See each tool's module docstring for
+   * the confirmed mechanism. */
+  verificationMethod?: "selenium" | "api" | "harness";
   /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". Bootstraps
    * the *game* session (api5-rhel1) — unrelated to axiomApiKey below. */
   oktaAccessToken?: string;
   /** Long-lived Axiom API Key (from Axiom's ApiKeys page), required when verificationMethod is
-   * "api". Authenticates the testdata upload call (axiomcore-app1) — rarely needs repasting. */
+   * "api" or "harness". Authenticates the testdata upload call (axiomcore-app1) — rarely needs
+   * repasting. */
   axiomApiKey?: string;
+  /** Full Titan Harness launcher page URL, required when verificationMethod is "harness" — e.g.
+   * https://mobile-app1-gtp537.installprogram.eu/htmlGames/4.54.0/harness/apexDragonPowerComboV94 */
+  harnessUrl?: string;
+  /** Harness form's Product Id field, required when verificationMethod is "harness". Fixed per
+   * game-module version, not derivable from the testdata file. */
+  harnessProductId?: string;
+  /** Harness form's Client Id field, required when verificationMethod is "harness". Fixed per
+   * game-module version, not derivable from the testdata file. */
+  harnessClientId?: string;
+  /** Harness form's Brand field, optional when verificationMethod is "harness" — defaults to
+   * "IslandParadise" server-side if left blank. */
+  harnessBrand?: string;
 }
 
 export interface TestdataFileInfo {

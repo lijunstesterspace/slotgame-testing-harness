@@ -88,6 +88,100 @@ def _fill_labeled_field(driver, candidates: list[str], value: str) -> bool:
     return False
 
 
+def _close_debug_panel_if_open(driver) -> None:
+    """The harness-launched build exposes a "Mock Server / F2 Dev Panel" overlay that the real
+    production URL never shows — confirmed on a live run: it ended up open (via a corner icon
+    near the top-right of the screen — the same icon testdata_verifier's splash-dismissal fix
+    was written to avoid clicking) while the feature splash was still showing underneath it, and
+    its footprint sat over roughly the right quarter of the screen, right where a spin button
+    commonly lives. If it's open, click that same corner icon again (it's a toggle) to close it."""
+    try:
+        is_open = driver.execute_script(
+            "return !!Array.from(document.querySelectorAll('*')).find("
+            "  el => el.textContent && el.textContent.includes('Mock Server') && el.offsetParent !== null);"
+        )
+    except Exception:
+        return
+    if not is_open:
+        return
+    try:
+        driver.execute_script(
+            "const x = Math.round(window.innerWidth * 0.965);"
+            "const y = Math.round(window.innerHeight * 0.08);"
+            "const el = document.elementFromPoint(x, y);"
+            "if (el) { for (const t of ['mousedown','mouseup','click']) {"
+            "  el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: x, clientY: y}));"
+            "} }"
+        )
+    except Exception:
+        pass
+    time.sleep(1)
+
+
+def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
+    """Dismiss the intro/feature-splash and wait for the spin button to be ready.
+
+    CONFIRMED on a live run: this game's splash is canvas-rendered, not real DOM — a raw
+    synthetic MouseEvent dispatched via document.elementFromPoint(x,y).dispatchEvent(...) (the
+    same technique _dismiss_feature_splash uses, and the only thing available without this API)
+    never progressed window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after
+    24s of polling with no click at all attempted in between. window.jftwTools.common.touch(x, y)
+    — the game's own debug/test API (see jftw-game-client-sdk-automation-axiom's `window.jftwTools`
+    usage) — IS recognized as a real touch and reliably advanced the state to 'Idle' with
+    isSpinButtonReady() true within one 2s poll cycle on that same run. Falls back to the older
+    coordinate-click approach if jftwTools isn't present (a different game build might not expose
+    it) — in that fallback case there is no reliable readiness signal, so it just gives the
+    dismissal attempts a moment to land and proceeds optimistically, same as before this fix.
+    """
+    has_jftw = False
+    try:
+        has_jftw = bool(driver.execute_script(
+            "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
+        ))
+    except Exception:
+        pass
+    if not has_jftw:
+        for _ in range(3):
+            _dismiss_feature_splash(driver, attempts=2)
+            _close_debug_panel_if_open(driver)
+        return True
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
+                return True
+        except Exception:
+            pass
+        try:
+            driver.execute_script(
+                "const w = window.innerWidth, h = window.innerHeight;"
+                "window.jftwTools.common.touch(Math.round(w*0.5), Math.round(h*0.6));"
+            )
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def _click_spin_via_jftw(driver) -> bool:
+    """Press Spin via window.jftwTools.button.touch('jftw-spinButton').
+
+    CONFIRMED on a live run: this triggered a real spin and produced a captured console.log
+    response — the component id came from window.jftwTools.common.getComponentsId()'s
+    `keypad`/`legacy` groups (NOT the 'uiSpinButton' id mentioned in an unrelated Spine-atlas
+    console warning, which turned out to be a red herring). Returns False (rather than raising)
+    when jftwTools isn't available, so the caller can fall back to
+    TestdataVerifierTool._click_spin's CSS-selector guessing.
+    """
+    try:
+        if not driver.execute_script("return !!(window.jftwTools && window.jftwTools.button);"):
+            return False
+        driver.execute_script("window.jftwTools.button.touch('jftw-spinButton');")
+        return True
+    except Exception:
+        return False
+
+
 def _click_button_by_text(driver, text: str, timeout: int = 20) -> bool:
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -327,13 +421,44 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                           f"open harness_url manually and check these fields' formcontrolname/name/id.",
                 )
 
+            prior_handles = set(driver.window_handles)
             if not _click_button_by_text(driver, "LAUNCH GAME", timeout=harness_load_timeout):
                 return ToolResult(success=False, error="harness_launch_game_button_not_found_or_not_clickable")
 
-            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id)
-            time.sleep(5)  # let the game bundle start loading before we start polling for it
+            # CONFIRMED on a live run: this harness page's "LAUNCH GAME" button opens the game in
+            # a new tab/window and closes its own — without switching, every subsequent driver
+            # call (execute_script, get_screenshot_as_png, ...) raised NoSuchWindowException
+            # ("target window already closed") because `driver` was still bound to the now-dead
+            # original handle. Poll window_handles for whichever handle is new (or, if the
+            # original tab closed and only one handle remains, whichever handle isn't the one we
+            # started with) and switch to that. If neither ever happens (the harness navigated in
+            # place, same single handle throughout), switching to the sole remaining handle is a
+            # harmless no-op.
+            deadline = time.time() + harness_load_timeout
+            new_handle = None
+            while time.time() < deadline:
+                try:
+                    current_handles = driver.window_handles
+                except Exception:
+                    break
+                diff = [h for h in current_handles if h not in prior_handles]
+                if diff:
+                    new_handle = diff[0]
+                    break
+                if len(current_handles) == 1 and current_handles[0] not in prior_handles:
+                    new_handle = current_handles[0]
+                    break
+                time.sleep(0.5)
+            try:
+                driver.switch_to.window(new_handle or driver.window_handles[0])
+            except Exception as e:
+                return ToolResult(success=False, error=f"harness_no_window_remained_after_launch:{e}")
 
-            _dismiss_feature_splash(driver)
+            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id)
+            time.sleep(3)  # let the game bundle attach window.jftwTools before we start polling
+
+            if not _wait_for_spin_ready(driver, timeout_sec=30):
+                log.warning("verifier_harness.spin_not_ready_after_wait")
 
             driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")
 
@@ -361,9 +486,17 @@ class TestdataVerifierHarnessTool(ToolPlugin):
 
                 log.info("verifier_harness.spin", spin=rec["spinIndex"], batch=rec["batch"], index=rec["index"])
 
+                # A big-win result commonly triggers a win-celebration overlay that leaves the
+                # spin button not-ready for a few seconds — touching jftw-spinButton while it's
+                # still disabled silently no-ops (confirmed on a live run: alternating spins
+                # after a big win came back TIMEOUT with zero errors raised anywhere). Waiting
+                # for isSpinButtonReady() before *every* spin, not just once after launch, is
+                # what actually needs to happen here.
+                _wait_for_spin_ready(driver, timeout_sec=15)
                 prev_count = driver.execute_script(
                     "return window.__gvResponses ? window.__gvResponses.length : 0;")
-                TestdataVerifierTool._click_spin(driver)
+                if not _click_spin_via_jftw(driver):
+                    TestdataVerifierTool._click_spin(driver)
                 time.sleep(spin_delay)
 
                 actual = None
@@ -383,6 +516,20 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                         "issues": ["No game response captured within timeout"],
                         "screenshot_b64": None, "source_file": file_name,
                     }
+                    # A TIMEOUT means _click_spin never produced a captured response at all —
+                    # screenshotting here (unlike the pass/fail branch below, which only fires
+                    # once a response *was* captured) is the only way to see what the page
+                    # actually looked like when the click didn't register, while debugging this
+                    # still-new tool's spin-button selectors against the harness-launched game.
+                    try:
+                        png_bytes = driver.get_screenshot_as_png()
+                        import base64
+                        result["screenshot_b64"] = base64.b64encode(png_bytes).decode("utf-8")
+                        ss_path = screenshots_dir / f"{file_name}_spin{rec['spinIndex']}_timeout.png"
+                        ss_path.write_bytes(png_bytes)
+                        artifacts.append(str(ss_path.resolve()))
+                    except Exception:
+                        pass
                     consecutive_network_errors += 1
                     consecutive_seed_rejections = 0
                 else:

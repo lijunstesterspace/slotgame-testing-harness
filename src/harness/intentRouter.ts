@@ -3,7 +3,6 @@ import type { TestScenario } from "./sharedTypes";
 // ── Agent files (Vite ?raw → build-time string inlining) ────────────
 import agent_testdata_gen from "../../agents/testdata_generator_agent.md?raw";
 import agent_testdata_verifier from "../../agents/testdata_verifier_agent.md?raw";
-import agent_log_diagnoser from "../../agents/ui_log_diagnoser_agent.md?raw";
 import agent_helpfile from "../../agents/helpfile_conversion_agent.md?raw";
 
 // ── Skill files (Vite ?raw → build-time string inlining) ────────────
@@ -40,17 +39,6 @@ export const SCENARIOS: TestScenario[] = [
     icon: "shield",
   },
   {
-    id: "log_diagnosis",
-    label: "Log Diagnosis",
-    description: "Analyze verification failure logs and screenshots, auto-generate root cause attribution report",
-    keywords: ["diagnose", "log", "根因", "分析"],
-    agentFile: "ui_log_diagnoser_agent.md",
-    skills: [],
-    pipelineId: "log-diagnose-pipeline",
-    requiredPlugins: ["log_diagnoser"],
-    icon: "bug",
-  },
-  {
     id: "easyhelp_checking",
     label: "EasyHelp Checking",
     description: "Batch convert HTML help files to text, perform diff comparison with keyword highlighting, and generate AI-powered analysis report",
@@ -67,7 +55,6 @@ export const SCENARIOS: TestScenario[] = [
 const AGENT_CONTENT: Record<string, string> = {
   testdata_generation: agent_testdata_gen,
   game_verification: agent_testdata_verifier,
-  log_diagnosis: agent_log_diagnoser,
   easyhelp_checking: agent_helpfile,
 };
 

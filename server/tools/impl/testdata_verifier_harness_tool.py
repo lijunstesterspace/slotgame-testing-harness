@@ -153,14 +153,36 @@ def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
         except Exception:
             pass
         try:
+            # {x, y} object form matches the colleague's automation suite's own usage
+            # (src/js/client/misc.js's touch()) — confirmed this platform's touch() also accepts
+            # two positional numbers on our own live run, but the object form is what the
+            # game's own test-automation code actually calls, so it's the safer long-term bet.
             driver.execute_script(
                 "const w = window.innerWidth, h = window.innerHeight;"
-                "window.jftwTools.common.touch(Math.round(w*0.5), Math.round(h*0.6));"
+                "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
             )
         except Exception:
             pass
         time.sleep(2)
     return False
+
+
+def _apply_time_scale(driver, scale: int = 2000) -> None:
+    """Speed up the game engine's own animation clock via window.jftwTools.gameEngine.timeScale.
+
+    Ported from the colleague's automation suite (src/js/util.js's timeScale(), called once by
+    states.js's waitUntilGameLoad right after the splash is dismissed). Without this, a big-win
+    result plays its full win-celebration animation before the spin button re-enables — on a live
+    run of this tool, that showed up as alternating spins TIMING OUT right after a big win (the
+    button was genuinely just not ready yet, not broken). Compressing the animation clock 2000x
+    makes celebrations resolve in a fraction of a second instead, which is what the colleague's
+    suite relies on for exactly this reason. Best-effort: swallows errors so a game build without
+    this debug hook (or without jftwTools at all) just runs at normal speed instead of failing.
+    """
+    try:
+        driver.execute_script(f"window.jftwTools.gameEngine.timeScale({scale});")
+    except Exception:
+        pass
 
 
 def _click_spin_via_jftw(driver) -> bool:
@@ -172,11 +194,19 @@ def _click_spin_via_jftw(driver) -> bool:
     console warning, which turned out to be a red herring). Returns False (rather than raising)
     when jftwTools isn't available, so the caller can fall back to
     TestdataVerifierTool._click_spin's CSS-selector guessing.
+
+    The isEnabledVisually check + short pauses before/after the touch mirror the colleague's
+    automation suite's touchSpinButton() (src/js/client/keypad.js) — their comment there notes
+    the pauses exist "to ensure the button state/action is updated/processed"; harmless to keep
+    even though our own isSpinButtonReady() poll (see _wait_for_spin_ready) already gates this.
     """
     try:
         if not driver.execute_script("return !!(window.jftwTools && window.jftwTools.button);"):
             return False
+        driver.execute_script("window.jftwTools.button.isEnabledVisually('jftw-spinButton');")
+        time.sleep(0.3)
         driver.execute_script("window.jftwTools.button.touch('jftw-spinButton');")
+        time.sleep(0.3)
         return True
     except Exception:
         return False
@@ -459,6 +489,8 @@ class TestdataVerifierHarnessTool(ToolPlugin):
 
             if not _wait_for_spin_ready(driver, timeout_sec=30):
                 log.warning("verifier_harness.spin_not_ready_after_wait")
+
+            _apply_time_scale(driver)
 
             driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")
 

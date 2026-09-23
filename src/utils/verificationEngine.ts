@@ -156,7 +156,10 @@ export async function runRealGameVerification(
   // (params in, ToolResult.content shape out) for all three tools — see each tool's module
   // docstring — so everything below this point (waiting, parsing, report building) is identical
   // regardless of which one actually ran.
-  const method = config.verificationMethod ?? "selenium";
+  // "selenium" is no longer offered in the UI (see App.tsx) — Harness replaced it as the
+  // browser-driven option — but the fallback below still handles it for any stray config that
+  // still specifies it explicitly. Absent method defaults to "harness", not "selenium".
+  const method = config.verificationMethod ?? "harness";
   const toolName =
     method === "api" ? "testdata_verifier_api" :
     method === "harness" ? "testdata_verifier_harness" :
@@ -390,60 +393,77 @@ Please analyze and provide diagnosis in the JSON format specified.`;
 }
 
 // ---------------------------------------------------------------------------
-// Rule-based fallback diagnosis (when AI is unavailable)
+// Rule-based fallback diagnosis (when AI is unavailable) — delegates to the backend
+// log_diagnoser Plugin (server/tools/impl/log_diagnoser_tool.py) instead of duplicating its
+// classification rules here. That Python tool already implements a more complete rule set
+// (seed mismatch, bonus-not-triggered, out-of-bounds index, generic failure) driven off the same
+// structured fields (expectedBatch/actualBatch/issues/isBonus/...) testdata_verifier already
+// produces — the version this replaced only pattern-matched on caseName/errorMessage substrings,
+// which is strictly weaker (e.g. it only recognized "bonus" when the word literally appeared in
+// the case name). This also gives log_diagnoser a real caller again: the standalone "Log
+// Diagnosis" scenario that used to invoke it was retired (diagnosis is now just part of every
+// verification report, not its own scenario) — see intentRouter.ts.
 // ---------------------------------------------------------------------------
 async function runRuleBasedDiagnosis(
   results: VerificationResult[]
 ): Promise<AIDiagnosisResult> {
   const failedResults = results.filter((r) => !r.passed);
-  const diagnoses: AIDiagnosis[] = failedResults.map((r) => {
-    const isBonus = r.caseName.toLowerCase().includes("bonus") || r.caseName.toLowerCase().includes("feature");
-    const hasMismatch = r.errorMessage?.toLowerCase().includes("mismatch");
+  if (failedResults.length === 0) {
+    return { summary: "No failed cases to diagnose.", failedDiagnoses: [], recommendations: [] };
+  }
 
-    if (isBonus && !hasMismatch) {
-      return {
-        caseName: r.caseName,
-        diagnosisType: "ORIGINAL_SHEET_DATA_ERROR",
-        title: "🚨 Bonus Feature Not Triggered — Likely Sheet Data Error",
-        severity: "HIGH",
-        evidenceLogs: [
-          `[PROOF] Sheet Label: '${r.caseName}' (marked as Bonus)`,
-          `[PROOF] Server did not trigger Bonus feature`,
-        ],
-        recommendation: `Update Google Sheet for '${r.caseName}'. The seed did not trigger Bonus in the math model.`,
-      };
-    }
+  // Map VerificationResult's field names onto the shape log_diagnoser_tool.py's
+  // _diagnose_new_format expects (the same shape testdata_verifier's own cases already have —
+  // VerificationResult is just this same data after mapCasesToResults reshapes it for the UI).
+  const backendInput = failedResults.map((r) => ({
+    recordId: r.recordId,
+    caseName: r.caseName,
+    passed: r.passed,
+    expectedBatch: r.expectedBatch,
+    actualBatch: r.actualBatch,
+    expectedIndex: r.expectedIndex,
+    actualIndex: r.actualIndex,
+    actualStage: r.actualStage,
+    actualWin: r.serverPayout,
+    isBonus: r.isBonus,
+    issues: r.errorMessage ? [r.errorMessage] : [],
+  }));
 
-    if (hasMismatch) {
-      return {
-        caseName: r.caseName,
-        diagnosisType: "SEED_MISMATCH",
-        title: "⚠️ Seed Mismatch — Expected vs Actual Differ",
-        severity: "HIGH",
-        evidenceLogs: [
-          `[MISMATCH] ${r.errorMessage}`,
-        ],
-        recommendation: `Check testdata generation for '${r.caseName}'. The server used different seed coordinates.`,
-      };
-    }
-
+  try {
+    const res = await harnessClient.executeTool("log_diagnoser", { results: backendInput });
+    if (!res.success) throw new Error(res.error ?? "log_diagnoser tool call failed");
+    const diagnostics = (res.content as { diagnostics?: Record<string, unknown>[] } | undefined)?.diagnostics ?? [];
+    const diagnoses: AIDiagnosis[] = diagnostics.map((d) => ({
+      caseName: (d.caseName as string) ?? "",
+      diagnosisType: (d.diagnosisType as string) ?? "UNKNOWN",
+      title: (d.title as string) ?? "",
+      severity: (d.severity as string) ?? "MEDIUM",
+      evidenceLogs: (d.evidenceLogs as string[]) ?? [],
+      recommendation: (d.recommendation as string) ?? "",
+    }));
     return {
-      caseName: r.caseName,
-      diagnosisType: "VERIFICATION_FAILED",
-      title: "❌ Verification Failed",
-      severity: "MEDIUM",
-      evidenceLogs: [
-        `[FAIL] ${r.errorMessage ?? "Unknown failure"}`,
-      ],
-      recommendation: `Review '${r.caseName}' test case.`,
+      summary: `Rule-based diagnosis: ${failedResults.length} failed case(s) detected. ${diagnoses.filter((d) => d.severity === "HIGH").length} high severity.`,
+      failedDiagnoses: diagnoses,
+      recommendations: diagnoses.map((d) => d.recommendation),
     };
-  });
-
-  return {
-    summary: `Rule-based diagnosis: ${failedResults.length} failed case(s) detected. ${diagnoses.filter((d) => d.severity === "HIGH").length} high severity.`,
-    failedDiagnoses: diagnoses,
-    recommendations: diagnoses.map((d) => d.recommendation),
-  };
+  } catch (e) {
+    // This IS the fallback path already — if the backend call itself fails too (server down,
+    // network error), there's nothing further to fall back to. Surface a minimal, honest
+    // diagnosis instead of throwing and losing the report entirely.
+    console.warn("[verificationEngine] log_diagnoser tool call failed, returning minimal diagnosis", e);
+    return {
+      summary: `${failedResults.length} case(s) failed verification. Diagnosis service was unavailable: ${e instanceof Error ? e.message : String(e)}`,
+      failedDiagnoses: failedResults.map((r) => ({
+        caseName: r.caseName,
+        diagnosisType: "VERIFICATION_FAILED",
+        title: "❌ Verification Failed",
+        severity: "MEDIUM",
+        evidenceLogs: [`[FAIL] ${r.errorMessage ?? "Unknown failure"}`],
+        recommendation: `Review '${r.caseName}' test case.`,
+      })),
+      recommendations: [],
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -108,29 +108,6 @@ export const PIPELINES: PipelineDef[] = [
     ],
   },
 
-  // ── Log Diagnosis Pipeline ───
-  {
-    id: "log-diagnose-pipeline",
-    name: "Log Diagnosis",
-    description: "Analyze verification failure logs, generate root cause attribution report",
-    stages: [
-      [
-        {
-          id: "diagnose",
-          plugin: "log_diagnoser",
-          label: "Log Analysis",
-          description: "Analyze failure logs and screenshots, output root cause report",
-          dependsOn: [],
-          retryOnFail: false,
-          maxRetries: 0,
-          buildParams: ({ extraParams }) => ({
-            results: extraParams.results ?? [],
-          }),
-        },
-      ],
-    ],
-  },
-
   // ─── Helpfile Conversion & Analysis Pipeline ───
   // Referenced by intentRouter.ts's "easyhelp_checking" scenario (pipelineId: "helpfile-conversion-pipeline"),
   // but was missing from this registry until now — getPipeline() would have returned undefined for this scenario.

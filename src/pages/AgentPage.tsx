@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   ArrowLeft, Bot, Zap, Shield, Search,
-  FileText, CheckCircle2, AlertTriangle, Bug,
+  FileText, CheckCircle2, AlertTriangle,
   Sparkles, Database, Eye, BrainCircuit,
 } from "lucide-react";
 
@@ -58,7 +58,7 @@ const AGENTS: AgentInfo[] = [
       },
     ],
     outputSpec: "PlannerRunOutcome: { success, executionId, records[], zipUrl?, message? }",
-    systemPrompt: "Planner Agent does not have a fixed system prompt — it dynamically loads the scenario-specific prompt from intentRouter (testdata_generation, game_verification, or log_diagnosis). Each scenario prompt defines the agent's role, required tool call sequence, and completion criteria.",
+    systemPrompt: "Planner Agent does not have a fixed system prompt — it dynamically loads the scenario-specific prompt from intentRouter (testdata_generation, game_verification, or easyhelp_checking). Each scenario prompt defines the agent's role, required tool call sequence, and completion criteria.",
   },
   {
     id: "testdata_generator",
@@ -162,58 +162,6 @@ Your objective is to:
    - Parse returned server payload (reel stops, feature stage state, total payout).
    - Flag any server-side exceptions, invalid seed rejections, or network timeouts.
 5. Compute real pass rate KPIs and generate the Verification Execution Report.`,
-  },
-  {
-    id: "ui_log_diagnoser",
-    name: "UI & Log Diagnoser Agent",
-    shortDesc: "Analyze failures and generate root-cause attribution reports",
-    icon: <Bug className="w-4 h-4" />,
-    color: "text-amber-400",
-    borderColor: "border-amber-800/40",
-    bgColor: "bg-amber-950/60",
-    mission:
-      "Analyze execution logs, console errors, network API responses, and DOM/Canvas screenshots during game verification to automatically detect and generate proof of incorrect batch/index seed entries in original Google Sheets.",
-    rules: [
-      {
-        title: "Batch & Index Mismatch Detection",
-        items: [
-          "Symptom: Google Sheet describes Bonus Feature or High Win, but server response shows BaseGame or $0.00 payout.",
-          "Conclusion: ORIGINAL_SHEET_DATA_ERROR (original table entry error).",
-        ],
-      },
-      {
-        title: "Out of Bounds Index",
-        items: [
-          "Symptom: Server returns HTTP 400 or Invalid Index error.",
-          "Conclusion: INDEX_OUT_OF_BOUNDS (table input Index exceeds algorithm library max range).",
-        ],
-      },
-      {
-        title: "Client / WebGL Rendering Error",
-        items: [
-          "Symptom: Server returns successful payout, but console throws WebGL Context Lost or screen is black.",
-          "Conclusion: CLIENT_RENDER_BUG (front-end client render crash, not a table data issue).",
-        ],
-      },
-    ],
-    outputSpec: `Diagnostic Report JSON:
-{
-  "recordId": "TR-004",
-  "caseName": "Bonus Feature_MINI Prize",
-  "inputSeed": { "batch": 58, "index": 3 },
-  "diagnosisType": "ORIGINAL_SHEET_DATA_ERROR",
-  "severity": "CRITICAL",
-  "summary": "Google Sheet batch/index data mismatch",
-  "proofDetails": {
-    "sheetExpectation": "Bonus Feature_MINI Prize",
-    "realServerOutcome": "BaseGame Normal Spin ($0.00)"
-  },
-  "recommendedFix": "Update Google Sheet Row to valid seed."
-}`,
-    systemPrompt: `You are the Visual UI & Log Diagnosis Agent (ui_log_diagnoser_agent).
-Your core mission is to analyze execution logs, console errors, network API responses, and DOM/Canvas screenshots during game verification to automatically detect and generate proof of incorrect batch/index seed entries in original Google Sheets.
-
-When a test case fails or behaves abnormally in the real game test environment, you provide a complete Bug Root Cause Attribution report with evidence chain.`,
   },
 ];
 

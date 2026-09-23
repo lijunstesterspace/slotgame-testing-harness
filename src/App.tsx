@@ -35,11 +35,6 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
     { id: 't1-1', stage: 1, title: 'Format Validation', description: 'Validate testdata XML structure, seed format and file integrity', status: 'pending' },
     { id: 't1-2', stage: 1, title: 'Game Payout Verification', description: 'Upload testdata to real game and verify actual payout matches expected values', status: 'pending' },
   ],
-  log_diagnosis: [
-    { id: 't1-1', stage: 1, title: 'Log Collection', description: 'Collect and parse verification failure logs', status: 'pending' },
-    { id: 't1-2', stage: 1, title: 'Screenshot Analysis', description: 'Compare actual vs expected game screenshots', status: 'pending' },
-    { id: 't1-3', stage: 1, title: 'Root Cause Attribution', description: 'Attribute failures to game server, client UI, or test data', status: 'pending' },
-  ],
   easyhelp_checking: [
     { id: 't1-1', stage: 1, title: 'HTML to Text Conversion', description: 'Batch convert HTML help files to clean plain text', status: 'pending' },
     { id: 't1-2', stage: 1, title: 'Version Diff Comparison', description: 'Compare help file versions and highlight keyword differences', status: 'pending' },
@@ -59,12 +54,6 @@ const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; desc
   game_verification: [
     { id: "plan-1", name: "Format Validation", description: "Validate testdata XML structure, seed format and file integrity", selected: true },
     { id: "plan-2", name: "Game Payout Verification", description: "Upload testdata to real game and verify actual payout matches expected values", selected: true },
-  ],
-  log_diagnosis: [
-    { id: "plan-1", name: "Failed Case Log Analysis", description: "Analyze logs from failed verification cases", selected: true },
-    { id: "plan-2", name: "Screenshot Comparison", description: "Compare actual vs expected game screenshots", selected: true },
-    { id: "plan-3", name: "Root Cause Attribution", description: "Attribute failures to game server, client UI, or test data", selected: true },
-    { id: "plan-4", name: "Pattern Detection", description: "Detect recurring failure patterns across cases", selected: false },
   ],
   easyhelp_checking: [
     { id: "plan-1", name: "HTML to Text Conversion", description: "Batch convert HTML help files to clean plain text", selected: true },
@@ -106,12 +95,15 @@ const Workbench: React.FC = () => {
   const [uploadingFolder, setUploadingFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
-  // game_verification: three independent methods — drive a real Chrome against the real game
-  // URL with Okta/MFA login (testdata_verifier), call the game's own session/play APIs directly
+  // game_verification: two selectable methods — call the game's own session/play APIs directly
   // over HTTP (testdata_verifier_api, needs a pasted Okta token), or drive a real Chrome through
-  // the QA-only Titan Harness launcher page instead of Okta (testdata_verifier_harness, keeps
-  // screenshots, no Okta). See each tool's module docstring for the confirmed mechanism.
-  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api" | "harness">("selenium");
+  // the QA-only Titan Harness launcher page (testdata_verifier_harness, keeps screenshots, no
+  // Okta/MFA). "selenium" (the real game URL + Okta/MFA + borrowed Chrome profile) is no longer
+  // offered here — adopting the Harness login was specifically meant to retire that method's
+  // repeated-login friction — but the type keeps the option so History can still reopen old
+  // Selenium-based reports. Harness is now the default: fastest and most reliable of the three
+  // (see testdata_verifier_harness_tool.py), and keeps screenshots unlike Direct API.
+  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api" | "harness">("harness");
   const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
   // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call, used by both
   // "api" (alongside oktaAccessToken for the game-session/play calls) and "harness" (alongside
@@ -134,11 +126,6 @@ const Workbench: React.FC = () => {
   // fold its content into the intent box — no backend round-trip needed for this one.
   const rawTextUploadInputRef = useRef<HTMLInputElement>(null);
   const [uploadingRawText, setUploadingRawText] = useState(false);
-  // Attach ("+") for log_diagnosis: load a previously-saved verification-results JSON file,
-  // so diagnosis isn't only possible right after a same-session TestData Verification run.
-  const diagnosisUploadInputRef = useRef<HTMLInputElement>(null);
-  const [uploadingDiagnosis, setUploadingDiagnosis] = useState(false);
-  const [uploadedDiagnosisResults, setUploadedDiagnosisResults] = useState<Record<string, unknown>[] | null>(null);
   // game_verification's "Add folder" alternative: pick an entire directory of .testdata files
   // at once instead of multi-selecting them (same upload-testdata endpoint either way).
   const testdataFolderUploadInputRef = useRef<HTMLInputElement>(null);
@@ -294,11 +281,11 @@ const Workbench: React.FC = () => {
         return;
       }
       if (verificationMethod === 'api' && !oktaAccessToken.trim()) {
-        setError("API-direct method needs an Okta access_token — paste one in below, or switch back to Browser (Selenium).");
+        setError("API-direct method needs an Okta access_token — paste one in below, or switch to Harness.");
         return;
       }
       if (verificationMethod === 'api' && !axiomApiKey.trim()) {
-        setError("API-direct method needs an Axiom API Key — paste one in below, or switch back to Browser (Selenium).");
+        setError("API-direct method needs an Axiom API Key — paste one in below, or switch to Harness.");
         return;
       }
       if (verificationMethod === 'harness' && !harnessUrl.trim()) {
@@ -346,10 +333,6 @@ const Workbench: React.FC = () => {
     setShowPreview(false);
 
     const missing = checkMissingField(selectedScenarioId);
-    if (missing?.field === "verificationResults") {
-      setError(`Missing ${missing.message}. Run "TestData Verification" for this game first, then come back to Log Diagnosis.`);
-      return;
-    }
     if (missing) {
       await startClarifyFlow(missing as { field: "rawText" | "folderPath"; message: string });
       return;
@@ -366,7 +349,7 @@ const Workbench: React.FC = () => {
    */
   const checkMissingField = (
     scenarioId: string,
-  ): { field: "rawText" | "folderPath" | "verificationResults"; message: string } | null => {
+  ): { field: "rawText" | "folderPath"; message: string } | null => {
     if (scenarioId === "testdata_generation") {
       if (!/\d+\s*,\s*\d+/.test(promptIntent)) {
         return { field: "rawText", message: "raw paytable rows in 'batch,index' format (paste the Google Sheet rows directly)" };
@@ -374,10 +357,6 @@ const Workbench: React.FC = () => {
     } else if (scenarioId === "easyhelp_checking") {
       if (!folderPath.trim()) {
         return { field: "folderPath", message: "the absolute folder path containing the HTML help files to convert" };
-      }
-    } else if (scenarioId === "log_diagnosis") {
-      if (!uploadedDiagnosisResults?.length && !verificationReport?.results?.length) {
-        return { field: "verificationResults", message: "a prior TestData Verification run's results (attach a saved results JSON via + , or run TestData Verification first)" };
       }
     }
     return null;
@@ -504,8 +483,6 @@ const Workbench: React.FC = () => {
         extraParams.rawText = promptIntent;
         extraParams.gamePrefix = "P5P";
         extraParams.moduleId = "105359";
-      } else if (selectedScenarioId === "log_diagnosis") {
-        extraParams.results = uploadedDiagnosisResults ?? verificationReport?.results ?? [];
       } else if (selectedScenarioId === "easyhelp_checking") {
         extraParams.sourceFolder = folderPath;
         extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
@@ -603,7 +580,6 @@ const Workbench: React.FC = () => {
     setFolderPath("");
     setTestdataFiles([]);
     setSelectedTestdataFiles([]);
-    setUploadedDiagnosisResults(null);
   };
 
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
@@ -727,31 +703,6 @@ const Workbench: React.FC = () => {
     }
   };
 
-  // ── Verification-results file upload (log_diagnosis): lets diagnosis run from a saved
-  // report, not only right after a same-session TestData Verification run. ──
-  const handleSelectDiagnosisFile = () => diagnosisUploadInputRef.current?.click();
-
-  const handleDiagnosisFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingDiagnosis(true);
-    setError(null);
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const results = Array.isArray(parsed) ? parsed : parsed?.results;
-      if (!Array.isArray(results)) {
-        throw new Error("Expected a JSON array of results, or an object with a \"results\" array");
-      }
-      setUploadedDiagnosisResults(results);
-    } catch (err: any) {
-      setError(`Failed to read results file: ${err?.message ?? "Unknown error"}`);
-    } finally {
-      setUploadingDiagnosis(false);
-      e.target.value = "";
-    }
-  };
-
   /** The "+" attach button is a persistent, general "import test data" affordance — same
    * position/style in every scenario. Clicking it opens a small menu (à la Claude's "+") with
    * "Add file(s)" / "Add folder"; which underlying picker each one opens depends on what the
@@ -762,7 +713,6 @@ const Workbench: React.FC = () => {
     setAttachMenuOpen(false);
     if (selectedScenarioId === "game_verification") handleSelectTestdataFiles();
     else if (selectedScenarioId === "easyhelp_checking") handleSelectHelpFilesFlat();
-    else if (selectedScenarioId === "log_diagnosis") handleSelectDiagnosisFile();
     else handleSelectRawTextFile(); // testdata_generation (and any future scenario's default)
   };
 
@@ -772,19 +722,16 @@ const Workbench: React.FC = () => {
     else if (selectedScenarioId === "easyhelp_checking") handleSelectFolderUpload();
   };
 
-  const attaching = uploadingTestdata || uploadingFolder || uploadingRawText || uploadingDiagnosis;
+  const attaching = uploadingTestdata || uploadingFolder || uploadingRawText;
   const attachBadgeCount =
     selectedScenarioId === "game_verification" ? testdataFiles.length
     : selectedScenarioId === "easyhelp_checking" ? (folderPath ? 1 : 0)
-    : selectedScenarioId === "log_diagnosis" ? (uploadedDiagnosisResults?.length ?? 0)
     : 0;
   const attachTitle =
     selectedScenarioId === "game_verification"
       ? (testdataFiles.length > 0 ? `${testdataFiles.length} .testdata file(s) attached — click to change` : "Attach .testdata file(s) or a folder to verify")
     : selectedScenarioId === "easyhelp_checking"
       ? (folderPath ? "Folder attached — click to change" : "Attach help files or a folder")
-    : selectedScenarioId === "log_diagnosis"
-      ? (uploadedDiagnosisResults ? `${uploadedDiagnosisResults.length} result(s) attached — click to change` : "Attach a saved verification-results JSON file")
       : "Attach a local paytable text/CSV file";
 
   // ── Verification handler ──────────────────────────────────────
@@ -980,8 +927,6 @@ const Workbench: React.FC = () => {
                   ? 'Select the test items you want to generate:'
                   : selectedScenarioId === 'game_verification'
                   ? 'Select the verification items to execute:'
-                  : selectedScenarioId === 'log_diagnosis'
-                  ? 'Select the diagnosis items to analyze:'
                   : 'Select the test items to execute:'}
               </div>
 
@@ -1048,25 +993,21 @@ const Workbench: React.FC = () => {
                 </div>
               )}
 
-              {/* Verification method: drive a real browser, or skip it entirely via the
-                  game's own APIs directly (see testdata_verifier_api_tool.py). */}
+              {/* Verification method: skip the browser entirely via the game's own APIs
+                  directly (see testdata_verifier_api_tool.py), or drive a real browser through
+                  the QA-only Titan Harness launcher page (no Okta/MFA — see
+                  testdata_verifier_harness_tool.py). The original Browser (Selenium) method —
+                  the real production URL + Okta/MFA login — has been retired as a selectable
+                  option here: the whole point of adopting the Harness login was to eliminate
+                  that method's repeated-login friction. Old Selenium-based reports are still
+                  viewable from History; buildReportFromExecutionDetail in verificationEngine.ts
+                  still recognizes the "testdata_verifier" tool name for that reason. */}
               {selectedScenarioId === 'game_verification' && (
                 <div className="mb-3">
                   <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">
                     Verification Method
                   </div>
                   <div className="flex items-center gap-2 mb-2">
-                    <button
-                      type="button"
-                      onClick={() => setVerificationMethod('selenium')}
-                      className={`flex-1 px-3 py-2 rounded-lg border text-[11px] font-semibold transition ${
-                        verificationMethod === 'selenium'
-                          ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
-                          : 'bg-slate-950/50 border-slate-700 text-slate-400 hover:border-slate-600'
-                      }`}
-                    >
-                      Browser (Selenium)
-                    </button>
                     <button
                       type="button"
                       onClick={() => setVerificationMethod('api')}
@@ -1207,7 +1148,6 @@ const Workbench: React.FC = () => {
                   >
                     {selectedScenarioId === 'testdata_generation' ? 'Confirm & Generate'
                       : selectedScenarioId === 'game_verification' ? 'Confirm & Verify'
-                      : selectedScenarioId === 'log_diagnosis' ? 'Confirm & Diagnose'
                       : 'Confirm & Execute'}
                   </button>
                 </div>
@@ -1365,14 +1305,6 @@ const Workbench: React.FC = () => {
                     accept=".txt,.csv,.tsv,.paytable"
                     onChange={handleRawTextFileChosen}
                   />
-                  <input
-                    ref={diagnosisUploadInputRef}
-                    type="file"
-                    className="hidden"
-                    accept=".json"
-                    onChange={handleDiagnosisFileChosen}
-                  />
-
                   {/* Preview/Generate or Stop button */}
                   <button
                     onClick={isGenerating ? handleStop : handleShowPreview}

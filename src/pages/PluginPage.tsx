@@ -18,6 +18,9 @@ const PLUGIN_ICONS: Record<string, React.ReactNode> = {
   zip_packager: <Package className="w-4 h-4" />,
   testdata_verifier: <Wrench className="w-4 h-4" />,
   log_diagnoser: <FileText className="w-4 h-4" />,
+  portugal_plugin_parser: <Table2 className="w-4 h-4" />,
+  portugal_plugin_reporter: <FileText className="w-4 h-4" />,
+  portugal_plugin_fetcher: <Wrench className="w-4 h-4" />,
 };
 
 const SKILL_ICONS: Record<string, React.ReactNode> = {
@@ -26,6 +29,8 @@ const SKILL_ICONS: Record<string, React.ReactNode> = {
   "skill-verification-protocol": <Wrench className="w-5 h-5" />,
   "skill-helpfile-conversion": <FileText className="w-5 h-5" />,
   "skill-helpfile-plugin-contract": <Puzzle className="w-5 h-5" />,
+  "skill-portugal-plugin-parsing-rules": <BookOpen className="w-5 h-5" />,
+  "skill-portugal-plugin-contract": <Puzzle className="w-5 h-5" />,
 };
 
 // ── Hardcoded skill data (from skills/*.md) ─────────────────────
@@ -66,6 +71,20 @@ const HARDCODED_SKILLS: SkillInfoDto[] = [
     description: "Defines the interface contract between the helpfile conversion/analysis Plugins and the Agent layer, ensuring consistent parameter formats across html_to_text_converter, diff_comparator, and helpfile_analyzer.",
     file: "skill-helpfile-plugin-contract.md",
     size_kb: 3.7,
+  },
+  {
+    id: "skill-portugal-plugin-parsing-rules",
+    name: "Portugal Plugin Parsing & Check Rules",
+    description: "Parsing rules ported from ppvACCR1.0.py: spin splitting, reel rows, letter→SYM mapping, R/MV/MT/MG parameters, total win, the exact text report format, and the advisory consistency checks.",
+    file: "skill-portugal-plugin-parsing-rules.md",
+    size_kb: 4.9,
+  },
+  {
+    id: "skill-portugal-plugin-contract",
+    name: "Portugal Plugin Interface Contract",
+    description: "Defines the input/output contract and call order of portugal_plugin_fetcher, portugal_plugin_parser and portugal_plugin_reporter, including PlayCheck session/transaction selection and error codes.",
+    file: "skill-portugal-plugin-contract.md",
+    size_kb: 7.1,
   },
 ];
 

@@ -177,6 +177,92 @@ export const PIPELINES: PipelineDef[] = [
       ],
     ],
   },
+
+  // ─── Portugal Plugin Verification Pipeline ───
+  // Port of portugal-playcheck-plugin/ppvACCR1.0.py: parse the plugin output string, then write
+  // the same text report plus JSON/HTML with advisory consistency checks.
+  {
+    id: "portugal-plugin-verify-pipeline",
+    name: "Portugal Plugin Verification",
+    description: "Fetch outcome from PlayCheck (or use pasted text) → parse → checks → TXT/JSON/HTML report",
+    stages: [
+      // Stage 0: Fetch — pass-through when the outcome string was pasted
+      [
+        {
+          id: "fetch_portugal_plugin",
+          plugin: "portugal_plugin_fetcher",
+          label: "Fetch Outcome from PlayCheck",
+          description: "Log into the game, spin, open ••• → Game History and read GetReportAsync Data",
+          dependsOn: [],
+          retryOnFail: false,
+          maxRetries: 0,
+          buildParams: ({ extraParams }) => ({
+            raw_text: extraParams.rawText ?? "",
+            ...((extraParams.fetchParams as Record<string, unknown> | undefined) ?? {}),
+          }),
+        },
+      ],
+      // Stage 1: Parse
+      [
+        {
+          id: "parse_portugal_plugin",
+          plugin: "portugal_plugin_parser",
+          label: "Parse Portugal Plugin Output",
+          description: "Split spins, map letters to SYM names, collect R/MV/MT/MG and total the win amount",
+          dependsOn: ["fetch_portugal_plugin"],
+          retryOnFail: false,
+          maxRetries: 0,
+          buildParams: ({ extraParams, stepResults }) => {
+            const fetched = (stepResults.fetch_portugal_plugin ?? {}) as Record<string, unknown>;
+            return {
+              raw_text: fetched.raw_text ?? extraParams.rawText ?? "",
+              // pasted text keeps the original tool's ACCR table; fetched text picks by module id
+              ...(fetched.source === "playcheck"
+                ? { module_id: fetched.module_id }
+                : { game_code: extraParams.gameCode ?? "ACCR" }),
+            };
+          },
+        },
+      ],
+      // Stage 2: Report
+      [
+        {
+          id: "report_portugal_plugin",
+          plugin: "portugal_plugin_reporter",
+          label: "Consistency Check & Report",
+          description: "Flag unmapped symbols / row or parameter count mismatches and write TXT/JSON/HTML reports",
+          dependsOn: ["parse_portugal_plugin"],
+          retryOnFail: false,
+          maxRetries: 0,
+          buildParams: ({ stepResults }) => {
+            const parsed = (stepResults.parse_portugal_plugin ?? {}) as Record<string, unknown>;
+            const fetched = (stepResults.fetch_portugal_plugin ?? {}) as Record<string, unknown>;
+            const fromPlaycheck = fetched.source === "playcheck";
+            return {
+              ...(fromPlaycheck
+                ? {
+                    expected_payout: fetched.expected_payout,
+                    expected_wager: fetched.expected_wager,
+                    game_win: fetched.game_win,
+                    source: {
+                      module: fetched.module_id,
+                      session: fetched.session_id,
+                      transaction: fetched.trans_number,
+                    },
+                  }
+                : {}),
+              spins: parsed.spins ?? [],
+              total_win: parsed.total_win ?? 0,
+              symbol_map: parsed.symbol_map ?? {},
+              game_code: parsed.game_code ?? "ACCR",
+              game_title: parsed.game_title ?? "",
+              warnings: parsed.warnings ?? [],
+            };
+          },
+        },
+      ],
+    ],
+  },
 ];
 
 // ── Query Utility Functions ─────────────────────────────────────────────

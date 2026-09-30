@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "server\\start-server.cmd"],
+      "port": 8000
     }
   ]
 }

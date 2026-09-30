@@ -16,6 +16,9 @@
   - `html_to_text_converter_tool.py` - HTML帮助文件转文本插件
   - `diff_comparator_tool.py` - 差异比较与关键词高亮插件
   - `helpfile_analyzer_tool.py` - AI智能分析报告插件（调用本地Ollama）
+  - `portugal_plugin_parser_tool.py` - Portugal Plugin 输出解析插件（移植自 ppvACCR1.0.py）
+  - `portugal_plugin_reporter_tool.py` - Portugal Plugin 一致性检查、PlayCheck 核对与 TXT/JSON/HTML 报告插件
+  - `portugal_plugin_fetcher_tool.py` - 从游戏环境经 Game History → PlayCheck 自动取回 Portugal Plugin outcome
 
 ## 新增插件方式
 

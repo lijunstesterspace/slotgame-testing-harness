@@ -40,6 +40,11 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
     { id: 't1-2', stage: 1, title: 'Version Diff Comparison', description: 'Compare help file versions and highlight keyword differences', status: 'pending' },
     { id: 't1-3', stage: 1, title: 'AI Analysis Report', description: 'Generate AI-powered analysis report with quality issues', status: 'pending' },
   ],
+  portugal_plugin: [
+    { id: 't1-1', stage: 1, title: 'Fetch Outcome from PlayCheck', description: 'Log into the game, spin, open Game History and read the outcome string (skipped when pasted)', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Parse Portugal Plugin Output', description: 'Split spins, map symbols and total the win amount', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'Consistency Check & Report', description: 'Flag symbol/row/parameter mismatches and write TXT/JSON/HTML reports', status: 'pending' },
+  ],
 };
 
 // ── Scenario-specific Test Plan Items ──────────────────────────────────
@@ -62,7 +67,42 @@ const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; desc
     { id: "plan-4", name: "AI Analysis Report", description: "Generate AI-powered analysis report using local model", selected: true },
     { id: "plan-5", name: "Excel Report Generation", description: "Package diff results into formatted Excel report", selected: false },
   ],
+  portugal_plugin: [
+    { id: "plan-0", name: "Fetch Outcome from PlayCheck", description: "Game URL given: log in, spin, ••• → Game History → session → transaction → GetReportAsync", selected: true },
+    { id: "plan-1", name: "Spin & Row Parsing", description: "Split N: spin blocks and map reel letters to SYM names", selected: true },
+    { id: "plan-2", name: "Win Line Extraction", description: "Collect winning symbols/positions, bets, multipliers and win amounts", selected: true },
+    { id: "plan-3", name: "Total Win Calculation", description: "Sum all MG win amounts (identical to ppvACCR1.0)", selected: true },
+    { id: "plan-4", name: "Consistency Checks", description: "Flag unmapped symbols, row width and R/MV/MT/MG count mismatches", selected: true },
+    { id: "plan-5", name: "PlayCheck Payout Check", description: "Fetched mode: sum(MG)/100 = PAYOUT, first MV/100 = WAGERED, and = game win", selected: true },
+  ],
 };
+
+/**
+ * portugal_plugin fetch mode: the game URL comes from the auto-detected URL line; optional
+ * `key=value` tokens in the intent text override/complete it (a direct /launch/ URL already
+ * carries username/moduleId/clientId/productId in its query, a /harness/ URL does not).
+ */
+const PORTUGAL_FETCH_KEYS: Record<string, string> = {
+  username: "login_name", login: "login_name", loginname: "login_name",
+  password: "harness_password",
+  moduleid: "module_id", module: "module_id",
+  productid: "product_id", product: "product_id",
+  clientid: "client_id", client: "client_id",
+  brand: "brand",
+  spins: "spin_count", spin: "spin_count",
+  session: "session_id", sessionid: "session_id",
+  trans: "trans_number", transaction: "trans_number", transnumber: "trans_number",
+};
+
+function buildPortugalFetchParams(gameUrl: string, text: string, loginName: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { game_url: gameUrl };
+  if (loginName.trim()) out.login_name = loginName.trim();
+  for (const m of text.matchAll(/([A-Za-z]+)\s*=\s*(\S+)/g)) {
+    const key = PORTUGAL_FETCH_KEYS[m[1].toLowerCase()];
+    if (key) out[key] = m[2];
+  }
+  return out;
+}
 
 const MODEL_OPTIONS: { label: string; value: string }[] = [
   { label: "Ollama · llama3:7b (local)", value: "llama3:7b" },
@@ -354,6 +394,10 @@ const Workbench: React.FC = () => {
       if (!/\d+\s*,\s*\d+/.test(promptIntent)) {
         return { field: "rawText", message: "raw paytable rows in 'batch,index' format (paste the Google Sheet rows directly)" };
       }
+    } else if (scenarioId === "portugal_plugin") {
+      if (!/\d+\s*:/.test(promptIntent) && !/^https?:\/\//i.test(sheetUrl.trim())) {
+        return { field: "rawText", message: "either the Portugal Plugin output string (e.g. '1:A;B#C;D#R#A#POS1#MV#10#MT#2#MG#5.0') or the game harness / launch URL to fetch it from PlayCheck" };
+      }
     } else if (scenarioId === "easyhelp_checking") {
       if (!folderPath.trim()) {
         return { field: "folderPath", message: "the absolute folder path containing the HTML help files to convert" };
@@ -483,6 +527,15 @@ const Workbench: React.FC = () => {
         extraParams.rawText = promptIntent;
         extraParams.gamePrefix = "P5P";
         extraParams.moduleId = "105359";
+      } else if (selectedScenarioId === "portugal_plugin") {
+        const pasted = /\d+\s*:/.test(promptIntent);
+        extraParams.rawText = pasted ? promptIntent : "";
+        extraParams.gameCode = "ACCR";
+        if (!pasted) {
+          extraParams.fetchParams = buildPortugalFetchParams(sheetUrl.trim(), promptIntent, loginName);
+          // Stop must be able to kill the backend's Chrome, same as game_verification
+          verificationExecutionIdRef.current = executionId;
+        }
       } else if (selectedScenarioId === "easyhelp_checking") {
         extraParams.sourceFolder = folderPath;
         extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
@@ -505,6 +558,34 @@ const Workbench: React.FC = () => {
         const recs = coerceTestRecords(parseOutput.records, executionId);
         await harnessClient.saveRecords(recs as unknown as Parameters<typeof harnessClient.saveRecords>[0]).catch(() => {});
         setTestRecords(toFrontendRecords(recs));
+      }
+
+      // portugal_plugin: surface the headline numbers and report links in the console.
+      const portugalPlugin = stepResults.report_portugal_plugin as
+        | {
+            spin_count: number; total_win: number; verdict: string; finding_count: number; txt_url: string; html_url: string;
+            playcheck_checks?: Array<{ check: string; passed: boolean; message: string }>;
+          }
+        | undefined;
+      const fetched = stepResults.fetch_portugal_plugin as
+        | { source: string; session_id?: string; trans_number?: number }
+        | undefined;
+      if (fetched?.source === "playcheck") {
+        addLog({ type: "HARNESS_EVENT", content: `Fetched from PlayCheck: session ${fetched.session_id}, transaction ${fetched.trans_number}` });
+      }
+      for (const c of portugalPlugin?.playcheck_checks ?? []) {
+        addLog({ type: "HARNESS_EVENT", content: `${c.passed ? "PASS" : "FAIL"} ${c.check}: ${c.message}`, status: c.passed ? "success" : "error" });
+      }
+      if (portugalPlugin) {
+        const fileOf = (url: string) => url.split("/").pop() ?? "";
+        addLog({
+          type: "HARNESS_EVENT",
+          content:
+            `Portugal Plugin: ${portugalPlugin.spin_count} spin(s), Total Win Amount ${portugalPlugin.total_win.toFixed(2)}, ` +
+            `verdict ${portugalPlugin.verdict} (${portugalPlugin.finding_count} finding(s)). ` +
+            `Report: ${harnessClient.artifactUrl(fileOf(portugalPlugin.html_url))} · Text: ${harnessClient.artifactUrl(fileOf(portugalPlugin.txt_url))}`,
+          status: portugalPlugin.verdict === "CLEAN" ? "success" : portugalPlugin.verdict === "FAIL" ? "error" : "warning",
+        });
       }
 
       // The real work (parse/generate/package etc.) is already done — let the user see
@@ -540,6 +621,7 @@ const Workbench: React.FC = () => {
     } finally {
       setIsGenerating(false);
       abortControllerRef.current = null;
+      if (selectedScenarioId === "portugal_plugin") verificationExecutionIdRef.current = null;
     }
   };
 
@@ -796,7 +878,9 @@ const Workbench: React.FC = () => {
   // TestDataPreview shows the testdata_generation scenario's generated records — it has
   // nothing to do with game_verification's input (a folder of pre-existing .testdata files),
   // so it must never render there (it would otherwise show stale/unrelated mock records).
-  const showCenterFooter = workflowStage >= 3 && selectedScenarioId !== "game_verification";
+  // portugal_plugin produces no testdata records — its results go to the console + report files.
+  const showCenterFooter =
+    workflowStage >= 3 && selectedScenarioId !== "game_verification" && selectedScenarioId !== "portugal_plugin";
 
   const errorBanner = error ? (
     <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
@@ -1165,6 +1249,8 @@ const Workbench: React.FC = () => {
                     ? 'Paste game URL and/or describe your test task...\n\nExample:\nhttps://.../htmlGames/...&gameId=...\nverify testdata'
                     : selectedScenarioId === 'testdata_generation'
                     ? 'Paste sheet URL (optional) and describe your test task...\n\nExample:\nhttps://docs.google.com/spreadsheets/d/...\ngenerate testdata for base game'
+                    : selectedScenarioId === 'portugal_plugin'
+                    ? 'Paste the Portugal Plugin output string, OR a game URL to fetch it from PlayCheck...\n\nExample (paste):\n1:A;B;C#D;E;F#G;H;I#R#A#0,1,2#MV#10#MT#2#MG#5.0\n\nExample (fetch):\nhttps://mobile-app1-gtp537.installprogram.eu/htmlGames/4.60.0/harness/<game>\nusername=lijunt moduleId=105233 productId=5001 clientId=50300 spins=1'
                     : 'Describe your test task...'
                 }
                 value={sheetUrl ? `${sheetUrl}\n${promptIntent}` : promptIntent}

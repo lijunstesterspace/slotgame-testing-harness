@@ -8,6 +8,9 @@ from server.tools.impl.log_diagnoser_tool import LogDiagnoserTool
 from server.tools.impl.html_to_text_converter_tool import HtmlToTextConverterTool
 from server.tools.impl.diff_comparator_tool import DiffComparatorTool
 from server.tools.impl.helpfile_analyzer_tool import HelpfileAnalyzerTool
+from server.tools.impl.portugal_plugin_parser_tool import PortugalPluginParserTool
+from server.tools.impl.portugal_plugin_reporter_tool import PortugalPluginReporterTool
+from server.tools.impl.portugal_plugin_fetcher_tool import PortugalPluginFetcherTool
 
 BUILTIN_TOOLS: list = [
     TestdataParserTool(),
@@ -20,10 +23,14 @@ BUILTIN_TOOLS: list = [
     HtmlToTextConverterTool(),
     DiffComparatorTool(),
     HelpfileAnalyzerTool(),
+    PortugalPluginParserTool(),
+    PortugalPluginReporterTool(),
+    PortugalPluginFetcherTool(),
 ]
 __all__ = [
     "BUILTIN_TOOLS",
     "TestdataParserTool", "TestdataGeneratorTool", "ZipPackagerTool",
     "TestdataVerifierTool", "TestdataVerifierApiTool", "TestdataVerifierHarnessTool",
     "LogDiagnoserTool", "HtmlToTextConverterTool", "DiffComparatorTool", "HelpfileAnalyzerTool",
+    "PortugalPluginParserTool", "PortugalPluginReporterTool", "PortugalPluginFetcherTool",
 ]

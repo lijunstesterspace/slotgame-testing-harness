@@ -16,6 +16,7 @@ SCENARIO_PLUGINS: dict[str, list[str]] = {
     "testdata_generation": ["testdata_parser", "testdata_generator", "zip_packager"],
     "game_verification": ["testdata_verifier", "testdata_verifier_api", "testdata_verifier_harness", "log_diagnoser"],
     "easyhelp_checking": ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
+    "portugal_plugin": ["portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
 }
 
 
@@ -64,10 +65,16 @@ async def execute_sync(req: ExecuteReq, request: Request, user=Depends(require_u
     ctx = HarnessContext(execution_id=eid, user_id=user["id"], user_role=user["role"],
                          session_token=user["token"], work_dir="")
     queue = shared.execution_queue
+    # Wait as long as the plugin itself declares (browser-driven steps such as
+    # portugal_plugin_fetcher need minutes); 30s stays the floor for quick tools.
+    try:
+        tool_timeout = max(30, shared.tool_registry.get(req.tool_name).info.timeout_seconds)
+    except KeyError:
+        tool_timeout = 30
     try:
         res = await asyncio.wait_for(
             queue.submit(execution_id=eid, tool_name=req.tool_name, params=req.params, context=ctx),
-            timeout=30,
+            timeout=tool_timeout,
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="tool_timeout_use_execute_async_instead")

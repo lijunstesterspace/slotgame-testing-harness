@@ -4,6 +4,7 @@ import type { TestScenario } from "./sharedTypes";
 import agent_testdata_gen from "../../agents/testdata_generator_agent.md?raw";
 import agent_testdata_verifier from "../../agents/testdata_verifier_agent.md?raw";
 import agent_helpfile from "../../agents/helpfile_conversion_agent.md?raw";
+import agent_portugal_plugin from "../../agents/portugal_plugin_verifier_agent.md?raw";
 
 // ── Skill files (Vite ?raw → build-time string inlining) ────────────
 import skill_sheet_clean from "../../skills/skill-sheet-data-clean.md?raw";
@@ -11,6 +12,8 @@ import skill_generator_contract from "../../skills/skill-generator-plugin-contra
 import skill_helpfile_conversion from "../../skills/skill-helpfile-conversion.md?raw";
 import skill_helpfile_plugin from "../../skills/skill-helpfile-plugin-contract.md?raw";
 import skill_verification_protocol from "../../skills/skill-verification-protocol.md?raw";
+import skill_portugal_plugin_rules from "../../skills/skill-portugal-plugin-parsing-rules.md?raw";
+import skill_portugal_plugin_contract from "../../skills/skill-portugal-plugin-contract.md?raw";
 
 // ─ Test Scenario Registry ─────────────────────────────────────────────
 // Add a new scenario by appending an entry to this array; HARNESS auto-discovers it
@@ -49,6 +52,17 @@ export const SCENARIOS: TestScenario[] = [
     requiredPlugins: ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
     icon: "file-text",
   },
+  {
+    id: "portugal_plugin",
+    label: "Portugal Plugin Verification",
+    description: "Fetch the Portugal Plugin outcome from PlayCheck (or paste it), parse rows/R/MV/MT/MG, check it against PlayCheck payout and write TXT/JSON/HTML reports",
+    keywords: ["portugal plugin", "playcheck", "play check", "portugal", "plugin verification", "total win", "葡萄牙", "插件验证"],
+    agentFile: "portugal_plugin_verifier_agent.md",
+    skills: ["skill-portugal-plugin-parsing-rules.md", "skill-portugal-plugin-contract.md"],
+    pipelineId: "portugal-plugin-verify-pipeline",
+    requiredPlugins: ["portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
+    icon: "globe",
+  },
 ];
 
 // ── Agent content map (scenarioId → raw markdown) ─────────────────────
@@ -56,6 +70,7 @@ const AGENT_CONTENT: Record<string, string> = {
   testdata_generation: agent_testdata_gen,
   game_verification: agent_testdata_verifier,
   easyhelp_checking: agent_helpfile,
+  portugal_plugin: agent_portugal_plugin,
 };
 
 // ── Skill content map (filename → raw markdown) ───────────────────────
@@ -65,6 +80,8 @@ const SKILL_CONTENT: Record<string, string> = {
   "skill-helpfile-conversion.md": skill_helpfile_conversion,
   "skill-helpfile-plugin-contract.md": skill_helpfile_plugin,
   "skill-verification-protocol.md": skill_verification_protocol,
+  "skill-portugal-plugin-parsing-rules.md": skill_portugal_plugin_rules,
+  "skill-portugal-plugin-contract.md": skill_portugal_plugin_contract,
 };
 
 // ── Intent Router ────────────────────────────────────────────────

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import {
   ArrowLeft, Bot, Zap, Shield, Search,
   FileText, CheckCircle2, AlertTriangle,
-  Sparkles, Database, Eye, BrainCircuit,
+  Sparkles, Database, Eye, BrainCircuit, Globe,
 } from "lucide-react";
 
 // ── Agent data (embedded from agents/*.md) ───────────────────
@@ -162,6 +162,52 @@ Your objective is to:
    - Parse returned server payload (reel stops, feature stage state, total payout).
    - Flag any server-side exceptions, invalid seed rejections, or network timeouts.
 5. Compute real pass rate KPIs and generate the Verification Execution Report.`,
+  },
+  {
+    id: "portugal_plugin_verifier",
+    name: "Portugal Plugin Verification Agent",
+    shortDesc: "Fetch the Portugal Plugin outcome from PlayCheck, parse it and check it against the recorded payout",
+    icon: <Globe className="w-4 h-4" />,
+    color: "text-amber-400",
+    borderColor: "border-amber-800/40",
+    bgColor: "bg-amber-950/60",
+    mission:
+      "Replace the standalone ppvACCR1.0 Tk tool: fetch the outcome from the game environment (Game History → PlayCheck → GetReportAsync) or take it pasted, parse it into spins (reel rows, winning symbols/positions, bets, multipliers, win amounts), total the win amount, and write a text report identical to the old tool plus JSON/HTML reports with advisory consistency checks.",
+    rules: [
+      {
+        title: "Fetching (portugal_plugin_fetcher)",
+        items: [
+          "Log in via the Titan Harness page or a direct launch URL, spin, then ••• → Game History to open PlayCheck.",
+          "Pick the open login session (no ENDED AT, newest) and its last transaction(s), or an explicit session/trans.",
+          "Call GameReport/GetReportAsync inside the PlayCheck tab with its X-SPA-ASPNET-SessionId and read Data.",
+          "Pasted outcome text skips the browser entirely.",
+        ],
+      },
+      {
+        title: "Parsing (portugal_plugin_parser)",
+        items: [
+          "Split spins with (\d+):(.*?)(?=\s*\d+:|$); skip empty spins; ignore text before the first N:.",
+          "#-blocks before the first R/MV/MT/MG marker are reel rows; ';' separates cells.",
+          "Letters are upper-cased and mapped via the game profile (ACCR by default); unmapped values pass through.",
+          "MG values are summed into Total Win Amount; a non-numeric MG is a warning, not a failure.",
+        ],
+      },
+      {
+        title: "Advisory Checks (portugal_plugin_reporter)",
+        items: [
+          "unmapped_symbol / unmapped_winning_symbol: value not in the profile's SYM set.",
+          "row_width_mismatch: rows of one spin have different cell counts.",
+          "param_count_mismatch: MV / MT / MG counts differ within one spin; R is checked against whether the spin won.",
+          "Fetch mode (hard): sum(MG)/100 = PlayCheck PAYOUT, first MV/100 = WAGERED, = game financials.win → otherwise FAIL.",
+          "verdict = FAIL on a PlayCheck mismatch, REVIEW on findings/warnings, otherwise CLEAN.",
+        ],
+      },
+    ],
+    outputSpec:
+      "server/data/artifacts/portugal_plugin_{GAME}_{execution_id}.txt (identical to ppvACCR1.0) + .json + .html",
+    systemPrompt: `The Portugal Plugin Verification Agent has no autonomous prompt — the portugal-plugin-verify-pipeline
+(fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin) is fixed code. The AI only asks for the Portugal Plugin string when it is
+missing and summarizes the final report (spin count, total win, verdict, flagged spins).`,
   },
 ];
 

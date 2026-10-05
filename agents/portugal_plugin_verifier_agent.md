@@ -9,15 +9,20 @@ The `portugal-plugin-verify-pipeline` (see `src/harness/pipelineRegistry.ts`) de
 order:
 
 ```
-fetch (portugal_plugin_fetcher)  →  parse (portugal_plugin_parser)  →  report (portugal_plugin_reporter)
+symbol map (portugal_plugin_symbol_map)  →  fetch (portugal_plugin_fetcher)
+    →  parse (portugal_plugin_parser)  →  report (portugal_plugin_reporter)
 ```
 
-`ExecutionEngine` calls these three Plugins in this exact order, every time. The AI never decides
+`ExecutionEngine` calls these four Plugins in this exact order, every time. The AI never decides
 which Plugin runs next. Fetching (browser automation), parsing, symbol mapping, total-win summing
 and all checks are **deterministic code** in `server/tools/impl/portugal_plugin_*_tool.py`; the
 parser is ported 1:1 from the standalone Tk tool `portugal-playcheck-plugin/ppvACCR1.0.py`.
 
-Two input modes, decided by code (App.tsx), not by the AI:
+Stage 0 is a precondition: it imports the game's Output Guide (.md attached with +) or loads the
+stored map for the run's moduleId, and stops the run before any browser work when neither exists
+or when the guide belongs to a different module (see `skills/skill-portugal-plugin-symbol-map.md`).
+
+Two input modes for the outcome, decided by code (App.tsx), not by the AI:
 - **Paste**: the intent box contains `N:` spin blocks → fetch step passes the text through.
 - **Fetch**: the intent box contains a game URL (Titan Harness or direct launch URL), optionally
   with `key=value` tokens (`username=… moduleId=… productId=… clientId=… spins=…
@@ -59,8 +64,8 @@ completes and all reports are still written.
 - Unknown markers (e.g. `JP#…` jackpot) are skipped.
 
 ### Rules (see `skills/skill-portugal-plugin-parsing-rules.md`)
-1. Letters are upper-cased then mapped via the game profile (chosen by `game_code`, else
-   `module_id`; a fetched game without a profile uses `RAW` = letters kept as-is).
+1. Letters are upper-cased then mapped via the map resolved in stage 0 (from the Output Guide /
+   `symbol_profiles/<GAME>.json`; built-in ACCR only when no moduleId is known).
 2. `MG` values are summed into **Total Win Amount**.
 3. A non-numeric `MG` value is recorded as a warning and skipped; parsing continues.
 4. Empty spins are dropped.

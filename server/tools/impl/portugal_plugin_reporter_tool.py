@@ -36,7 +36,13 @@ def check_spins(spins: list[dict], symbol_map: dict[str, str]) -> list[dict]:
             findings.append({"spin": sid, "check": "row_width_mismatch",
                              "message": f"Rows have different cell counts: {sorted(widths)}"})
 
-        bad_win_syms = sorted({w for w in s.get("WINNING_SYM") or [] if w not in known}) if known else []
+        # A win's symbol field is either one letter (mapped by the parser) or one letter per
+        # symbol of the line, e.g. R#ahhh (kept raw, like the original tools) — valid when every
+        # letter is in the map.
+        bad_win_syms = sorted({
+            w for w in s.get("WINNING_SYM") or []
+            if w not in known and not (w.isalpha() and all(ch.upper() in symbol_map for ch in w))
+        }) if known else []
         if bad_win_syms:
             findings.append({"spin": sid, "check": "unmapped_winning_symbol",
                              "message": f"Winning symbols not in symbol map: {', '.join(bad_win_syms)}"})

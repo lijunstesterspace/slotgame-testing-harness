@@ -12,6 +12,12 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "server\\start-server.cmd"],
       "port": 8000
+    },
+    {
+      "name": "backend-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PYTHONPATH=.deps&& python -m uvicorn server.main:app --host 127.0.0.1 --port 8001"],
+      "port": 8001
     }
   ]
 }

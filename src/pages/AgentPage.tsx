@@ -172,8 +172,17 @@ Your objective is to:
     borderColor: "border-amber-800/40",
     bgColor: "bg-amber-950/60",
     mission:
-      "Replace the standalone ppvACCR1.0 Tk tool: fetch the outcome from the game environment (Game History → PlayCheck → GetReportAsync) or take it pasted, parse it into spins (reel rows, winning symbols/positions, bets, multipliers, win amounts), total the win amount, and write a text report identical to the old tool plus JSON/HTML reports with advisory consistency checks.",
+      "Replace the standalone ppv*.py Tk tools and their hand-edited LETTER_TO_SYM tables: resolve the game's symbol mapping from its Output Guide (.md) or the stored profile, fetch the outcome from the game environment (Game History → PlayCheck → GetReportAsync) or take it pasted, parse it into spins (reel rows, winning symbols/positions, bets, multipliers, win amounts), total the win amount, and write a text report identical to the old tool plus JSON/HTML reports with advisory consistency checks.",
     rules: [
+      {
+        title: "Symbol Mapping (portugal_plugin_symbol_map) — runs first",
+        items: [
+          "Attached Output Guide (.md): read the Definition / Corresponding letter table, validate, self-test on the guide's examples, diff and save symbol_profiles/<GAME>.json.",
+          "No guide: use the stored profile whose module_ids contain the run's moduleId; none → stop and ask for the guide before any browser work.",
+          "A guide whose moduleId differs from the run's moduleId is rejected (wrong game's document).",
+          "No moduleId at all (pasted outcome): built-in ACCR table, as the original tool did.",
+        ],
+      },
       {
         title: "Fetching (portugal_plugin_fetcher)",
         items: [
@@ -206,7 +215,7 @@ Your objective is to:
     outputSpec:
       "server/data/artifacts/portugal_plugin_{GAME}_{execution_id}.txt (identical to ppvACCR1.0) + .json + .html",
     systemPrompt: `The Portugal Plugin Verification Agent has no autonomous prompt — the portugal-plugin-verify-pipeline
-(fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin) is fixed code. The AI only asks for the Portugal Plugin string when it is
+(resolve_symbol_map → fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin) is fixed code. The AI only asks for the Portugal Plugin string when it is
 missing and summarizes the final report (spin count, total win, verdict, flagged spins).`,
   },
 ];

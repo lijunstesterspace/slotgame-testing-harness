@@ -24,35 +24,11 @@ from server.tools.base import (
 )
 
 # ── Game profiles (letter → SYM mapping) ─────────────────────────────
-# Every ppv*.py tool in portugal-playcheck-plugin differs only in this table; add a new game by
-# appending a profile here (or pass `symbol_map` at call time for a one-off run).
-GAME_PROFILES: dict[str, dict[str, Any]] = {
-    "ACCR": {
-        "title": "Amazing Catch Cold Rush",
-        "module_ids": [],
-        "symbol_map": {
-            'A': 'SYM1', 'B': 'SYM2', 'C': 'SYM3', 'D': 'SYM4',
-            'E': 'SYM5', 'F': 'SYM6', 'G': 'SYM7', 'H': 'SYM8',
-            'I': 'SYM9', 'J': 'SYM10', 'K': 'SYM11', 'L': 'SYM12',
-            'M': 'SYM20', 'N': 'SYM21', 'O': 'SYM22', 'P': 'SYM23',
-            'Q': 'SYM30',
-        },
-    },
-    # Fallback for a fetched game with no profile yet: keep the raw letters instead of applying
-    # another game's table (which would silently produce wrong SYM names).
-    "RAW": {"title": "Unmapped (raw letters)", "module_ids": [], "symbol_map": {}},
-}
-
-
-def profile_for(game_code: str | None, module_id: str | None) -> str:
-    """Explicit game_code wins; else the profile listing module_id; else RAW (fetched, unknown
-    game) or ACCR (pasted text with no module — the original tool's behaviour)."""
-    if game_code:
-        return game_code.upper()
-    for code, prof in GAME_PROFILES.items():
-        if module_id and str(module_id) in prof.get("module_ids", []):
-            return code
-    return "RAW" if module_id else "ACCR"
+# Every ppv*.py tool in portugal-playcheck-plugin differed only in its LETTER_TO_SYM table. Those
+# tables now live in symbol_profiles/<GAME>.json (imported from the backend team's Google Doc via
+# portugal_plugin_symbol_map, stage 0 of the pipeline); ACCR / RAW stay built in. See server/tools/impl/symbol_profiles.py.
+from server.tools.impl import symbol_profiles
+from server.tools.impl.symbol_profiles import profile_for  # noqa: F401  (re-exported)
 
 PARAM_MARKERS = {'R', 'MV', 'MT', 'MG'}
 SPIN_PATTERN = re.compile(r'(\d+):(.*?)(?=\s*\d+:|$)', re.DOTALL)
@@ -152,9 +128,10 @@ def format_report(spins: list[dict], total_win: float) -> str:
 
 def resolve_symbol_map(game_code: str, override: Any) -> tuple[dict[str, str] | None, str]:
     """Profile map merged with an optional per-call override. Returns (map, error)."""
-    profile = GAME_PROFILES.get(game_code.upper())
+    profiles = symbol_profiles.load_all()
+    profile = profiles.get(game_code.upper())
     if profile is None and not override:
-        return None, f"unknown_game_code:{game_code} (known: {', '.join(GAME_PROFILES)}; or pass symbol_map)"
+        return None, f"unknown_game_code:{game_code} (known: {', '.join(profiles)}; or pass symbol_map)"
     mapping = dict(profile["symbol_map"]) if profile else {}
     if override:
         if not isinstance(override, dict):
@@ -180,8 +157,7 @@ class PortugalPluginParserTool(ToolPlugin):
                 ),
                 ToolParameter(
                     name="game_code", type="string",
-                    enum=list(GAME_PROFILES),
-                    description="Game profile that supplies the letter → SYM mapping; default: by module_id, else ACCR",
+                    description="Game profile (symbol_profiles/<code>.json, or built-in ACCR/RAW); default: by module_id, else ACCR",
                 ),
                 ToolParameter(
                     name="module_id", type="string",
@@ -215,7 +191,7 @@ class PortugalPluginParserTool(ToolPlugin):
             success=True,
             content={
                 "game_code": game_code,
-                "game_title": GAME_PROFILES.get(game_code, {}).get("title", game_code),
+                "game_title": (symbol_profiles.get(game_code) or {}).get("title", game_code),
                 "symbol_map": mapping,
                 "spins": spins,
                 "spin_count": len(spins),

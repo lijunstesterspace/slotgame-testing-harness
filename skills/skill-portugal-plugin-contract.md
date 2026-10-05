@@ -1,7 +1,7 @@
 # SKILL: Portugal Plugin 接口契约规范
 
 ## 1. 核心定位
-定义 Portugal Plugin 取数/解析/报告 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
+定义 Portugal Plugin 映射/取数/解析/报告 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
 
 ## 2. portugal_plugin_fetcher 接口契约
 
@@ -151,6 +151,7 @@ Profile 选择：`game_code` > `module_id` 匹配 > 有 module_id 用 `RAW` > �
 ## 5. 工具调用顺序约束
 
 Agent 必须按以下顺序调用工具：
+0. `portugal_plugin_symbol_map` → 确定映射（导入附加的 Output Guide 或按 moduleId 取已存映射；缺失即停止），见 `skill-portugal-plugin-symbol-map.md`
 1. `portugal_plugin_fetcher` → 取回 outcome 字符串（粘贴模式直接透传）
-2. `portugal_plugin_parser` → 解析字符串，得到 spins / total_win / symbol_map / warnings
+2. `portugal_plugin_parser` → 用第 0 步的 `game_code` + `symbol_map` 解析字符串
 3. `portugal_plugin_reporter` → 使用第 1、2 步的输出做检查并写报告

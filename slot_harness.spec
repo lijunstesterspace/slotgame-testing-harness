@@ -206,13 +206,23 @@ for script_name in ("verify_testdata.py", "generate_testdata.py"):
         print(f"[spec] Including tool script: {script_name}")
 
 # ---------------------------------------------------------------------------
+# symbol_profiles/*.json：打包为只读种子；运行时 exe 同目录的 symbol_profiles/ 可写并优先
+# ---------------------------------------------------------------------------
+profile_datas = []
+profiles_src = os.path.join(ROOT, "symbol_profiles")
+if os.path.isdir(profiles_src):
+    for f in Path(profiles_src).glob("*.json"):
+        profile_datas.append((str(f), "symbol_profiles"))
+    print(f"[spec] Including {len(profile_datas)} symbol profile(s)")
+
+# ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 a = Analysis(
     [os.path.join(ROOT, "build.py")],
     pathex=[ROOT],
     binaries=cffi_binaries + aiosqlite_binaries + impl_binaries,
-    datas=cffi_datas + aiosqlite_datas + impl_datas + static_datas + env_datas + script_datas,
+    datas=cffi_datas + aiosqlite_datas + impl_datas + static_datas + env_datas + script_datas + profile_datas,
     hiddenimports=hidden_imports + impl_hidden,
     hookspath=[],
     hooksconfig={},

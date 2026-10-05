@@ -21,6 +21,7 @@ const PLUGIN_ICONS: Record<string, React.ReactNode> = {
   portugal_plugin_parser: <Table2 className="w-4 h-4" />,
   portugal_plugin_reporter: <FileText className="w-4 h-4" />,
   portugal_plugin_fetcher: <Wrench className="w-4 h-4" />,
+  portugal_plugin_symbol_map: <BookOpen className="w-4 h-4" />,
 };
 
 const SKILL_ICONS: Record<string, React.ReactNode> = {
@@ -31,6 +32,7 @@ const SKILL_ICONS: Record<string, React.ReactNode> = {
   "skill-helpfile-plugin-contract": <Puzzle className="w-5 h-5" />,
   "skill-portugal-plugin-parsing-rules": <BookOpen className="w-5 h-5" />,
   "skill-portugal-plugin-contract": <Puzzle className="w-5 h-5" />,
+  "skill-portugal-plugin-symbol-map": <BookOpen className="w-5 h-5" />,
 };
 
 // ── Hardcoded skill data (from skills/*.md) ─────────────────────
@@ -85,6 +87,13 @@ const HARDCODED_SKILLS: SkillInfoDto[] = [
     description: "Defines the input/output contract and call order of portugal_plugin_fetcher, portugal_plugin_parser and portugal_plugin_reporter, including PlayCheck session/transaction selection and error codes.",
     file: "skill-portugal-plugin-contract.md",
     size_kb: 7.1,
+  },
+  {
+    id: "skill-portugal-plugin-symbol-map",
+    name: "Portugal Plugin Symbol Mapping Rules",
+    description: "Stage 0 of Portugal Plugin Verification: how portugal_plugin_symbol_map imports a game's Output Guide (Google Doc → Markdown) or picks the stored map by moduleId — table detection, SYM normalisation, validation, self-test, diff and profile storage.",
+    file: "skill-portugal-plugin-symbol-map.md",
+    size_kb: 3.7,
   },
 ];
 

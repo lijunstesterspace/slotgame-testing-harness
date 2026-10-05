@@ -41,9 +41,10 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
     { id: 't1-3', stage: 1, title: 'AI Analysis Report', description: 'Generate AI-powered analysis report with quality issues', status: 'pending' },
   ],
   portugal_plugin: [
-    { id: 't1-1', stage: 1, title: 'Fetch Outcome from PlayCheck', description: 'Log into the game, spin, open Game History and read the outcome string (skipped when pasted)', status: 'pending' },
-    { id: 't1-2', stage: 1, title: 'Parse Portugal Plugin Output', description: 'Split spins, map symbols and total the win amount', status: 'pending' },
-    { id: 't1-3', stage: 1, title: 'Consistency Check & Report', description: 'Flag symbol/row/parameter mismatches and write TXT/JSON/HTML reports', status: 'pending' },
+    { id: 't1-1', stage: 1, title: 'Resolve Symbol Mapping', description: "Import the attached Output Guide (.md) or use the stored map for this module", status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Fetch Outcome from PlayCheck', description: 'Log into the game, spin, open Game History and read the outcome string (skipped when pasted)', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'Parse Portugal Plugin Output', description: 'Split spins, map symbols and total the win amount', status: 'pending' },
+    { id: 't1-4', stage: 1, title: 'Consistency Check & Report', description: 'Flag symbol/row/parameter mismatches and write TXT/JSON/HTML reports', status: 'pending' },
   ],
 };
 
@@ -68,6 +69,8 @@ const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; desc
     { id: "plan-5", name: "Excel Report Generation", description: "Package diff results into formatted Excel report", selected: false },
   ],
   portugal_plugin: [
+    { id: "plan-map", name: "Symbol Mapping", description: "Attached Output Guide (.md) → validate + self-test on its examples; otherwise the stored map for the module", selected: true },
+    { id: "plan-save", name: "Save Imported Mapping", description: "Keep an attached guide's map in symbol_profiles/<GAME>.json for later runs (untick = use it for this run only)", selected: true },
     { id: "plan-0", name: "Fetch Outcome from PlayCheck", description: "Game URL given: log in, spin, ••• → Game History → session → transaction → GetReportAsync", selected: true },
     { id: "plan-1", name: "Spin & Row Parsing", description: "Split N: spin blocks and map reel letters to SYM names", selected: true },
     { id: "plan-2", name: "Win Line Extraction", description: "Collect winning symbols/positions, bets, multipliers and win amounts", selected: true },
@@ -165,6 +168,9 @@ const Workbench: React.FC = () => {
   // Attach ("+") for testdata_generation: read a local paytable text/CSV file client-side and
   // fold its content into the intent box — no backend round-trip needed for this one.
   const rawTextUploadInputRef = useRef<HTMLInputElement>(null);
+  // portugal_plugin: the game's symbol Output Guide (.md) attached with "+", kept apart from the
+  // outcome text in the input box.
+  const [symbolGuide, setSymbolGuide] = useState<{ name: string; text: string } | null>(null);
   const [uploadingRawText, setUploadingRawText] = useState(false);
   // game_verification's "Add folder" alternative: pick an entire directory of .testdata files
   // at once instead of multi-selecting them (same upload-testdata endpoint either way).
@@ -530,7 +536,17 @@ const Workbench: React.FC = () => {
       } else if (selectedScenarioId === "portugal_plugin") {
         const pasted = /\d+\s*:/.test(promptIntent);
         extraParams.rawText = pasted ? promptIntent : "";
-        extraParams.gameCode = "ACCR";
+        // Stage 0 (symbol mapping) needs the module under test before any browser work:
+        // moduleId=… typed in the box wins, else the game URL's own moduleId query parameter.
+        let urlModule = "";
+        try {
+          urlModule = sheetUrl.trim() ? new URL(sheetUrl.trim()).searchParams.get("moduleId") ?? "" : "";
+        } catch { /* not a URL */ }
+        extraParams.moduleId = promptIntent.match(/moduleId\s*=\s*(\d+)/i)?.[1] ?? urlModule;
+        extraParams.mappingGameCode = promptIntent.match(/gameCode\s*=\s*([A-Za-z0-9]+)/i)?.[1] ?? "";
+        extraParams.guideMarkdown = symbolGuide?.text ?? "";
+        extraParams.guideFileName = symbolGuide?.name ?? "";
+        extraParams.saveMapping = plannedTests.find((t) => t.id === "plan-save")?.selected ?? true;
         if (!pasted) {
           extraParams.fetchParams = buildPortugalFetchParams(sheetUrl.trim(), promptIntent, loginName);
           // Stop must be able to kill the backend's Chrome, same as game_verification
@@ -558,6 +574,51 @@ const Workbench: React.FC = () => {
         const recs = coerceTestRecords(parseOutput.records, executionId);
         await harnessClient.saveRecords(recs as unknown as Parameters<typeof harnessClient.saveRecords>[0]).catch(() => {});
         setTestRecords(toFrontendRecords(recs));
+      }
+
+      // portugal_plugin stage 0: which symbol map was used, and — for an imported guide — what changed.
+      const mapping = stepResults.resolve_symbol_map as
+        | {
+            mode: "imported" | "stored" | "default"; game_code: string; title: string; module_ids: string[];
+            letter_count: number; saved?: boolean; saved_path?: string; unchanged?: boolean; existing?: boolean;
+            diff?: { added: Record<string, string>; removed: Record<string, string>; changed: Record<string, { from: string; to: string }> };
+            warnings?: string[]; examples?: Array<{ total_win: number; unmapped_letters: string[] }>;
+          }
+        | undefined;
+      if (mapping) {
+        const who = `${mapping.game_code} (${mapping.title}, module ${mapping.module_ids.join("/") || "?"}, ${mapping.letter_count} letters)`;
+        if (mapping.mode !== "imported") {
+          addLog({
+            type: "HARNESS_EVENT",
+            content: mapping.mode === "stored"
+              ? `Symbol map: stored profile ${who}`
+              : `Symbol map: no moduleId given — using the built-in ${who} table (add moduleId=… or attach the game's guide)`,
+            status: mapping.mode === "stored" ? "success" : "warning",
+          });
+        } else if (mapping.diff) {
+          const { added, removed, changed } = mapping.diff;
+          const fmt = (o: Record<string, unknown>) => Object.keys(o).join(", ") || "none";
+          addLog({
+            type: "HARNESS_EVENT",
+            content:
+              `Symbol map imported from guide: ${who}. ` +
+              (mapping.unchanged ? "Identical to the stored profile."
+                : `${mapping.existing ? "Changes vs stored" : "New profile"} — added: ${fmt(added)}; changed: ${fmt(changed)}; removed: ${fmt(removed)}. ` +
+                  (mapping.saved ? `Saved to ${mapping.saved_path}` : "Used for this run only (Save Imported Mapping unticked).")),
+            status: "success",
+          });
+          for (const [letter, c] of Object.entries(changed)) {
+            addLog({ type: "HARNESS_EVENT", content: `  ${letter}: ${c.from} → ${c.to}`, status: "warning" });
+          }
+          const examples = mapping.examples ?? [];
+          const bad = examples.filter((e) => e.unmapped_letters.length).length;
+          addLog({
+            type: "HARNESS_EVENT",
+            content: `Guide self-test: ${examples.length} example string(s) parsed, ${bad} with letters missing from the table.`,
+            status: bad ? "error" : "success",
+          });
+          for (const w of mapping.warnings ?? []) addLog({ type: "HARNESS_EVENT", content: `Warning: ${w}`, status: "warning" });
+        }
       }
 
       // portugal_plugin: surface the headline numbers and report links in the console.
@@ -662,6 +723,7 @@ const Workbench: React.FC = () => {
     setFolderPath("");
     setTestdataFiles([]);
     setSelectedTestdataFiles([]);
+    setSymbolGuide(null);
   };
 
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
@@ -776,6 +838,16 @@ const Workbench: React.FC = () => {
     setError(null);
     try {
       const text = await file.text();
+      // portugal_plugin: a symbol Output Guide (.md with the 'Corresponding letter' table) is kept
+      // as its own attachment — its example strings ('0:a;p;k…') must not be mistaken for the
+      // outcome under test. Google Docs' Markdown export appends every image as a base64 line;
+      // those are dropped (the backend strips them too).
+      if (selectedScenarioId === "portugal_plugin" && /corresponding\s+letter/i.test(text)) {
+        const guide = text.replace(/^\[image\d+\]:\s*<data:[^>]*>\s*$/gm, "").replace(/\n{3,}/g, "\n\n");
+        setSymbolGuide({ name: file.name, text: guide });
+        addLog({ type: "HARNESS_EVENT", content: `Symbol mapping guide attached: ${file.name}`, status: "success" });
+        return;
+      }
       setPromptIntent((prev) => (prev.trim() ? `${prev}\n${text}` : text));
     } catch (err: any) {
       setError(`Failed to read file: ${err?.message ?? "Unknown error"}`);
@@ -808,12 +880,15 @@ const Workbench: React.FC = () => {
   const attachBadgeCount =
     selectedScenarioId === "game_verification" ? testdataFiles.length
     : selectedScenarioId === "easyhelp_checking" ? (folderPath ? 1 : 0)
+    : selectedScenarioId === "portugal_plugin" ? (symbolGuide ? 1 : 0)
     : 0;
   const attachTitle =
     selectedScenarioId === "game_verification"
       ? (testdataFiles.length > 0 ? `${testdataFiles.length} .testdata file(s) attached — click to change` : "Attach .testdata file(s) or a folder to verify")
     : selectedScenarioId === "easyhelp_checking"
       ? (folderPath ? "Folder attached — click to change" : "Attach help files or a folder")
+    : selectedScenarioId === "portugal_plugin"
+      ? (symbolGuide ? `Symbol guide attached: ${symbolGuide.name} — click to replace` : "Attach the game's Output Guide (.md) for its symbol mapping, or an outcome text file")
       : "Attach a local paytable text/CSV file";
 
   // ── Verification handler ──────────────────────────────────────
@@ -1250,7 +1325,7 @@ const Workbench: React.FC = () => {
                     : selectedScenarioId === 'testdata_generation'
                     ? 'Paste sheet URL (optional) and describe your test task...\n\nExample:\nhttps://docs.google.com/spreadsheets/d/...\ngenerate testdata for base game'
                     : selectedScenarioId === 'portugal_plugin'
-                    ? 'Paste the Portugal Plugin output string, OR a game URL to fetch it from PlayCheck...\n\nExample (paste):\n1:A;B;C#D;E;F#G;H;I#R#A#0,1,2#MV#10#MT#2#MG#5.0\n\nExample (fetch):\nhttps://mobile-app1-gtp537.installprogram.eu/htmlGames/4.60.0/harness/<game>\nusername=lijunt moduleId=105233 productId=5001 clientId=50300 spins=1'
+                    ? 'Paste the Portugal Plugin output string, OR a game URL to fetch it from PlayCheck...\n\nExample (paste):\n1:A;B;C#D;E;F#G;H;I#R#A#0,1,2#MV#10#MT#2#MG#5.0\n\nExample (fetch):\nhttps://mobile-app1-gtp537.installprogram.eu/htmlGames/4.60.0/harness/<game>\nusername=lijunt moduleId=105233 productId=5001 clientId=50300 spins=1\n\nSymbol mapping: attach the game\'s Output Guide (.md) with + the first time (or when it changes); later runs reuse it by moduleId.'
                     : 'Describe your test task...'
                 }
                 value={sheetUrl ? `${sheetUrl}\n${promptIntent}` : promptIntent}
@@ -1323,7 +1398,7 @@ const Workbench: React.FC = () => {
                     </button>
                     {attachBadgeCount > 0 && (
                       <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-slate-950 text-[9px] font-bold flex items-center justify-center">
-                        {selectedScenarioId === 'easyhelp_checking' ? '✓' : attachBadgeCount}
+                        {selectedScenarioId === 'easyhelp_checking' || selectedScenarioId === 'portugal_plugin' ? '✓' : attachBadgeCount}
                       </span>
                     )}
                     {attachMenuOpen && (
@@ -1388,7 +1463,7 @@ const Workbench: React.FC = () => {
                     ref={rawTextUploadInputRef}
                     type="file"
                     className="hidden"
-                    accept=".txt,.csv,.tsv,.paytable"
+                    accept=".txt,.csv,.tsv,.paytable,.md,.markdown"
                     onChange={handleRawTextFileChosen}
                   />
                   {/* Preview/Generate or Stop button */}

@@ -19,6 +19,7 @@
   - `portugal_plugin_parser_tool.py` - Portugal Plugin 输出解析插件（移植自 ppvACCR1.0.py）
   - `portugal_plugin_reporter_tool.py` - Portugal Plugin 一致性检查、PlayCheck 核对与 TXT/JSON/HTML 报告插件
   - `portugal_plugin_fetcher_tool.py` - 从游戏环境经 Game History → PlayCheck 自动取回 Portugal Plugin outcome
+  - `portugal_plugin_symbol_map_tool.py` - Portugal Plugin Verification 第 0 步：导入游戏 Output Guide（Google Doc → Markdown）或按 moduleId 取已存映射（`symbol_profiles/`）
 
 ## 新增插件方式
 

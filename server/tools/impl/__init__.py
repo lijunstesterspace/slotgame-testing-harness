@@ -11,6 +11,7 @@ from server.tools.impl.helpfile_analyzer_tool import HelpfileAnalyzerTool
 from server.tools.impl.portugal_plugin_parser_tool import PortugalPluginParserTool
 from server.tools.impl.portugal_plugin_reporter_tool import PortugalPluginReporterTool
 from server.tools.impl.portugal_plugin_fetcher_tool import PortugalPluginFetcherTool
+from server.tools.impl.portugal_plugin_symbol_map_tool import PortugalPluginSymbolMapTool
 
 BUILTIN_TOOLS: list = [
     TestdataParserTool(),
@@ -26,6 +27,7 @@ BUILTIN_TOOLS: list = [
     PortugalPluginParserTool(),
     PortugalPluginReporterTool(),
     PortugalPluginFetcherTool(),
+    PortugalPluginSymbolMapTool(),
 ]
 __all__ = [
     "BUILTIN_TOOLS",
@@ -33,4 +35,5 @@ __all__ = [
     "TestdataVerifierTool", "TestdataVerifierApiTool", "TestdataVerifierHarnessTool",
     "LogDiagnoserTool", "HtmlToTextConverterTool", "DiffComparatorTool", "HelpfileAnalyzerTool",
     "PortugalPluginParserTool", "PortugalPluginReporterTool", "PortugalPluginFetcherTool",
+    "PortugalPluginSymbolMapTool",
 ]

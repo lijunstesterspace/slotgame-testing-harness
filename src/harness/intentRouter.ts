@@ -14,6 +14,7 @@ import skill_helpfile_plugin from "../../skills/skill-helpfile-plugin-contract.m
 import skill_verification_protocol from "../../skills/skill-verification-protocol.md?raw";
 import skill_portugal_plugin_rules from "../../skills/skill-portugal-plugin-parsing-rules.md?raw";
 import skill_portugal_plugin_contract from "../../skills/skill-portugal-plugin-contract.md?raw";
+import skill_portugal_plugin_symbol_map from "../../skills/skill-portugal-plugin-symbol-map.md?raw";
 
 // ─ Test Scenario Registry ─────────────────────────────────────────────
 // Add a new scenario by appending an entry to this array; HARNESS auto-discovers it
@@ -55,12 +56,12 @@ export const SCENARIOS: TestScenario[] = [
   {
     id: "portugal_plugin",
     label: "Portugal Plugin Verification",
-    description: "Fetch the Portugal Plugin outcome from PlayCheck (or paste it), parse rows/R/MV/MT/MG, check it against PlayCheck payout and write TXT/JSON/HTML reports",
-    keywords: ["portugal plugin", "playcheck", "play check", "portugal", "plugin verification", "total win", "葡萄牙", "插件验证"],
+    description: "Resolve the game's symbol mapping (import its Output Guide .md or use the stored one), fetch the outcome from PlayCheck (or paste it), parse it, check it against PlayCheck payout and write TXT/JSON/HTML reports",
+    keywords: ["portugal plugin", "playcheck", "play check", "portugal", "plugin verification", "total win", "corresponding letter", "symbol mapping", "葡萄牙", "插件验证", "映射表"],
     agentFile: "portugal_plugin_verifier_agent.md",
-    skills: ["skill-portugal-plugin-parsing-rules.md", "skill-portugal-plugin-contract.md"],
+    skills: ["skill-portugal-plugin-symbol-map.md", "skill-portugal-plugin-parsing-rules.md", "skill-portugal-plugin-contract.md"],
     pipelineId: "portugal-plugin-verify-pipeline",
-    requiredPlugins: ["portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
+    requiredPlugins: ["portugal_plugin_symbol_map", "portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
     icon: "globe",
   },
 ];
@@ -82,6 +83,7 @@ const SKILL_CONTENT: Record<string, string> = {
   "skill-verification-protocol.md": skill_verification_protocol,
   "skill-portugal-plugin-parsing-rules.md": skill_portugal_plugin_rules,
   "skill-portugal-plugin-contract.md": skill_portugal_plugin_contract,
+  "skill-portugal-plugin-symbol-map.md": skill_portugal_plugin_symbol_map,
 };
 
 // ── Intent Router ────────────────────────────────────────────────

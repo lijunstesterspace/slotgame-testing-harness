@@ -1,0 +1,41 @@
+{
+  "game_code": "ADPC",
+  "title": "Apex Dragon Power Combo",
+  "module_ids": [
+    "105170"
+  ],
+  "symbol_map": {
+    "A": "SYM1",
+    "B": "SYM2",
+    "C": "SYM3",
+    "D": "SYM4",
+    "E": "SYM5",
+    "F": "SYM6",
+    "G": "SYM7",
+    "H": "SYM8",
+    "I": "SYM9",
+    "J": "SYM10",
+    "K": "SYM11",
+    "L": "SYM12",
+    "M": "SYM15",
+    "N": "SYM16",
+    "O": "SYM17",
+    "P": "SYM19",
+    "Q": "SYM20",
+    "R": "SYM22",
+    "S": "SYM23",
+    "T": "SYM24",
+    "U": "SYM25",
+    "V": "SYM26",
+    "W": "SYM29",
+    "X": "SYM30",
+    "Y": "SYM99"
+  },
+  "source": {
+    "file": "Apex Dragon Power Combo™ - Portugal Report Plugin Output Guide.md",
+    "imported_at": "2026-09-30T14:27:38",
+    "sha256": "47c33e3586854418",
+    "execution_id": "exe_bc153b467c40"
+  },
+  "history": []
+}

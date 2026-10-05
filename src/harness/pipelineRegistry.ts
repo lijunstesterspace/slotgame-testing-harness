@@ -184,16 +184,36 @@ export const PIPELINES: PipelineDef[] = [
   {
     id: "portugal-plugin-verify-pipeline",
     name: "Portugal Plugin Verification",
-    description: "Fetch outcome from PlayCheck (or use pasted text) → parse → checks → TXT/JSON/HTML report",
+    description: "Resolve symbol mapping → fetch outcome from PlayCheck (or use pasted text) → parse → checks → TXT/JSON/HTML report",
     stages: [
-      // Stage 0: Fetch — pass-through when the outcome string was pasted
+      // Stage 0: Symbol mapping — precondition, runs before any slow browser work. Imports the
+      // attached Output Guide (.md) or uses the stored profile for the module; fails otherwise.
+      [
+        {
+          id: "resolve_symbol_map",
+          plugin: "portugal_plugin_symbol_map",
+          label: "Resolve Symbol Mapping",
+          description: "Import the attached Output Guide or load the stored letter → SYM map for this module",
+          dependsOn: [],
+          retryOnFail: false,
+          maxRetries: 0,
+          buildParams: ({ extraParams }) => ({
+            markdown: extraParams.guideMarkdown ?? "",
+            file_name: extraParams.guideFileName ?? "",
+            module_id: extraParams.moduleId ?? "",
+            game_code: extraParams.mappingGameCode ?? "",
+            save: extraParams.saveMapping ?? true,
+          }),
+        },
+      ],
+      // Stage 1: Fetch — pass-through when the outcome string was pasted
       [
         {
           id: "fetch_portugal_plugin",
           plugin: "portugal_plugin_fetcher",
           label: "Fetch Outcome from PlayCheck",
           description: "Log into the game, spin, open ••• → Game History and read GetReportAsync Data",
-          dependsOn: [],
+          dependsOn: ["resolve_symbol_map"],
           retryOnFail: false,
           maxRetries: 0,
           buildParams: ({ extraParams }) => ({
@@ -202,7 +222,7 @@ export const PIPELINES: PipelineDef[] = [
           }),
         },
       ],
-      // Stage 1: Parse
+      // Stage 2: Parse
       [
         {
           id: "parse_portugal_plugin",
@@ -214,17 +234,17 @@ export const PIPELINES: PipelineDef[] = [
           maxRetries: 0,
           buildParams: ({ extraParams, stepResults }) => {
             const fetched = (stepResults.fetch_portugal_plugin ?? {}) as Record<string, unknown>;
+            const mapping = (stepResults.resolve_symbol_map ?? {}) as Record<string, unknown>;
             return {
               raw_text: fetched.raw_text ?? extraParams.rawText ?? "",
-              // pasted text keeps the original tool's ACCR table; fetched text picks by module id
-              ...(fetched.source === "playcheck"
-                ? { module_id: fetched.module_id }
-                : { game_code: extraParams.gameCode ?? "ACCR" }),
+              // exactly the map stage 0 resolved (also works for an imported-but-unsaved guide)
+              game_code: mapping.game_code,
+              symbol_map: mapping.symbol_map,
             };
           },
         },
       ],
-      // Stage 2: Report
+      // Stage 3: Report
       [
         {
           id: "report_portugal_plugin",

@@ -16,7 +16,7 @@ SCENARIO_PLUGINS: dict[str, list[str]] = {
     "testdata_generation": ["testdata_parser", "testdata_generator", "zip_packager"],
     "game_verification": ["testdata_verifier", "testdata_verifier_api", "testdata_verifier_harness", "log_diagnoser"],
     "easyhelp_checking": ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
-    "portugal_plugin": ["portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
+    "portugal_plugin": ["portugal_plugin_symbol_map", "portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
 }
 
 

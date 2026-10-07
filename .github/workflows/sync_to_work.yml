@@ -1,0 +1,25 @@
+name: Sync to Work GitHub
+
+on:
+  push:
+    branches:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Work Repository
+        env:
+          WORK_PAT: ${{ secrets.WORK_GITHUB_TOKEN }}
+          WORK_REPO: github.com/lijunstesterspace/slotgame-testing-harness.git
+        run: |
+          git config --global user.name "Auto Sync Bot"
+          git config --global user.email "bot@github.com"
+          git push https://${WORK_PAT}@${WORK_REPO} HEAD:refs/heads/${{ github.ref_name }} --force --tags

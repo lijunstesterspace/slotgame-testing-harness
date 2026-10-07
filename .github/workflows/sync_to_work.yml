@@ -10,7 +10,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -18,8 +18,14 @@ jobs:
       - name: Push to Work Repository
         env:
           WORK_PAT: ${{ secrets.WORK_GITHUB_TOKEN }}
-          WORK_REPO: github.com/lijunstesterspace/slotgame-testing-harness.git
         run: |
+          if [ -z "$WORK_PAT" ]; then
+            echo "::error::未检测到 WORK_GITHUB_TOKEN！请在家用仓库 Settings -> Secrets and variables -> Actions 中添加名为 WORK_GITHUB_TOKEN 的 Secret。"
+            exit 1
+          fi
+
           git config --global user.name "Auto Sync Bot"
           git config --global user.email "bot@github.com"
-          git push https://${WORK_PAT}@${WORK_REPO} HEAD:refs/heads/${{ github.ref_name }} --force --tags
+          
+          # 使用 x-access-token 标准鉴权推送到公司账号仓库
+          git push https://x-access-token:${WORK_PAT}@github.com/lijunstesterspace/slotgame-testing-harness.git HEAD:refs/heads/${{ github.ref_name }} --force --tags

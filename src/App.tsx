@@ -989,7 +989,7 @@ const Workbench: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
+    <div className="h-screen max-h-screen w-screen max-w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden">
       <Header
         workflowStage={workflowStage}
         workflowState={workflowState}
@@ -1000,7 +1000,7 @@ const Workbench: React.FC = () => {
       />
       {errorBanner}
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left: Plugin + Task List */}
         <Sidebar
           tasks={tasks}
@@ -1014,10 +1014,10 @@ const Workbench: React.FC = () => {
         {/* Center: chat-style column — Execution Console (transcript, fills available space)
             sits above interactive panels and the Input Dialog, which is pinned at the bottom
             like a typical AI chat window. Pipeline + TestData Preview live in the right column. */}
-        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4 min-w-0">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-4 gap-3 min-w-0">
 
           {/* ── Execution Console (chat transcript) ── */}
-          <ExecutionConsole logs={logs} />
+          <ExecutionConsole logs={logs} onClearLogs={() => setLogs([])} />
 
           {/* ── AI Clarify Panel: simple dialogue interaction, bounded to one question ── */}
           {clarifyState && (
@@ -1521,7 +1521,7 @@ const Workbench: React.FC = () => {
         </div>
 
         {/* Right: Pipeline visualization + TestData Preview */}
-        <div className="w-[340px] min-w-[340px] flex flex-col overflow-y-auto p-4 gap-4 border-l border-slate-800">
+        <div className="w-[340px] min-w-[340px] h-full flex flex-col overflow-y-auto p-4 gap-4 border-l border-slate-800">
           <PipelineVisualization
             workflowStage={workflowStage}
             workflowState={workflowState}
@@ -1534,7 +1534,7 @@ const Workbench: React.FC = () => {
         </div>
       </main>
 
-      <footer className="px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+      <footer className="flex-shrink-0 px-6 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           <span>HARNESS v2 · Scenario: {SCENARIOS.find(s => s.id === selectedScenarioId)?.label ?? "—"}</span>

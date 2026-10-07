@@ -31,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenConfig,
 }) => {
   return (
-    <header className="bg-slate-900/90 border-b border-slate-800 px-5 py-2.5 flex items-center justify-between shadow-lg">
+    <header className="bg-slate-900/90 border-b border-slate-800 px-5 py-2.5 flex items-center justify-between shadow-lg flex-shrink-0">
       {/* Left: Brand */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">

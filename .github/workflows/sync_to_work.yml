@@ -1,0 +1,35 @@
+name: Sync to Work GitHub
+
+on:
+  push:
+    branches:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Push to Work Repository
+        env:
+          WORK_PAT: ${{ secrets.WORK_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$WORK_PAT" ]; then
+            echo "::error::未检测到 WORK_GITHUB_TOKEN！请在家用仓库 Settings -> Secrets and variables -> Actions 中添加该 Secret。"
+            exit 1
+          fi
+
+          # 清理默认认证头，避免与公司账号凭据冲突（解决 exit code 128 核心关键）
+          git config --unset-all http.https://github.com/.extraheader || true
+
+          git config --global user.name "Auto Sync Bot"
+          git config --global user.email "bot@github.com"
+
+          # 推送当前分支与所有标签到公司仓库
+          git push https://lijunstesterspace:${WORK_PAT}@github.com/lijunstesterspace/slotgame-testing-harness.git HEAD:refs/heads/${{ github.ref_name }} --force --tags

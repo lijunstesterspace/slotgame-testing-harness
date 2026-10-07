@@ -12,7 +12,7 @@ import { AgentPage } from "./pages/AgentPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { SlotGameConfig, WorkflowStage, WorkflowState, TaskItem, ToolCallLog, TestRecord, VerificationReport, VerificationConfig, TestdataFileInfo, LlmProviderConfig } from "./types";
 import { MOCK_GAME_CONFIGS, INITIAL_TEST_RECORDS } from "./mock/testData";
-import { loadStoredLlmConfig, saveLlmConfig } from "./utils/llmGateway";
+import { loadStoredLlmConfig, saveLlmConfig, loadStoredModels, getActiveModelConfig } from "./utils/llmGateway";
 import { AlertCircle, Sparkles, Loader2, ChevronDown, ArrowUp, Square, RefreshCw, FileText, Plus, Folder } from "lucide-react";
 import { runRealGameVerification } from "./utils/verificationEngine";
 import { harnessClient, coerceTestRecords } from "./harness/client";
@@ -932,9 +932,8 @@ const Workbench: React.FC = () => {
     }
   };
 
-  const handleConfigChanged = async () => {
+  const handleConfigChanged = () => {
     // Reload config from the multi-model store
-    const { loadStoredModels, getActiveModelConfig } = await import("./utils/llmGateway");
     const models = loadStoredModels();
     const activeCfg = getActiveModelConfig(models);
     setLlmConfig(activeCfg);

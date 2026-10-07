@@ -2,11 +2,19 @@
 PyInstaller 入口文件。
 启动 uvicorn 服务 + pywebview 桌面窗口。
 """
-from __future__ import annotations
+import os
 import multiprocessing
 import sys
 import threading
 import time
+from pathlib import Path
+
+# Windows 无控制台模式（console=False）下，sys.stdout / sys.stderr 为 None。
+# 必须重定向，否则 uvicorn 与 logging 尝试写入时会崩溃。
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
 def _freeze_support():
@@ -14,18 +22,33 @@ def _freeze_support():
     multiprocessing.freeze_support()
 
 
+def _get_log_file() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "app_startup.log"
+    return Path("app_startup.log")
+
+
 def _start_server():
     """在后台线程启动 uvicorn 服务。"""
-    import uvicorn
-    from server.config import settings
+    try:
+        import uvicorn
+        from server.config import settings
+        from server.main import app
 
-    uvicorn.run(
-        "server.main:app",
-        host="127.0.0.1",
-        port=settings.api_port,
-        reload=False,
-        log_level="info",
-    )
+        with open(_get_log_file(), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] _start_server starting on port {settings.api_port}\n")
+
+        uvicorn.run(
+            app,
+            host="127.0.0.1",
+            port=settings.api_port,
+            reload=False,
+            log_level="info",
+        )
+    except Exception as e:
+        import traceback
+        with open(_get_log_file(), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Server failed: {e}\n{traceback.format_exc()}\n")
 
 
 def _open_webview():
@@ -68,6 +91,17 @@ def _open_webview():
 
 def main():
     _freeze_support()
+    try:
+        with open(_get_log_file(), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] main() entered, argv={sys.argv}\n")
+    except Exception:
+        pass
+
+    if "--server-only" in sys.argv:
+        # 仅后端模式（测试或无头环境使用）
+        _start_server()
+        while True:
+            time.sleep(1)
 
     # 在后台线程启动 FastAPI 服务
     server_thread = threading.Thread(target=_start_server, daemon=True)
@@ -78,4 +112,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        try:
+            with open(_get_log_file(), "a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Crash in main: {e}\n{traceback.format_exc()}\n")
+        except Exception:
+            pass

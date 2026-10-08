@@ -1,97 +1,97 @@
-# SKILL: SLOT TestData 验证协议规则
+# SKILL: SLOT TestData Verification Protocol Rules
 
-## 1. 核心定位
-TestData Verification 场景的专属验证技能，定义验证执行流程、边界条件处理、异常分类和结果判定标准，保障验证结果准确可靠。
+## 1. Core Purpose
+Dedicated verification skill for the TestData Verification scenario; defines the verification execution flow, boundary condition handling, exception classification and result criteria, ensuring accurate and reliable verification results.
 
-## 2. 验证执行流程约束
+## 2. Verification Execution Flow Constraints
 
-### Rule 1: 验证前环境预检
-执行验证前必须完成以下检查：
-1. **URL 可达性**：验证目标游戏 URL 可访问，返回 HTTP 200
-2. **TestData 文件完整性**：确认 .testdata XML 文件存在且格式合法（包含 `<Key>`、`<Slot>`、`<Spin>`、`<PreGen>` 标签）
-3. **loginName 一致性**：XML `<Key>` 中的 `loginName` 与 URL 中 `username` 参数一致
-4. **moduleID 匹配**：XML `<Key>` 中的 `moduleID` 与 URL 中 `moduleId` 参数一致
+### Rule 1: Pre-verification Environment Check
+Before verification, the following checks must be completed:
+1. **URL reachability**: target game URL is accessible and returns HTTP 200
+2. **TestData file integrity**: confirm the .testdata XML file exists and is well-formed (contains `<Key>`, `<Slot>`, `<Spin>`, `<PreGen>` tags)
+3. **loginName consistency**: `loginName` in XML `<Key>` matches the `username` parameter in the URL
+4. **moduleID match**: `moduleID` in XML `<Key>` matches the `moduleId` parameter in the URL
 
-### Rule 2: Seed 注入与 Spin 执行
-- 通过 Selenium CDP 注入拦截脚本，捕获 `responseLogger` 对象
-- 每个 Spin 执行后等待 `responseLogger` 返回，超时阈值默认 5000ms
-- Spin 间隔默认 300ms，防止触发服务端限流
-- 对于 Double PreGen 记录（含 bonus），先执行 base spin，再执行 bonus spin
+### Rule 2: Seed Injection and Spin Execution
+- Inject an interception script via Selenium CDP to capture the `responseLogger` object
+- After each Spin, wait for `responseLogger` to return; default timeout threshold 5000ms
+- Default interval between Spins 300ms, to avoid triggering server rate limiting
+- For Double PreGen records (with bonus), execute the base spin first, then the bonus spin
 
-### Rule 3: 结果判定标准
-每条 Spin 记录按以下规则判定：
+### Rule 3: Result Criteria
+Each Spin record is judged by the following rules:
 
-| 判定结果 | 条件 |
+| Result | Condition |
 |---------|------|
-| **PASSED** | HTTP 200 + seed 被接受 + responseLogger 返回有效数据 + batch/index 匹配 |
-| **SEED_MISMATCH** | seed 被接受但返回的 batch/index 与预期不一致 |
-| **STAGE_MISMATCH** | seed 匹配但游戏阶段不符（如预期 FreeSpin 但返回 BaseGame） |
-| **PAYOUT_MISMATCH** | seed 和阶段匹配但 payout 金额与预期不符 |
-| **SEED_REJECTED** | 服务端拒绝 seed（返回错误信息或空响应） |
-| **TIMEOUT** | responseLogger 在超时阈值内未返回 |
-| **NETWORK_ERROR** | HTTP 4xx/5xx、CORS 失败、页面崩溃 |
+| **PASSED** | HTTP 200 + seed accepted + responseLogger returns valid data + batch/index match |
+| **SEED_MISMATCH** | seed accepted but returned batch/index differ from expected |
+| **STAGE_MISMATCH** | seed matches but game stage differs (e.g. expected FreeSpin but returned BaseGame) |
+| **PAYOUT_MISMATCH** | seed and stage match but payout amount differs from expected |
+| **SEED_REJECTED** | server rejects the seed (returns error message or empty response) |
+| **TIMEOUT** | responseLogger did not return within the timeout threshold |
+| **NETWORK_ERROR** | HTTP 4xx/5xx, CORS failure, page crash |
 
-## 3. 边界条件处理
+## 3. Boundary Condition Handling
 
-### Rule 4: Bonus 触发验证
-- 对于标记为 Bonus/FreeSpin 的测试用例，必须验证：
-  1. base spin 执行后是否成功触发 bonus 阶段
-  2. bonus spin 的 batch/index 是否与 XML 中第二个 `<PreGen>` 一致
-  3. 如果 base spin 未触发 bonus，标记为 `STAGE_MISMATCH`，不执行 bonus spin
+### Rule 4: Bonus Trigger Verification
+- For test cases marked Bonus/FreeSpin, must verify:
+  1. Whether the bonus stage was successfully triggered after the base spin
+  2. Whether the bonus spin's batch/index match the second `<PreGen>` in the XML
+  3. If the base spin did not trigger the bonus, mark `STAGE_MISMATCH` and do not execute the bonus spin
 
-### Rule 5: 连续失败处理
-- 连续 3 条记录出现 `NETWORK_ERROR` 或 `TIMEOUT` → 判定为环境不可用，终止验证
-- 连续 2 条记录出现 `SEED_REJECTED` → 暂停并报告，可能为 loginName/moduleID 不匹配
+### Rule 5: Consecutive Failure Handling
+- 3 consecutive records with `NETWORK_ERROR` or `TIMEOUT` → environment judged unavailable, abort verification
+- 2 consecutive records with `SEED_REJECTED` → pause and report; possibly loginName/moduleID mismatch
 
-### Rule 6: 部分数据缺失处理
-- XML 中缺少 `bonusBatch`/`bonusIndex` → 视为 Single PreGen，仅执行 base spin
-- XML 中 `stage` 字段缺失 → 默认为 `BaseGame`
-- responseLogger 返回数据缺少 payout 字段 → 标记为 `PAYOUT_MISMATCH`，记录实际返回内容
+### Rule 6: Partial Data Missing Handling
+- `bonusBatch`/`bonusIndex` missing in XML → treat as Single PreGen, execute base spin only
+- `stage` field missing in XML → default to `BaseGame`
+- responseLogger data missing payout field → mark `PAYOUT_MISMATCH`, record the actual returned content
 
-## 4. 验证报告输出约束
+## 4. Verification Report Output Constraints
 
-### Rule 7: 报告格式
-必须输出标准 JSON 格式验证报告：
+### Rule 7: Report Format
+Must output a verification report in standard JSON format:
 ```json
 {
-  "targetUrl": "游戏URL",
-  "testdataFile": "testdata文件路径",
-  "totalCases": 总数,
-  "passedCount": 通过数,
-  "failedCount": 失败数,
-  "passRate": 通过率百分比,
-  "totalTimeMs": 总耗时,
+  "targetUrl": "game URL",
+  "testdataFile": "testdata file path",
+  "totalCases": total count,
+  "passedCount": passed count,
+  "failedCount": failed count,
+  "passRate": pass rate percentage,
+  "totalTimeMs": total elapsed time,
   "environmentStatus": "AVAILABLE" | "DEGRADED" | "UNAVAILABLE",
   "results": [
     {
-      "recordId": "记录ID",
-      "caseName": "用例名称",
+      "recordId": "record ID",
+      "caseName": "case name",
       "passed": true/false,
-      "expectedBatch": 预期batch,
-      "actualBatch": 实际batch,
-      "expectedIndex": 预期index,
-      "actualIndex": 实际index,
-      "expectedStage": "预期阶段",
-      "actualStage": "实际阶段",
-      "actualWin": 实际payout,
-      "isBonus": 是否bonus用例,
-      "issues": ["问题描述列表"],
-      "responseTimeMs": 响应时间
+      "expectedBatch": expected batch,
+      "actualBatch": actual batch,
+      "expectedIndex": expected index,
+      "actualIndex": actual index,
+      "expectedStage": "expected stage",
+      "actualStage": "actual stage",
+      "actualWin": actual payout,
+      "isBonus": whether bonus case,
+      "issues": ["list of issue descriptions"],
+      "responseTimeMs": response time
     }
   ]
 }
 ```
 
-### Rule 8: 环境状态判定
-- **AVAILABLE**：passRate >= 90% 且无连续失败
-- **DEGRADED**：passRate 在 50%-89% 之间，或存在间歇性超时
-- **UNAVAILABLE**：passRate < 50%，或存在连续 3 次网络错误
+### Rule 8: Environment Status Criteria
+- **AVAILABLE**: passRate >= 90% and no consecutive failures
+- **DEGRADED**: passRate between 50%-89%, or intermittent timeouts exist
+- **UNAVAILABLE**: passRate < 50%, or 3 consecutive network errors exist
 
-## 5. 工具调用格式强制约束
+## 5. Mandatory Tool Call Format Constraint
 
-**唯一合法格式（必须严格遵守）：**
+**The only valid format (must be followed strictly):**
 ```xml
 <tool_call>
 <name>testdata_verifier</name>
 <params>{"targetUrl": "...", "testdataFilePath": "...", "loginName": "..."}</params>
-</tool_call>
+</tool_call>

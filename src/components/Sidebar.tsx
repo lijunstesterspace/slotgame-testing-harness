@@ -8,7 +8,7 @@ import { TaskItem } from '../types';
 import { SCENARIOS } from '../harness/intentRouter';
 import type { TestScenario } from '../harness/sharedTypes';
 
-// ── icon 映射 ─────────────────────────────────────────────────
+// ── icon mapping ─────────────────────────────────────────────────
 const SCENARIO_ICONS: Record<TestScenario['icon'], React.ReactNode> = {
   zap: <Zap className="w-3.5 h-3.5" />,
   shield: <Shield className="w-3.5 h-3.5" />,
@@ -74,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ tasks, onOpenPlugin, onOpenAge
         </button>
       </div>
 
-      {/* ── Scenarios (测试场景选择器) ── */}
+      {/* ── Scenarios (test scenario selector) ── */}
       <div className="border-b border-slate-800">
         <button
           onClick={() => setScenarioOpen(!scenarioOpen)}

@@ -8,30 +8,30 @@ import type {
 } from "./sharedTypes";
 import type { HarnessClient } from "./client";
 
-// ── 执行引擎回调 ──────────────────────────────────────────────
+// ── Execution engine callbacks ──────────────────────────────────────────────
 
 export interface EngineCallbacks {
-  /** 步骤状态变化时触发（UI 更新流水线可视化） */
+  /** Fired when a step status changes (UI updates the pipeline visualization) */
   onStepChange: (ctx: PipelineExecutionContext) => void;
-  /** 步骤完成时触发，携带工具返回结果 */
+  /** Fired when a step completes, carrying the tool result */
   onStepComplete: (stepId: string, result: ToolResultDto) => void;
-  /** 步骤失败时触发 */
+  /** Fired when a step fails */
   onStepFail: (stepId: string, error: string) => void;
-  /** 流水线整体状态变化 */
+  /** Overall pipeline status change */
   onStatusChange: (status: PipelineExecutionStatus) => void;
-  /** 日志/事件消息 */
+  /** Log/event message */
   onLog: (message: string) => void;
 }
 
-// ── 执行引擎 ──────────────────────────────────────────────────
-// 流程调度权完全在这里：按 Pipeline 声明的 stage 顺序调用 Plugin，
-// AI（PlannerAgent）不参与"下一步该调用哪个工具"的决策——那由 pipelineRegistry.ts
-// 的声明式定义决定。App.tsx 通过这个类驱动所有场景的执行。
+// ── Execution engine ──────────────────────────────────────────────────
+// Flow control lives entirely here: Plugins are invoked in the stage order declared by the Pipeline.
+// The AI (PlannerAgent) does not take part in deciding "which tool to call next" - that is decided by
+// the declarative definitions in pipelineRegistry.ts. App.tsx drives execution of every scenario through this class.
 
 export class ExecutionEngine {
   private ctx: PipelineExecutionContext | null = null;
   private abortSignal: AbortSignal | undefined;
-  /** 每个已成功完成步骤的 result.content，供后续步骤的 buildParams 读取 */
+  /** result.content of each successfully completed step, read by buildParams of later steps */
   private stepResults: Record<string, unknown> = {};
 
   constructor(
@@ -39,19 +39,19 @@ export class ExecutionEngine {
     private readonly callbacks: EngineCallbacks,
   ) {}
 
-  /** 获取当前执行上下文（只读快照） */
+  /** Get the current execution context (read-only snapshot) */
   getContext(): PipelineExecutionContext | null {
     return this.ctx ? { ...this.ctx, steps: [...this.ctx.steps] } : null;
   }
 
-  /** 获取所有已完成步骤的产出（stepId → result.content），供 App.tsx 读取最终产物 */
+  /** Get the outputs of all completed steps (stepId -> result.content), used by App.tsx to read final artifacts */
   getStepResults(): Record<string, unknown> {
     return { ...this.stepResults };
   }
 
   /**
-   * 启动流水线执行。
-   * 代码控制流程：按 stage 顺序逐步执行，每个 stage 内的步骤串行执行。
+   * Start pipeline execution.
+   * Code controls the flow: stages run in order, and steps within each stage run sequentially.
    */
   async run(
     pipeline: PipelineDef,
@@ -63,7 +63,7 @@ export class ExecutionEngine {
     this.abortSignal = signal;
     this.stepResults = {};
 
-    // 初始化执行上下文
+    // Initialize the execution context
     this.ctx = {
       scenarioId,
       pipelineId: pipeline.id,
@@ -83,7 +83,7 @@ export class ExecutionEngine {
     this.callbacks.onLog(`Pipeline "${pipeline.name}" started`);
 
     try {
-      // 按 stage 顺序执行
+      // Execute stages in order
       for (let stageIdx = 0; stageIdx < pipeline.stages.length; stageIdx++) {
         this.abortSignal?.throwIfAborted();
         this.ctx.currentStageIndex = stageIdx;
@@ -91,7 +91,7 @@ export class ExecutionEngine {
         const stage = pipeline.stages[stageIdx];
         this.callbacks.onLog(`Stage ${stageIdx + 1}/${pipeline.stages.length}: ${stage.map((s) => s.label).join(", ")}`);
 
-        // 执行当前 stage 的所有步骤（串行）
+        // Execute all steps of the current stage (sequentially)
         for (let stepIdx = 0; stepIdx < stage.length; stepIdx++) {
           this.abortSignal?.throwIfAborted();
           this.ctx.currentStepIndex = stepIdx;
@@ -103,7 +103,7 @@ export class ExecutionEngine {
           await this.executeStep(stepDef, stepRecord);
         }
 
-        // 检查 stage 内是否有失败步骤
+        // Check whether any step in the stage failed
         const stageFailed = stage.some((s) => {
           const rec = this.findStepRecord(s.id);
           return rec && rec.status === "failed";
@@ -117,7 +117,7 @@ export class ExecutionEngine {
         }
       }
 
-      // 所有 stage 完成
+      // All stages completed
       if (this.ctx.status === "running") {
         this.ctx.status = "completed";
         this.ctx.finishedAt = Date.now();
@@ -141,7 +141,7 @@ export class ExecutionEngine {
     return this.ctx;
   }
 
-  /** 执行单个步骤，包含重试逻辑 */
+  /** Execute a single step, including retry logic */
   private async executeStep(
     stepDef: PipelineStepDef,
     stepRecord: StepExecutionRecord,
@@ -151,7 +151,7 @@ export class ExecutionEngine {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.abortSignal?.throwIfAborted();
 
-      // 更新步骤状态
+      // Update step status
       if (attempt > 0) {
         stepRecord.status = "retrying";
         stepRecord.retryCount = attempt;
@@ -163,7 +163,7 @@ export class ExecutionEngine {
       this.callbacks.onStepChange(this.ctx!);
 
       try {
-        // 调用后端工具
+        // Call the backend tool
         const params = this.buildStepParams(stepDef);
         const result = await this.client.executeTool(stepDef.plugin, params);
 
@@ -177,11 +177,11 @@ export class ExecutionEngine {
           this.callbacks.onLog(`Step "${stepDef.label}" succeeded`);
           return;
         } else {
-          // 工具返回了失败结果
+          // The tool returned a failure result
           const errMsg = result.error ?? "Tool returned success=false";
           if (attempt < maxAttempts - 1) {
             this.callbacks.onStepFail(stepDef.id, errMsg);
-            continue; // 重试
+            continue; // retry
           }
           stepRecord.status = "failed";
           stepRecord.error = errMsg;
@@ -191,7 +191,7 @@ export class ExecutionEngine {
           return;
         }
       } catch (err: unknown) {
-        // AbortError 必须向上传播，不能被重试逻辑吞没
+        // AbortError must propagate upward and must not be swallowed by the retry logic
         if (err instanceof DOMException && err.name === "AbortError") {
           stepRecord.status = "failed";
           stepRecord.error = "Aborted by user";
@@ -202,7 +202,7 @@ export class ExecutionEngine {
         const errMsg = err instanceof Error ? err.message : String(err);
         if (attempt < maxAttempts - 1) {
           this.callbacks.onStepFail(stepDef.id, errMsg);
-          continue; // 重试
+          continue; // retry
         }
         stepRecord.status = "failed";
         stepRecord.error = errMsg;
@@ -214,13 +214,13 @@ export class ExecutionEngine {
   }
 
   /**
-   * 构建工具调用参数：调用步骤自己声明的 buildParams（若有），
-   * 把流水线启动参数 + 前置步骤产出映射成这一个 Plugin 需要的入参。
-   * 没有声明 buildParams 的步骤退化为直接透传 extraParams（兼容旧行为）。
+   * Build tool call parameters: invoke the step's own declared buildParams (if any),
+   * mapping the pipeline start params + outputs of previous steps to the inputs this Plugin needs.
+   * Steps without buildParams fall back to passing extraParams through directly (legacy behavior).
    *
-   * 注意：只附加 `__execution_id` —— 这是后端 `/api/tools/execute` 唯一会显式
-   * pop() 掉的元数据 key（见 server/api/tools_router.py）。其余任何 `__xxx` 元数据
-   * 都会被 ToolPlugin.validate() 当作 unknown_param 拒绝，不要往这里加。
+   * Note: only `__execution_id` is attached - it is the only metadata key that the backend `/api/tools/execute`
+   * explicitly pop()s (see server/api/tools_router.py). Any other `__xxx` metadata
+   * is rejected by ToolPlugin.validate() as unknown_param, so do not add any here.
    */
   private buildStepParams(stepDef: PipelineStepDef): Record<string, unknown> {
     const extraParams = this.ctx!.extraParams;
@@ -233,7 +233,7 @@ export class ExecutionEngine {
     };
   }
 
-  /** 创建步骤执行记录 */
+  /** Create a step execution record */
   private createStepRecord(stepDef: PipelineStepDef): StepExecutionRecord {
     return {
       stepId: stepDef.id,
@@ -244,12 +244,12 @@ export class ExecutionEngine {
     };
   }
 
-  /** 查找步骤记录 */
+  /** Find a step record */
   private findStepRecord(stepId: string): StepExecutionRecord | undefined {
     return this.ctx?.steps.find((s) => s.stepId === stepId);
   }
 
-  /** 截断字符串 */
+  /** Truncate a string */
   private truncate(str: string, maxLen: number): string {
     return str.length <= maxLen ? str : str.slice(0, maxLen) + "...";
   }

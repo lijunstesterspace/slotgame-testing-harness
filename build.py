@@ -1,6 +1,6 @@
 """
-PyInstaller 入口文件。
-启动 uvicorn 服务 + pywebview 桌面窗口。
+PyInstaller entry point.
+Starts the uvicorn server + pywebview desktop window.
 """
 import os
 import multiprocessing
@@ -9,8 +9,8 @@ import threading
 import time
 from pathlib import Path
 
-# Windows 无控制台模式（console=False）下，sys.stdout / sys.stderr 为 None。
-# 必须重定向，否则 uvicorn 与 logging 尝试写入时会崩溃。
+# In Windows no-console mode (console=False), sys.stdout / sys.stderr are None.
+# They must be redirected, otherwise uvicorn and logging crash when they try to write.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
 if sys.stderr is None:
@@ -18,7 +18,7 @@ if sys.stderr is None:
 
 
 def _freeze_support():
-    """Windows 多进程支持（PyInstaller 打包后必须调用）。"""
+    """Windows multiprocessing support (must be called after PyInstaller packaging)."""
     multiprocessing.freeze_support()
 
 
@@ -29,7 +29,7 @@ def _get_log_file() -> Path:
 
 
 def _start_server():
-    """在后台线程启动 uvicorn 服务。"""
+    """Start the uvicorn server in a background thread."""
     try:
         import uvicorn
         from server.config import settings
@@ -52,18 +52,18 @@ def _start_server():
 
 
 def _open_webview():
-    """等待服务就绪后，用 pywebview 打开桌面窗口。"""
+    """Wait for the server to be ready, then open the desktop window with pywebview."""
     import webview
     from server.config import settings
 
-    # pywebview 默认禁用下载（ALLOW_DOWNLOADS=False）：在 Windows 的 EdgeChromium 后端上，
-    # 点击一个会触发 Content-Disposition: attachment 的链接（比如"Download HTML Report"
-    # 按钮）时，on_download_starting 会直接 args.Cancel = True 静默取消，界面上完全没有
-    # 任何提示——这正是打包后的桌面版一直"点了下载链接却什么也拿不到"的原因。开启后会弹出
-    # 系统原生的另存为对话框。必须在 create_window() 之前设置。
+    # pywebview disables downloads by default (ALLOW_DOWNLOADS=False): on the Windows EdgeChromium backend,
+    # clicking a link that triggers Content-Disposition: attachment (e.g. the "Download HTML Report"
+    # button) makes on_download_starting set args.Cancel = True and silently cancel, with no
+    # feedback at all in the UI - this is exactly why the packaged desktop app "clicked the download link but got nothing". When enabled,
+    # the native system Save As dialog appears. Must be set before create_window().
     webview.settings["ALLOW_DOWNLOADS"] = True
 
-    # 等待服务启动
+    # Wait for the server to start
     import urllib.request
     url = f"http://127.0.0.1:{settings.api_port}"
     for _ in range(30):
@@ -73,10 +73,10 @@ def _open_webview():
         except Exception:
             time.sleep(0.5)
 
-    # 始终打开主页面，前端内部处理登录逻辑（避免 pywebview 弹出双窗口）
+    # Always open the main page; the frontend handles login internally (avoids pywebview opening two windows)
     page_url = f"{url}/"
 
-    # 创建 pywebview 窗口
+    # Create the pywebview window
     window = webview.create_window(
         title=settings.app_name,
         url=page_url,
@@ -98,16 +98,16 @@ def main():
         pass
 
     if "--server-only" in sys.argv:
-        # 仅后端模式（测试或无头环境使用）
+        # Backend-only mode (for tests or headless environments)
         _start_server()
         while True:
             time.sleep(1)
 
-    # 在后台线程启动 FastAPI 服务
+    # Start the FastAPI server in a background thread
     server_thread = threading.Thread(target=_start_server, daemon=True)
     server_thread.start()
 
-    # 在主线程启动 pywebview 桌面窗口
+    # Start the pywebview desktop window in the main thread
     _open_webview()
 
 

@@ -1,20 +1,20 @@
-# SKILL: 测试生成插件接口契约规范
+# SKILL: Test Generation Plugin Interface Contract Specification
 
-## 1. 核心定位
-定义 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
+## 1. Core Purpose
+Defines the interface contract between the Plugin tool layer and the Agent layer, ensuring consistent parameter formats.
 
-## 2. testdata_parser 接口契约
+## 2. testdata_parser Interface Contract
 
-**功能：** 解析原始 paytable 文本 → 结构化记录
+**Function:** Parse raw paytable text → structured records
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `raw_text` | string | 是 | Google Sheets 导出的原始文本 |
-| `module_id_hint` | string | 否 | 提示的模块ID，解析失败时使用 |
-| `game_prefix` | string | 否 | 游戏前缀，默认 `P5P_` |
+| `raw_text` | string | Yes | Raw text exported from Google Sheets |
+| `module_id_hint` | string | No | Hinted module ID, used when parsing fails |
+| `game_prefix` | string | No | Game prefix, default `P5P_` |
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -38,53 +38,53 @@
 }
 ```
 
-## 3. testdata_generator 接口契约
+## 3. testdata_generator Interface Contract
 
-**功能：** 根据结构化记录生成 .testdata XML 文件
+**Function:** Generate .testdata XML files from structured records
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `records` | array | 是 | testdata_parser 输出的结构化记录 |
-| `module_id` | string | 是 | 模块ID |
-| `game_prefix` | string | 否 | 游戏前缀，默认 `P5P_` |
+| `records` | array | Yes | Structured records output by testdata_parser |
+| `module_id` | string | Yes | Module ID |
+| `game_prefix` | string | No | Game prefix, default `P5P_` |
 
-**输出：** 生成的文件列表
+**Output:** List of generated files
 
-## 4. zip_packager 接口契约
+## 4. zip_packager Interface Contract
 
-**功能：** 将生成的文件打包为 ZIP 下载
+**Function:** Package generated files into a ZIP for download
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `files` | array | 是 | 需要打包的文件路径列表 |
-| `module_id` | string | 是 | 模块ID |
-| `manifest` | object | 否 | 附加元数据 |
+| `files` | array | Yes | List of file paths to package |
+| `module_id` | string | Yes | Module ID |
+| `manifest` | object | No | Additional metadata |
 
-**输出：** ZIP 文件下载 URL
+**Output:** ZIP file download URL
 
-## 5. game_verifier 接口契约
+## 5. game_verifier Interface Contract
 
-**功能：** Selenium 真实环境验证测试数据
+**Function:** Verify test data in the real environment with Selenium
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `testdata_files` | array | 是 | 待验证的 .testdata 文件列表 |
-| `target_url` | string | 是 | 游戏测试环境URL |
-| `spin_delay_ms` | number | 否 | 请求间隔，默认 500ms |
-| `auth_token` | string | 否 | 认证令牌 |
+| `testdata_files` | array | Yes | List of .testdata files to verify |
+| `target_url` | string | Yes | Game test environment URL |
+| `spin_delay_ms` | number | No | Request interval, default 500ms |
+| `auth_token` | string | No | Auth token |
 
-**输出：** 验证结果列表
+**Output:** List of verification results
 
-## 6. log_diagnoser 接口契约
+## 6. log_diagnoser Interface Contract
 
-**功能：** 诊断验证结果，分类根因
+**Function:** Diagnose verification results, classify root causes
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `verification_results` | array | 是 | game_verifier 输出结果 |
+| `verification_results` | array | Yes | Output results of game_verifier |
 
-**输出：** 诊断分类统计
+**Output:** Diagnostic category statistics

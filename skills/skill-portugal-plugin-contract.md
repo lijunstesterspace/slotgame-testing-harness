@@ -1,34 +1,34 @@
-# SKILL: Portugal Plugin 接口契约规范
+# SKILL: Portugal Plugin Interface Contract Specification
 
-## 1. 核心定位
-定义 Portugal Plugin 映射/取数/解析/报告 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
+## 1. Core Purpose
+Defines the interface contract between the Portugal Plugin mapping/fetch/parse/report Plugin tool layer and the Agent layer, ensuring consistent parameter formats.
 
-## 2. portugal_plugin_fetcher 接口契约
+## 2. portugal_plugin_fetcher Interface Contract
 
-**功能：** 从游戏环境自动取回 outcome 字符串：登录游戏 →（可选）Spin → `•••` → Game History →
-PlayCheck 登录会话 → 交易 → `GameReport/GetReportAsync` 的 `Data`。
-`raw_text` 非空时跳过浏览器，直接透传（粘贴模式）。
+**Function:** Automatically fetch the outcome string from the game environment: log in to the game → (optional) Spin → `•••` → Game History →
+PlayCheck login session → transaction → `Data` of `GameReport/GetReportAsync`.
+When `raw_text` is non-empty, skip the browser and pass it through directly (paste mode).
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `raw_text` | string | 否 | 已有的 outcome 字符串；非空即粘贴模式 |
-| `game_url` | string | 取数模式必填 | Titan Harness 页面（`…/harness/<game>`）或直接启动 URL（`…/launch/mgs/<game>?…`） |
-| `login_name` | string | 否 | 默认取 game_url 的 `username` |
-| `harness_password` | string | 否 | 默认取 game_url 的 `password`，否则共享 QA 密码 |
-| `module_id` / `client_id` / `product_id` / `brand` | string | 否 | 默认取 game_url 的 `moduleId` / `clientId` / `productId` / `brand` |
-| `spin_count` | number | 否 | 取数前 Spin 次数，默认 1；0 = 取已有交易 |
-| `session_id` | string | 否 | PlayCheck 登录会话；默认自动定位 |
-| `trans_number` | number | 否 | 交易号；默认最后 `spin_count` 笔 |
-| `load_timeout_sec` | number | 否 | 每个阶段等待上限，默认 60 |
+| `raw_text` | string | No | Existing outcome string; non-empty means paste mode |
+| `game_url` | string | Required in fetch mode | Titan Harness page (`…/harness/<game>`) or direct launch URL (`…/launch/mgs/<game>?…`) |
+| `login_name` | string | No | Defaults to `username` from game_url |
+| `harness_password` | string | No | Defaults to `password` from game_url, otherwise the shared QA password |
+| `module_id` / `client_id` / `product_id` / `brand` | string | No | Default to `moduleId` / `clientId` / `productId` / `brand` from game_url |
+| `spin_count` | number | No | Number of Spins before fetching, default 1; 0 = fetch existing transactions |
+| `session_id` | string | No | PlayCheck login session; located automatically by default |
+| `trans_number` | number | No | Transaction number; defaults to the last `spin_count` transactions |
+| `load_timeout_sec` | number | No | Wait limit per stage, default 60 |
 
-**定位规则：**
-- 会话：`ENDED AT` 为空（未结束）优先，其次会话号大的优先；取第一个交易数 ≥ `spin_count` 的会话
-- 交易：按交易号排序取最后 `spin_count` 笔（或指定 `trans_number`）
-- 所有 PlayCheck 请求都在 Game History 打开的标签页内执行：`spaLoad()` 导航，报告请求带
-  `X-SPA-ASPNET-SessionId: getSessionId()`，并用响应头回写轮换后的会话号（PlayCheck 登录不是 cookie）
+**Locating rules:**
+- Session: empty `ENDED AT` (not ended) first, then higher session number first; take the first session with transaction count ≥ `spin_count`
+- Transaction: sort by transaction number and take the last `spin_count` (or the specified `trans_number`)
+- All PlayCheck requests run inside the tab opened by Game History: navigate with `spaLoad()`, report requests carry
+  `X-SPA-ASPNET-SessionId: getSessionId()`, and write back the rotated session ID from the response header (PlayCheck login is not a cookie)
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -45,32 +45,32 @@ PlayCheck 登录会话 → 交易 → `GameReport/GetReportAsync` 的 `Data`。
 }
 ```
 
-**错误码（失败时 `content.diagnostics` 附带诊断信息，并在 run 目录保存截图）：**
-| error | 场景 |
+**Error codes (on failure, `content.diagnostics` carries diagnostic info and a screenshot is saved in the run directory):**
+| error | Scenario |
 |-------|------|
-| `missing_input` | 既没有 raw_text 也没有 game_url |
-| `missing_module_or_client_id` / `missing_harness_fields` | URL 与参数都缺少必需字段 |
-| `harness_form_field_not_found:<field>` / `game_window_not_found_after_launch` | Harness 登录失败 |
-| `game_history_not_opened` | `•••` / Game History 未能打开（看 `menu_attempts` / `jftw_ids`） |
-| `playcheck_session_not_ready` | PlayCheck 页未完成会话兑换 |
-| `no_session_with_<n>_transactions` / `trans_number_not_found` | 会话或交易定位失败 |
-| `get_report_failed` / `report_has_no_outcome_data` | GetReportAsync 失败或无 Data |
+| `missing_input` | Neither raw_text nor game_url |
+| `missing_module_or_client_id` / `missing_harness_fields` | Both URL and parameters lack required fields |
+| `harness_form_field_not_found:<field>` / `game_window_not_found_after_launch` | Harness login failed |
+| `game_history_not_opened` | `•••` / Game History could not be opened (see `menu_attempts` / `jftw_ids`) |
+| `playcheck_session_not_ready` | PlayCheck page did not complete session exchange |
+| `no_session_with_<n>_transactions` / `trans_number_not_found` | Failed to locate session or transaction |
+| `get_report_failed` / `report_has_no_outcome_data` | GetReportAsync failed or has no Data |
 
-## 3. portugal_plugin_parser 接口契约
+## 3. portugal_plugin_parser Interface Contract
 
-**功能：** 解析 Portugal Plugin 输出字符串 → 结构化 SPIN 数据 + 总赢分 + 原工具格式文本
+**Function:** Parse Portugal Plugin output string → structured SPIN data + total win + original-tool-format text
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `raw_text` | string | 是 | Portugal Plugin 输出字符串，包含一个或多个 `N:...` SPIN 块 |
-| `game_code` | string | 否 | 游戏 Profile（`ACCR` / `RAW`…），决定字母→SYM 映射 |
-| `module_id` | string | 否 | 未给 game_code 时按 module_id 选 Profile；无匹配 → `RAW`（保留原始字母） |
-| `symbol_map` | object | 否 | 追加/覆盖的映射，如 `{"A": "WILD"}` |
+| `raw_text` | string | Yes | Portugal Plugin output string, containing one or more `N:...` SPIN blocks |
+| `game_code` | string | No | Game Profile (`ACCR` / `RAW`…), determines letter→SYM mapping |
+| `module_id` | string | No | When game_code is not given, select Profile by module_id; no match → `RAW` (keep original letters) |
+| `symbol_map` | object | No | Mapping to add/override, e.g. `{"A": "WILD"}` |
 
-Profile 选择：`game_code` > `module_id` 匹配 > 有 module_id 用 `RAW` > 都没有用 `ACCR`（原工具行为）。
+Profile selection: `game_code` > `module_id` match > `RAW` if module_id present > `ACCR` if neither (original tool behavior).
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -97,34 +97,34 @@ Profile 选择：`game_code` > `module_id` 匹配 > 有 module_id 用 `RAW` > �
 }
 ```
 
-**错误码：**
-| error | 场景 |
+**Error codes:**
+| error | Scenario |
 |-------|------|
-| `empty_input` | raw_text 为空 |
-| `unknown_game_code:<code>` | game_code 不存在且未提供 symbol_map |
-| `symbol_map_must_be_object` | symbol_map 不是对象 |
-| `no_spins_found` | 未找到任何非空 `N:` SPIN 块 |
+| `empty_input` | raw_text is empty |
+| `unknown_game_code:<code>` | game_code does not exist and no symbol_map provided |
+| `symbol_map_must_be_object` | symbol_map is not an object |
+| `no_spins_found` | No non-empty `N:` SPIN block found |
 
-## 4. portugal_plugin_reporter 接口契约
+## 4. portugal_plugin_reporter Interface Contract
 
-**功能：** 一致性检查（建议性）+ PlayCheck 核对（硬性）+ 输出 TXT / JSON / HTML 报告
+**Function:** Consistency checks (advisory) + PlayCheck reconciliation (hard) + output TXT / JSON / HTML reports
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `spins` | array | 是 | portugal_plugin_parser 的 `content.spins` |
-| `total_win` | number | 是 | portugal_plugin_parser 的 `content.total_win` |
-| `symbol_map` | object | 是 | portugal_plugin_parser 的 `content.symbol_map` |
-| `game_code` | string | 否 | 用于报告文件名，默认 `ACCR` |
-| `game_title` | string | 否 | HTML 报告标题 |
-| `warnings` | array | 否 | portugal_plugin_parser 的 `content.warnings` |
-| `expected_payout` | number | 否 | PlayCheck PAYOUT（取数模式） |
-| `expected_wager` | number | 否 | PlayCheck WAGERED（取数模式） |
-| `game_win` | number | 否 | 游戏响应 financials.win（取数模式） |
-| `money_divisor` | number | 否 | MG/MV 每货币单位的最小单位数，默认 100 |
-| `source` | object | 否 | 来源（module / session / transaction），显示在报告中 |
+| `spins` | array | Yes | `content.spins` from portugal_plugin_parser |
+| `total_win` | number | Yes | `content.total_win` from portugal_plugin_parser |
+| `symbol_map` | object | Yes | `content.symbol_map` from portugal_plugin_parser |
+| `game_code` | string | No | Used in report file name, default `ACCR` |
+| `game_title` | string | No | HTML report title |
+| `warnings` | array | No | `content.warnings` from portugal_plugin_parser |
+| `expected_payout` | number | No | PlayCheck PAYOUT (fetch mode) |
+| `expected_wager` | number | No | PlayCheck WAGERED (fetch mode) |
+| `game_win` | number | No | Game response financials.win (fetch mode) |
+| `money_divisor` | number | No | Minimum units per currency unit for MG/MV, default 100 |
+| `source` | object | No | Source (module / session / transaction), shown in the report |
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -146,12 +146,12 @@ Profile 选择：`game_code` > `module_id` 匹配 > 有 module_id 用 `RAW` > �
   }
 }
 ```
-`verdict`：任一 PlayCheck 核对失败 → `FAIL`；否则有 finding / warning → `REVIEW`；否则 `CLEAN`。
+`verdict`: any PlayCheck reconciliation fails → `FAIL`; otherwise any finding / warning → `REVIEW`; otherwise `CLEAN`.
 
-## 5. 工具调用顺序约束
+## 5. Tool Call Order Constraint
 
-Agent 必须按以下顺序调用工具：
-0. `portugal_plugin_symbol_map` → 确定映射（导入附加的 Output Guide 或按 moduleId 取已存映射；缺失即停止），见 `skill-portugal-plugin-symbol-map.md`
-1. `portugal_plugin_fetcher` → 取回 outcome 字符串（粘贴模式直接透传）
-2. `portugal_plugin_parser` → 用第 0 步的 `game_code` + `symbol_map` 解析字符串
-3. `portugal_plugin_reporter` → 使用第 1、2 步的输出做检查并写报告
+The Agent must call tools in the following order:
+0. `portugal_plugin_symbol_map` → determine mapping (import the attached Output Guide or load the stored mapping by moduleId; stop if missing), see `skill-portugal-plugin-symbol-map.md`
+1. `portugal_plugin_fetcher` → fetch outcome string (paste mode passes through directly)
+2. `portugal_plugin_parser` → parse the string with `game_code` + `symbol_map` from step 0
+3. `portugal_plugin_reporter` → run checks and write reports using outputs of steps 1 and 2

@@ -70,7 +70,7 @@ class ToolPlugin(ABC):
             # very light type coercion
             try:
                 if spec.type == "number":
-                    # 数字参数：已是 int/float（bool 除外）直接保留，否则按字面量强转
+                    # Numeric params: keep as-is if already int/float (excluding bool), otherwise coerce from the literal
                     if not isinstance(v, bool) and isinstance(v, (int, float)):
                         pass
                     else:

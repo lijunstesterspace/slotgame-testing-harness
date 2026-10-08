@@ -1,4 +1,4 @@
-"""Plugin: portugal_plugin_parser — 解析 Portugal Plugin 输出字符串 → 结构化 SPIN 数据
+"""Plugin: portugal_plugin_parser — parses Portugal Plugin output strings -> structured SPIN data
 
 Ported from the standalone Tk tool `portugal-playcheck-plugin/ppvACCR1.0.py`
 ("Amazing Catch Cold Rush Portugal Plugin Verification Tool v1.0"). The parsing rules and the

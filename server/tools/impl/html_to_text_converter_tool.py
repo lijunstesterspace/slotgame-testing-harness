@@ -1,4 +1,4 @@
-"""Plugin: html_to_text_converter — 批量将HTML帮助文件转换为纯文本"""
+"""Plugin: html_to_text_converter — batch-convert HTML help files to plain text"""
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ from server.tools.base import (
 
 
 def _build_converter() -> html2text.HTML2Text:
-    """构建标准化的 html2text 转换器"""
+    """Build a standardized html2text converter"""
     h = html2text.HTML2Text()
     h.ignore_links = True
     h.ignore_images = True
@@ -26,7 +26,7 @@ def _build_converter() -> html2text.HTML2Text:
 
 
 def _post_process(txt: str) -> str:
-    """后处理：去除空行、统一换行"""
+    """Post-processing: remove empty lines and normalize line breaks"""
     lines = [line.strip() for line in txt.split("\n") if line.strip()]
     return "\n".join(lines)
 
@@ -67,7 +67,7 @@ class HtmlToTextConverterTool(ToolPlugin):
         converter = _build_converter()
         converted_files: list[dict] = []
 
-        # 按子目录名排序遍历，确保确定性
+        # Iterate subdirectories sorted by name to ensure determinism
         subdirs = sorted(
             [d for d in source_folder.iterdir() if d.is_dir()],
             key=lambda p: p.name,
@@ -78,7 +78,7 @@ class HtmlToTextConverterTool(ToolPlugin):
             if not html_path.exists():
                 continue
 
-            # 读取并转换 HTML
+            # Read and convert HTML
             try:
                 html_content = html_path.read_text(encoding="utf-8")
                 txt_content = converter.handle(html_content)
@@ -89,7 +89,7 @@ class HtmlToTextConverterTool(ToolPlugin):
                     error=f"conversion_error:{subdir.name}:{e}",
                 )
 
-            # 保存 TXT
+            # Save TXT
             txt_filename = f"{subdir.name}.txt"
             txt_path = output_folder / txt_filename
             txt_path.write_text(txt_content, encoding="utf-8")
@@ -107,7 +107,7 @@ class HtmlToTextConverterTool(ToolPlugin):
                 error="no_html_files_found: No subdirectories with index.html were found",
             )
 
-        # 基准文件 = 字母序第一个
+        # Baseline file = first in alphabetical order
         baseline_file = converted_files[0]["txt_path"]
 
         return ToolResult(

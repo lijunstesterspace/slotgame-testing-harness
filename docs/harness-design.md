@@ -1,46 +1,46 @@
 ﻿
-# AI HARNESS 架构升级设计 Spec (P0–P2)
+# AI HARNESS Architecture Upgrade Design Spec (P0–P2)
 
-> 日期：2026-08-18
-> 适用项目：`testdata-tool-main`（老虎机测试数据生成 + 验证工具集）
-> 目标：把现有「专用工具 + 模拟 Agent UI」升级为「可扩展、可多人使用、符合保密要求」的公司内部 AI HARNESS 平台内核。
+> Date: 2026-08-18
+> Project: `testdata-tool-main` (slot machine test data generation + verification toolkit)
+> Goal: Upgrade the existing "special-purpose tools + simulated Agent UI" into the core of an internal company AI HARNESS platform that is "extensible, multi-user, and compliant with confidentiality requirements".
 
 ---
 
-## 1. 设计原则与约束
+## 1. Design Principles and Constraints
 
-### 1.1 非功能性约束（必须满足）
+### 1.1 Non-Functional Constraints (Mandatory)
 
-| 约束 | 来源 | 实现方式 |
+| Constraint | Source | Implementation |
 |---|---|---|
-| 🔒 保密合规：默认只能使用本地 Ollama 小模型 | 公司保密协议 | LLM Provider 默认锁定 Local Ollama；其他 Provider UI 灰显，需人工勾选合规确认 |
-| 🧩 可扩展性证明：必须在 UI/代码中展示多 Provider 接入能力 | 本项目立项要求 | `LlmConfigModal` 完整实现 Ollama/OpenAI/Anthropic/Custom 四套 Provider + 健康检测 + SSE 流式 |
-| 🖥️ 多人通过服务器链接使用 | 用户部署要求 | 后端 FastAPI + 前端静态托管，Nginx 一台搞定 |
-| 🪟 Windows 双击启动（本地开发时） | 用户交付偏好 | `start-dev.cmd` 启动 Vite + FastAPI 双进程 |
-| A 级轻量起步，接口可平滑升级到 B 级 | 用户要求 | 串行执行队列抽象为 `ExecutionQueue`，实现先 `SerialExecutionQueue`；未来替换 `RedisParallelExecutionQueue` 不换接口 |
+| 🔒 Confidentiality compliance: only local Ollama small models may be used by default | Company confidentiality agreement | LLM Provider is locked to Local Ollama by default; other Providers are grayed out in the UI and require a manual compliance-confirmation checkbox |
+| 🧩 Proof of extensibility: the UI/code must demonstrate multi-Provider integration | Project charter requirement | `LlmConfigModal` fully implements four Providers (Ollama/OpenAI/Anthropic/Custom) + health checks + SSE streaming |
+| 🖥️ Multiple users access it via a server link | User deployment requirement | FastAPI back end + statically hosted front end, all on a single Nginx server |
+| 🪟 Double-click launch on Windows (for local development) | User delivery preference | `start-dev.cmd` launches two processes: Vite + FastAPI |
+| Start lightweight at Level A, with interfaces that upgrade smoothly to Level B | User requirement | The serial execution queue is abstracted as `ExecutionQueue`, implemented first as `SerialExecutionQueue`; replacing it later with `RedisParallelExecutionQueue` does not change the interface |
 
-### 1.2 架构分层原则
+### 1.2 Architecture Layering Principles
 
-每层只依赖下层，严禁反向依赖：
+Each layer depends only on the layer below it; reverse dependencies are strictly forbidden:
 ```
-L5  Presentation (React UI)       → 只通过 HarnessClient 与后端交互
-L4  API Gateway (FastAPI Routes)  → HTTP 语义 / 参数校验 / 权限守卫 / SSE 包装
+L5  Presentation (React UI)       → Interacts with the back end only through HarnessClient
+L4  API Gateway (FastAPI Routes)  → HTTP semantics / parameter validation / permission guards / SSE wrapping
 L3  Application Services          → Agent Runtime / ToolRegistry / ExecutionQueue / SessionMgr
-L2  Tool Plugin 层                → ToolPlugin 接口 + 具体实现（MCP 兼容）
+L2  Tool Plugin layer             → ToolPlugin interface + concrete implementations (MCP-compatible)
 L1  Infrastructure                → Storage / ProcessRunner / Security / Logger / Config
 ```
 
 ---
 
-## 2. 目录结构
+## 2. Directory Structure
 
 ```
 testdata-tool-main/
-├── server/                              ← 🆕 FastAPI 后端
-│   ├── main.py                          ← 🆕 FastAPI 入口 (uvicorn 启动)
+├── server/                              ← 🆕 FastAPI back end
+│   ├── main.py                          ← 🆕 FastAPI entry point (launched by uvicorn)
 │   ├── requirements.txt                 ← 🆕 fastapi / uvicorn / pydantic / aiofiles / bcrypt / python-multipart
-│   ├── config.py                        ← 🆕 Settings (.env + 环境变量)
-│   ├── start-server.cmd                 ← 🆕 Windows 双击启动后端
+│   ├── config.py                        ← 🆕 Settings (.env + environment variables)
+│   ├── start-server.cmd                 ← 🆕 Double-click to launch the back end on Windows
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── auth_router.py               ← 🆕 /api/auth/* (login + me)
@@ -49,75 +49,75 @@ testdata-tool-main/
 │   │   └── records_router.py            ← 🆕 /api/records/{id}/outcome.zip, /mine
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── execution_queue.py           ← 🆕 ExecutionQueue 抽象 + 串行实现
+│   │   ├── execution_queue.py           ← 🆕 ExecutionQueue abstraction + serial implementation
 │   │   └── session_manager.py           ← 🆕 Session CRUD
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── base.py                      ← 🆕 ToolPlugin 接口 + ToolRegistry + MCP 兼容结构
+│   │   ├── base.py                      ← 🆕 ToolPlugin interface + ToolRegistry + MCP-compatible structures
 │   │   └── impl/
 │   │       ├── __init__.py
-│   │       ├── testdata_generator_tool.py    ← 🆕 封装 generate_testdata.py (process_runner)
-│   │       ├── game_verifier_tool.py         ← 🆕 封装 verify_testdata.py (process_runner + Selenium)
-│   │       ├── zip_packager_tool.py          ← 🆕 多文件 ZIP 打包（后端版）
-│   │       ├── testdata_parser_tool.py       ← 🆕 解析 CSV / Google Sheet 导出文本
-│   │       └── log_diagnoser_tool.py         ← 🆕 规则引擎诊断（诊断类型枚举匹配）
+│   │       ├── testdata_generator_tool.py    ← 🆕 Wraps generate_testdata.py (process_runner)
+│   │       ├── game_verifier_tool.py         ← 🆕 Wraps verify_testdata.py (process_runner + Selenium)
+│   │       ├── zip_packager_tool.py          ← 🆕 Multi-file ZIP packaging (back-end version)
+│   │       ├── testdata_parser_tool.py       ← 🆕 Parses CSV / Google Sheet exported text
+│   │       └── log_diagnoser_tool.py         ← 🆕 Rule-engine diagnosis (diagnosis-type enum matching)
 │   ├── infra/
 │   │   ├── __init__.py
-│   │   ├── storage.py                   ← 🆕 SQLite 封装（预留 SQLAlchemy 接口切 PG）
-│   │   ├── process_runner.py            ← 🆕 asyncio subprocess runner (stdout/stderr 流式)
-│   │   ├── security.py                  ← 🆕 口令 hash (bcrypt) + 简单 RBAC 装饰器
-│   │   └── logger.py                    ← 🆕 structlog 结构化日志
-│   └── data/                            ← 🆕 (运行时生成，不入库)
+│   │   ├── storage.py                   ← 🆕 SQLite wrapper (SQLAlchemy interface reserved for switching to PG)
+│   │   ├── process_runner.py            ← 🆕 asyncio subprocess runner (streams stdout/stderr)
+│   │   ├── security.py                  ← 🆕 Password hashing (bcrypt) + simple RBAC decorator
+│   │   └── logger.py                    ← 🆕 structlog structured logging
+│   └── data/                            ← 🆕 (generated at runtime, not committed)
 │       └── harness.db
 │
-├── src/                                 ← React 前端（现有代码重构）
-│   ├── harness/                         ← 🆕 前端 HARNESS SDK
+├── src/                                 ← React front end (refactor of existing code)
+│   ├── harness/                         ← 🆕 Front-end HARNESS SDK
 │   │   ├── client.ts                    ← 🆕 HarnessClient (REST + SSE)
-│   │   ├── sharedTypes.ts               ← 🆕 前后端共享 DTO（ToolInfo / ExecutionEvent 等）
-│   │   ├── plannerAgent.ts              ← 🆕 Planner Provider + ReAct 循环 (LLM 全在前端)
-│   │   └── plannerProvider.ts           ← 🆕 Planner 抽象：LocalOllama / OpenAI / Anthropic / Custom
+│   │   ├── sharedTypes.ts               ← 🆕 DTOs shared by front end and back end (ToolInfo / ExecutionEvent, etc.)
+│   │   ├── plannerAgent.ts              ← 🆕 Planner Provider + ReAct loop (all LLM calls in the front end)
+│   │   └── plannerProvider.ts           ← 🆕 Planner abstraction: LocalOllama / OpenAI / Anthropic / Custom
 │   ├── components/
-│   │   ├── AgentCore.tsx                ← 修改：接入 plannerAgent，不再用 setInterval 模拟
-│   │   ├── IntentPanel.tsx               ← 修改：触发 plannerAgent.run()
-│   │   ├── VerificationPanel.tsx        ← 修改：调用后端 async execute
-│   │   ├── LlmConfigModal.tsx           ← 修改：四 Provider UI + 合规确认勾选 + 本地存储
-│   │   └── Header.tsx                   ← 修改：加入登录状态显示
-│   ├── pages/                           ← 🆕 登录页
+│   │   ├── AgentCore.tsx                ← Modified: hooked up to plannerAgent, no longer simulated with setInterval
+│   │   ├── IntentPanel.tsx               ← Modified: triggers plannerAgent.run()
+│   │   ├── VerificationPanel.tsx        ← Modified: calls back-end async execute
+│   │   ├── LlmConfigModal.tsx           ← Modified: four-Provider UI + compliance-confirmation checkbox + local storage
+│   │   └── Header.tsx                   ← Modified: adds login status display
+│   ├── pages/                           ← 🆕 Login page
 │   │   └── LoginPage.tsx
 │   ├── utils/
-│   │   ├── llmGateway.ts                ← 保留并增强：四 Provider 完整 SSE 流式（PlannerProvider 直接用）
-│   │   ├── zipGenerator.ts              ← 保留：纯前端 ZIP（后端也有一份，互补）
-│   │   ├── ollamaClient.ts              ← 🗑️ 删除：功能合并到 llmGateway
-│   │   ├── paytableSheetParser.ts       ← 保留但 deprecated：后端已实现，前端仅做预览解析
-│   │   ├── logVisionDiagnoser.ts        ← 保留：前端规则匹配
-│   │   ├── verificationEngine.ts        ← 修改：现在仅调后端 REST/SSE，不直接 fetch 游戏 URL
-│   │   └── urlParser.ts                 ← 保留
-│   ├── mock/testData.ts                 ← 修改：改为从后端拉取或保留默认 demo
-│   ├── types/index.ts                   ← 修改：去重，领域类型保留，HarnessClient 的移到 harness/sharedTypes
-│   ├── App.tsx                          ← 重构：接入 auth guard + plannerAgent + HarnessClient
-│   └── main.tsx                         ← 小幅修改：加 React Context 包装
+│   │   ├── llmGateway.ts                ← Kept and enhanced: full SSE streaming for all four Providers (used directly by PlannerProvider)
+│   │   ├── zipGenerator.ts              ← Kept: pure front-end ZIP (the back end has one too; they complement each other)
+│   │   ├── ollamaClient.ts              ← 🗑️ Deleted: functionality merged into llmGateway
+│   │   ├── paytableSheetParser.ts       ← Kept but deprecated: implemented in the back end; the front end only does preview parsing
+│   │   ├── logVisionDiagnoser.ts        ← Kept: front-end rule matching
+│   │   ├── verificationEngine.ts        ← Modified: now only calls back-end REST/SSE, no longer fetches the game URL directly
+│   │   └── urlParser.ts                 ← Kept
+│   ├── mock/testData.ts                 ← Modified: fetches from the back end or keeps the default demo
+│   ├── types/index.ts                   ← Modified: deduplicated; domain types kept, HarnessClient types moved to harness/sharedTypes
+│   ├── App.tsx                          ← Refactored: hooked up to auth guard + plannerAgent + HarnessClient
+│   └── main.tsx                         ← Minor change: adds React Context wrapping
 │
-├── generate_testdata.py                 ← 保留（脚本被后端 process_runner 调用）
-├── verify_testdata.py                   ← 保留（同上）
-├── start-dev.cmd                        ← 修改：同时启动 Vite (3000) + FastAPI (8000)
-├── start-dev-debug.cmd                  ← 修改：同上 + 开日志
-├── healthcheck.cmd                      ← 修改：同时检查 Vite 3000 + FastAPI 8000
-├── .env.example                         ← 🆕 后端配置示例 (口令/管理员/会话时长)
-└── .gitignore                           ← 修改：加 harness.db, .env, server/__pycache__
+├── generate_testdata.py                 ← Kept (script is invoked by the back-end process_runner)
+├── verify_testdata.py                   ← Kept (same as above)
+├── start-dev.cmd                        ← Modified: launches Vite (3000) + FastAPI (8000) together
+├── start-dev-debug.cmd                  ← Modified: same as above + logging enabled
+├── healthcheck.cmd                      ← Modified: checks both Vite 3000 + FastAPI 8000
+├── .env.example                         ← 🆕 Back-end configuration example (passwords/admin/session duration)
+└── .gitignore                           ← Modified: adds harness.db, .env, server/__pycache__
 ```
 
 ---
 
-## 3. P0 核心：Tool Plugin 层（MCP 兼容接口）
+## 3. P0 Core: Tool Plugin Layer (MCP-Compatible Interface)
 
-### 3.1 接口定义（server/tools/base.py）
+### 3.1 Interface Definition (server/tools/base.py)
 
 ```python
 from pydantic import BaseModel, Field
 from typing import Any, Optional
 from abc import ABC, abstractmethod
 
-# --- Tool Meta (MCP tools/list 响应兼容) --------------------
+# --- Tool Meta (compatible with MCP tools/list response) ----
 class ToolParameter(BaseModel):
     name: str
     type: str = "string"           # string / number / boolean / object / array
@@ -137,23 +137,23 @@ class ToolInfo(BaseModel):
     timeout_seconds: int = 60
     version: str = "1.0.0"
 
-# --- Tool Result (MCP content 兼容) -------------------------
+# --- Tool Result (compatible with MCP content) --------------
 class ToolResult(BaseModel):
     success: bool
-    content: Any = None            # 结构化返回（推荐 dict）
+    content: Any = None            # Structured return value (dict recommended)
     error: Optional[str] = None
     execution_ms: int = 0
-    artifacts: list[str] = []      # 相对 storage 的路径（可下载）
+    artifacts: list[str] = []      # Paths relative to storage (downloadable)
 
-# --- 执行上下文（每个调用唯一） ------------------------------
+# --- Execution context (unique per call) --------------------
 class HarnessContext(BaseModel):
     execution_id: str
     user_id: str
     user_role: str                 # tester / admin
     session_token: str
-    work_dir: str                  # 沙箱临时目录（用完清理）
+    work_dir: str                  # Sandbox temp directory (cleaned up after use)
 
-# --- ToolPlugin 接口 ----------------------------------------
+# --- ToolPlugin interface -----------------------------------
 class ToolPlugin(ABC):
     @property
     @abstractmethod
@@ -162,32 +162,32 @@ class ToolPlugin(ABC):
     @abstractmethod
     async def execute(self, params: dict[str, Any], context: HarnessContext) -> ToolResult: ...
 
-# --- ToolRegistry（单例） -----------------------------------
+# --- ToolRegistry (singleton) -------------------------------
 class ToolRegistry:
     def __init__(self): self._plugins: dict[str, ToolPlugin] = {}
     def register(self, plugin: ToolPlugin) -> None: ...
     def list_info(self) -> list[ToolInfo]: ...
     def get(self, name: str) -> ToolPlugin: ...
-    def as_function_calling_schema(self) -> list[dict]: ...   # 给 LLM Function Call 的格式
+    def as_function_calling_schema(self) -> list[dict]: ...   # Format for LLM Function Calling
 ```
 
-### 3.2 P0 首批内置 5 个工具
+### 3.2 P0 Initial Set of 5 Built-In Tools
 
-| Tool Name | 功能 | 对应现有实现 |
+| Tool Name | Function | Corresponding Existing Implementation |
 |---|---|---|
-| `testdata_parser` | 解析 CSV / 粘贴文本 → 结构化 records + fileMap | `src/utils/paytableSheetParser.ts` 逻辑改写 Python |
-| `testdata_generator` | 给定 records 列表 → 写 .testdata XML 文件到沙箱目录 | 封装 `generate_testdata.py` 核心逻辑 |
-| `zip_packager` | 把 .testdata + manifest.json → ZIP 产物 | 对应 `src/utils/zipGenerator.ts` 后端版 |
-| `game_verifier` | 给定 .testdata 文件 + 游戏 URL → Selenium 跑验证 + HTML 报告 + 截图 | 封装 `verify_testdata.py` |
-| `log_diagnoser` | 给定验证结果列表 → 诊断枚举（SHEET_DATA_ERROR / INDEX_OOB / RENDER_BUG / SERVER_ERR） | 对应 `src/utils/logVisionDiagnoser.ts` 规则 |
+| `testdata_parser` | Parses CSV / pasted text → structured records + fileMap | Logic of `src/utils/paytableSheetParser.ts` rewritten in Python |
+| `testdata_generator` | Given a list of records → writes .testdata XML files to the sandbox directory | Wraps the core logic of `generate_testdata.py` |
+| `zip_packager` | Packs .testdata + manifest.json → ZIP artifact | Back-end counterpart of `src/utils/zipGenerator.ts` |
+| `game_verifier` | Given a .testdata file + game URL → runs Selenium verification + HTML report + screenshots | Wraps `verify_testdata.py` |
+| `log_diagnoser` | Given a list of verification results → diagnosis enum (SHEET_DATA_ERROR / INDEX_OOB / RENDER_BUG / SERVER_ERR) | Corresponds to the rules in `src/utils/logVisionDiagnoser.ts` |
 
 ---
 
-## 4. P0 核心：Planner Agent（前端 ReAct 循环，LLM 全在前端）
+## 4. P0 Core: Planner Agent (Front-End ReAct Loop, All LLM Calls in the Front End)
 
-### 4.1 保密合规的 Planner Provider
+### 4.1 Confidentiality-Compliant Planner Provider
 
-所有 LLM 调用都从前端浏览器发出（Ollama 走 `localhost:11434`；外部 Provider 也从浏览器直连官网 API，Key 仅存 localStorage）。
+All LLM calls originate from the front-end browser (Ollama goes through `localhost:11434`; external Providers are also called directly from the browser against their official APIs, with the Key stored only in localStorage).
 
 ```typescript
 // src/harness/plannerProvider.ts
@@ -204,14 +204,14 @@ export interface PlannerProvider {
   ): Promise<string>;
 }
 
-// 四种实现：
+// Four implementations:
 export class LocalOllamaPlanner  implements PlannerProvider { ... }  // /ollama or http://localhost:11434
 export class OpenAIPlanner        implements PlannerProvider { ... }  // https://api.openai.com/v1
 export class AnthropicPlanner     implements PlannerProvider { ... }  // https://api.anthropic.com/v1
-export class CustomPlanner        implements PlannerProvider { ... }  // 自定义 baseUrl
+export class CustomPlanner        implements PlannerProvider { ... }  // Custom baseUrl
 ```
 
-### 4.2 Planner Agent ReAct 循环
+### 4.2 Planner Agent ReAct Loop
 
 ```typescript
 // src/harness/plannerAgent.ts
@@ -226,14 +226,14 @@ export interface PlannerAgentCallbacks {
 export class PlannerAgent {
   constructor(
     private readonly provider: PlannerProvider,
-    private readonly harness: HarnessClient,   // 调后端 /api/tools/execute
+    private readonly harness: HarnessClient,   // Calls back-end /api/tools/execute
     private readonly callbacks: PlannerAgentCallbacks,
   ) {}
 
   /**
-   * 跑一个完整意图的 ReAct 循环：
-   *   LLM 思考 → 选工具+参数 → POST /api/tools/execute → 观察结果 → 再思考
-   *   直到 LLM 输出 <task_complete /> 或超过 maxCycles
+   * Runs a full ReAct loop for one intent:
+   *   LLM thinks → picks tool + params → POST /api/tools/execute → observes result → thinks again
+   *   until the LLM outputs <task_complete /> or maxCycles is exceeded
    */
   async run(userIntent: {
     prompt: string;
@@ -241,63 +241,63 @@ export class PlannerAgent {
     loginName: string;
     workflowStage: 1 | 2;
   }, maxCycles = 10): Promise<{ success: boolean; executionId: string | null }> {
-    // 1. 从后端拉工具列表（MCP 格式 schema）
+    // 1. Fetch the tool list from the back end (MCP-format schema)
     const tools = await this.harness.tools.list();
 
-    // 2. 组装 system prompt：
-    //    - 你的角色（Generator Agent / Verifier Agent 按阶段选）
-    //    - 工具 schema (JSON)
-    //    - 调用格式：<tool_call><name>xxx</name><params>{json}</params></tool_call>
-    //    - 完成格式：<task_complete />
-    //    - 保密提示（默认 Ollama）
+    // 2. Assemble the system prompt:
+    //    - Your role (Generator Agent / Verifier Agent, chosen by stage)
+    //    - Tool schema (JSON)
+    //    - Call format: <tool_call><name>xxx</name><params>{json}</params></tool_call>
+    //    - Completion format: <task_complete />
+    //    - Confidentiality notice (Ollama by default)
 
-    // 3. 循环 maxCycles：
-    //    a. provider.streamChat(messages, onChunk=写 THOUGHT)
-    //    b. 解析 LLM 最终输出：匹配 <tool_call> 或 <task_complete />
-    //    c. 调 tool → this.harness.tools.execute(name, params)
-    //    d. 把 ToolResult 拼回 messages 作为 observation
+    // 3. Loop up to maxCycles:
+    //    a. provider.streamChat(messages, onChunk=write THOUGHT)
+    //    b. Parse the LLM's final output: match <tool_call> or <task_complete />
+    //    c. Call the tool → this.harness.tools.execute(name, params)
+    //    d. Append the ToolResult back into messages as an observation
   }
 }
 ```
 
-### 4.3 小模型 Function Calling 降级策略
-1. 先尝试解析 `<tool_call><name>…</name><params>{json}</params></tool_call>` XML 标签；
-2. 失败则尝试从文本中用正则提取 `TOOL: xxx {json}`；
-3. 再失败则 self-heal：抛 `SELF_HEAL` 日志 + 让 LLM 重新输出格式化的调用。
+### 4.3 Function Calling Fallback Strategy for Small Models
+1. First try to parse the `<tool_call><name>…</name><params>{json}</params></tool_call>` XML tags;
+2. If that fails, try to extract `TOOL: xxx {json}` from the text with a regex;
+3. If that also fails, self-heal: emit a `SELF_HEAL` log + ask the LLM to re-output a properly formatted call.
 
 ---
 
-## 5. L4 API 协议（REST + SSE 混合）
+## 5. L4 API Protocol (Hybrid REST + SSE)
 
-### 5.1 登录与会话
+### 5.1 Login and Sessions
 
 **POST /api/auth/login**
 ```json
 Request:  { "username": "qa-zhang", "password": "plaintext-bcrypt-on-server" }
 Response: { "session_token": "tok_abc", "user": { "id": "u_1", "username": "qa-zhang", "role": "tester" } }
 ```
-- 后续请求 Header: `Authorization: Bearer <session_token>`
+- Header for subsequent requests: `Authorization: Bearer <session_token>`
 
-**GET /api/auth/me** → 返回当前用户或 401。
+**GET /api/auth/me** → Returns the current user or 401.
 
-### 5.2 工具
+### 5.2 Tools
 **GET /api/tools/list** → `[ToolInfo, ...]`
 
-**POST /api/tools/execute**  (同步，<30s 短任务)
+**POST /api/tools/execute**  (synchronous, short tasks <30s)
 ```json
 Request:  { "tool_name": "testdata_generator", "params": { ... } }
 Response: ToolResult
 ```
 
-**POST /api/tools/execute-async**  (长任务如 Selenium 验证)
+**POST /api/tools/execute-async**  (long tasks such as Selenium verification)
 ```json
 Request:  { "tool_name": "game_verifier", "params": { ... }, "execution_id": "exe_xxx" }
 Response: { "ok": true, "execution_id": "exe_xxx" }
 ```
 
-### 5.3 执行历史与流式
+### 5.3 Execution History and Streaming
 
-**GET /api/executions/stream/{execution_id}**  —  **SSE 事件流**
+**GET /api/executions/stream/{execution_id}**  —  **SSE event stream**
 ```
 event: harness_event
 data: { "type": "THOUGHT",     "timestamp": "..", "content": "...", "status": "running" }
@@ -319,16 +319,16 @@ data: { "success": true, "execution_id": "exe_xxx", "total_ms": 8432 }
 ```
 
 **GET /api/executions/mine?page=1&size=20**
-**GET /api/executions/{id}**  → 详情 + 产物列表（可下载的 URL）
-**GET /api/records/{id}/outcome.zip**  → 下载 ZIP
-**POST /api/executions/audit-llm** → `{ provider, model, tokens_in, tokens_out, duration_ms, success }` (纯元数据，不包含 prompt/内容)
+**GET /api/executions/{id}**  → Details + artifact list (downloadable URLs)
+**GET /api/records/{id}/outcome.zip**  → Download the ZIP
+**POST /api/executions/audit-llm** → `{ provider, model, tokens_in, tokens_out, duration_ms, success }` (metadata only; no prompt/content)
 
 ---
 
-## 6. L1 存储：SQLite 表结构（server/infra/storage.py）
+## 6. L1 Storage: SQLite Schema (server/infra/storage.py)
 
 ```sql
--- 用户 & 会话
+-- Users & sessions
 CREATE TABLE users (
   id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'tester',
@@ -339,7 +339,7 @@ CREATE TABLE sessions (
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_ip TEXT
 );
 
--- 执行
+-- Executions
 CREATE TABLE executions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, intent TEXT NOT NULL,
   workflow_stage INTEGER NOT NULL, status TEXT NOT NULL,
@@ -357,7 +357,7 @@ CREATE TABLE tool_calls (
   started_at INTEGER NOT NULL, execution_ms INTEGER DEFAULT 0, error_message TEXT
 );
 
--- TestData 记录
+-- TestData records
 CREATE TABLE test_records (
   id TEXT PRIMARY KEY, execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL,
   user_id TEXT REFERENCES users(id), case_name TEXT NOT NULL,
@@ -367,7 +367,7 @@ CREATE TABLE test_records (
   xml_snippet TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 
--- LLM 调用审计（无内容）
+-- LLM call audit (no content)
 CREATE TABLE llm_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
   provider TEXT NOT NULL, model TEXT NOT NULL,
@@ -376,13 +376,13 @@ CREATE TABLE llm_audit (
 );
 ```
 
-**平滑升级提示**：所有 SQL 封装在 `Storage` 类方法里，未来改 PostgreSQL 只需换实现，Service 层不感知。
+**Smooth upgrade note**: All SQL is encapsulated in `Storage` class methods; switching to PostgreSQL in the future only requires swapping the implementation, and the Service layer is unaware of it.
 
 ---
 
-## 7. P1：Tool Plugin → Python 脚本桥接（process_runner.py）
+## 7. P1: Tool Plugin → Python Script Bridge (process_runner.py)
 
-对于 Selenium 验证、generate_testdata.py 这种「已有成熟 Python 脚本」的工具：
+For tools backed by "existing mature Python scripts", such as Selenium verification and generate_testdata.py:
 
 ```python
 # server/infra/process_runner.py
@@ -392,27 +392,27 @@ class ProcessRunner:
         cmd: list[str],            # e.g. ['python', 'generate_testdata.py', '-m', '105359', '-f', 'input.txt']
         work_dir: Path,
         timeout_sec: int = 120,
-        on_stdout: Callable[[str], None] | None = None,  # 实时写 SSE
+        on_stdout: Callable[[str], None] | None = None,  # Writes to SSE in real time
     ) -> CompletedProcess:
-        # asyncio.create_subprocess_exec，stdout=PIPE 按行推 SSE
-        # stderr 合并到日志
-        # 超时 → SIGTERM → 2s 后 SIGKILL
+        # asyncio.create_subprocess_exec, stdout=PIPE pushed to SSE line by line
+        # stderr merged into the log
+        # Timeout → SIGTERM → SIGKILL after 2s
 ```
 
-沙箱策略：每次 execution → `server/data/runs/{execution_id}/` 作为工作目录；产物归档后 24 小时清理。
+Sandbox policy: each execution uses `server/data/runs/{execution_id}/` as its working directory; artifacts are cleaned up 24 hours after archiving.
 
 ---
 
-## 8. P2：工作流从硬编码升级为 DAG（雏形）
+## 8. P2: Upgrading Workflows from Hard-Coded to DAG (Prototype)
 
-P0 阶段 workflow_stage 1 / 2 是固定的，但 Service 层接口按 DAG 定义：
+In P0, workflow_stage 1 / 2 is fixed, but the Service-layer interface is defined as a DAG:
 
 ```python
-# 概念接口，P0 先硬编码实现；P2 放开
+# Conceptual interface: hard-coded implementation in P0; opened up in P2
 class WorkflowStep(BaseModel):
     id: str
     tool_name: str
-    params_template: dict    # 支持 {{ previous_step.output.xxx }} 变量插值
+    params_template: dict    # Supports {{ previous_step.output.xxx }} variable interpolation
     condition: str | None    # "step_a.result.success == true"
 
 class Workflow(BaseModel):
@@ -420,53 +420,53 @@ class Workflow(BaseModel):
     steps: list[WorkflowStep]
 ```
 
-P0 时 `WorkflowService` 直接按步骤调用 tools；P2 时允许 UI 拖拽或 JSON 自定义 Workflow。
+In P0, `WorkflowService` calls tools directly step by step; in P2, Workflows can be customized via UI drag-and-drop or JSON.
 
 ---
 
-## 9. UI 改造重点（React）
+## 9. Key UI Changes (React)
 
-### 9.1 新增登录页
-- `LoginPage.tsx`：用户名 + 密码 → POST `/api/auth/login` → token 存 `sessionStorage` → 跳转主界面
-- 无 token 的任何页面访问都重定向到登录
+### 9.1 New Login Page
+- `LoginPage.tsx`: username + password → POST `/api/auth/login` → store token in `sessionStorage` → redirect to the main UI
+- Any page access without a token redirects to login
 
-### 9.2 LlmConfigModal（证明可扩展性的核心 UI）
-四个 Provider Tab：
-  - **Local Ollama（默认）**：baseUrl 默认为 `http://localhost:11434`，显示健康检测灯 + 模型下拉
-  - **OpenAI**：灰显 + 需勾选 `⚠️ 我已确认使用外部模型符合公司保密协议` → 激活 baseUrl 和 apiKey 输入
-  - **Anthropic**：同上
-  - **Custom**：同上
+### 9.2 LlmConfigModal (Core UI for Demonstrating Extensibility)
+Four Provider tabs:
+  - **Local Ollama (default)**: baseUrl defaults to `http://localhost:11434`; shows a health-check indicator + model dropdown
+  - **OpenAI**: grayed out + requires checking `⚠️ I confirm that using an external model complies with the company confidentiality agreement` → enables the baseUrl and apiKey inputs
+  - **Anthropic**: same as above
+  - **Custom**: same as above
 
-保存位置：`localStorage['harness_llm_config_v1']`（标注「仅本机可见，不上传后端」）
+Storage location: `localStorage['harness_llm_config_v1']` (labeled "visible on this machine only, not uploaded to the back end")
 
-### 9.3 AgentCore.tsx 改造
-- 删掉 `setInterval` 的模拟日志推进；
-- 改为订阅 `plannerAgent.run()` 的 callbacks 实时追加日志；
-- `tasks` 任务进度由 planner agent 按实际 tool 调用推进，不是固定 4 步。
+### 9.3 AgentCore.tsx Changes
+- Remove the `setInterval`-driven simulated log progression;
+- Instead, subscribe to the callbacks of `plannerAgent.run()` and append logs in real time;
+- `tasks` progress is driven by the planner agent based on actual tool calls, not a fixed 4 steps.
 
-### 9.4 App.tsx 改造
-- 接入 AuthContext；
-- 用 HarnessClient 做所有后端调用；
-- 新增 React Context：`AuthContext` + `PlannerContext`。
+### 9.4 App.tsx Changes
+- Hook up AuthContext;
+- Use HarnessClient for all back-end calls;
+- Add React Contexts: `AuthContext` + `PlannerContext`.
 
 ---
 
-## 10. 启动脚本（Windows 双击）
+## 10. Launch Scripts (Windows Double-Click)
 
-**start-dev.cmd 改造后逻辑：**
+**start-dev.cmd logic after the change:**
 ```
-1. 检查 node.exe → 无则提示 winget 安装（和现有一致）
-2. 检查 python.exe → 无则提示 winget 安装 Python 3.11+
-3. npm ci（仅 node_modules 缺失时）
-4. pip install -r server/requirements.txt（仅首次或变更时）
-5. 后台启动：uvicorn server.main:app --port 8000
-6. 前台启动：npm run dev (Vite 3000)
-7. 自动打开 http://localhost:3000
+1. Check node.exe → if missing, prompt to install via winget (same as current)
+2. Check python.exe → if missing, prompt to install Python 3.11+ via winget
+3. npm ci (only when node_modules is missing)
+4. pip install -r server/requirements.txt (only on first run or when changed)
+5. Start in background: uvicorn server.main:app --port 8000
+6. Start in foreground: npm run dev (Vite 3000)
+7. Automatically open http://localhost:3000
 ```
 
-**生产部署形态（一台服务器）：**
+**Production deployment (single server):**
 ```
-Nginx (443 / 公司域名)
+Nginx (443 / company domain)
  ├── /                 →  serve -s dist (React build)
  └── /api              →  proxy_pass http://127.0.0.1:8000
 uvicorn server.main:app --host 0.0.0.0 --port 8000 --workers 2
@@ -474,20 +474,20 @@ uvicorn server.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ---
 
-## 11. 本次升级范围（P0–P2）验收清单
+## 11. Acceptance Checklist for This Upgrade (P0–P2)
 
-| # | 验收项 | 所属 |
+| # | Acceptance Item | Phase |
 |---|---|---|
-| P0-1 | `ToolPlugin` 接口 + `ToolRegistry`，首批 5 个工具可注册/列出/调用 | P0 |
-| P0-2 | `PlannerAgent` + 4 Provider（Ollama/OpenAI/Anthropic/Custom）完整实现，健康检测可用，SSE 流式正常 | P0 |
-| P0-3 | Planner Agent 真实 ReAct 循环：Ollama 输出 tool_call → 后端执行 → ToolResult 回填 → 下一轮思考 → task_complete | P0 |
-| P0-4 | LlmConfigModal UI：四 Provider Tab + 外部模型需「合规确认」复选框 + 本地存储 + 健康灯 | P0 |
-| P1-1 | FastAPI 5 个路由模块全部可用（auth/tools/executions/records） | P1 |
-| P1-2 | `process_runner` 桥接 `generate_testdata.py` + `verify_testdata.py`，可从 UI 跑完整 Stage 1 + Stage 2 | P1 |
-| P1-3 | 简单口令登录 + Session，后端 SQLite 落库，@require_role 守卫 | P1 |
-| P1-4 | 前端 LoginPage + Auth Guard，未登录重定向 | P1 |
-| P2-1 | 执行历史可回溯：/api/executions/mine + 前端历史列表 + 重跑按钮 | P2 |
-| P2-2 | `WorkflowStage` 从硬编码升级为 `Workflow` 描述对象（先内置两套：stage1 / stage2） | P2 |
-| P2-3 | 前后端共享 DTO (sharedTypes.ts + pydantic) 对齐，工具接口、日志事件、表结构无漂移 | P2 |
-| P2-4 | LLM 审计落库（provider/model/tokens/时长）不含任何 prompt/response 内容 | P2 |
-| P2-5 | `start-dev.cmd` 可在 Windows 纯双击启动 Vite + FastAPI + 自动打开浏览器 | P2 |
+| P0-1 | `ToolPlugin` interface + `ToolRegistry`; the initial 5 tools can be registered/listed/invoked | P0 |
+| P0-2 | `PlannerAgent` + 4 Providers (Ollama/OpenAI/Anthropic/Custom) fully implemented; health checks work; SSE streaming works | P0 |
+| P0-3 | Real Planner Agent ReAct loop: Ollama outputs tool_call → back end executes → ToolResult fed back → next round of thinking → task_complete | P0 |
+| P0-4 | LlmConfigModal UI: four Provider tabs + "compliance confirmation" checkbox required for external models + local storage + health indicator | P0 |
+| P1-1 | All 5 FastAPI router modules working (auth/tools/executions/records) | P1 |
+| P1-2 | `process_runner` bridges `generate_testdata.py` + `verify_testdata.py`; full Stage 1 + Stage 2 can be run from the UI | P1 |
+| P1-3 | Simple password login + Session, persisted to back-end SQLite, @require_role guard | P1 |
+| P1-4 | Front-end LoginPage + Auth Guard; redirect when not logged in | P1 |
+| P2-1 | Execution history is traceable: /api/executions/mine + front-end history list + re-run button | P2 |
+| P2-2 | `WorkflowStage` upgraded from hard-coded to a `Workflow` descriptor object (two built-in first: stage1 / stage2) | P2 |
+| P2-3 | Shared front-end/back-end DTOs (sharedTypes.ts + pydantic) aligned; no drift in tool interfaces, log events, or table schemas | P2 |
+| P2-4 | LLM audit persisted (provider/model/tokens/duration) without any prompt/response content | P2 |
+| P2-5 | `start-dev.cmd` can launch Vite + FastAPI + automatically open the browser on Windows with a plain double-click | P2 |

@@ -1,64 +1,64 @@
-# SKILL: Helpfile HTML转换与差异分析规则
+# SKILL: Helpfile HTML Conversion and Diff Analysis Rules
 
-## 1. 核心定位
-Helpfile帮助文件批量转换、差异比较、关键词分析技能，为Helpfile Conversion Agent提供约束规范。
+## 1. Core Purpose
+Skill for batch conversion, diff comparison and keyword analysis of Helpfile help files; provides constraints for the Helpfile Conversion Agent.
 
-## 2. HTML → TXT 转换规则
+## 2. HTML → TXT Conversion Rules
 
-### Rule 1: 遍历与提取
-- 遍历源文件夹下所有子目录
-- 每个子目录中读取 `index.html` 文件
-- 以子目录名称命名输出的 TXT 文件
+### Rule 1: Traversal and Extraction
+- Traverse all subdirectories under the source folder
+- Read the `index.html` file in each subdirectory
+- Name the output TXT file after the subdirectory
 
-### Rule 2: html2text 转换配置
-- `ignore_links = True` — 去除超链接
-- `ignore_images = True` — 去除图片引用
-- `ignore_emphasis = True` — 去除粗体/斜体标记
-- `body_width = 0` — 不自动换行
-- `single_line_break = True` — 块之间单换行
-- `skip_internal_links = True` — 去除内部锚
-- `bypass_tables = True` — 保留表格结构
-- `mark_code = False` — 不标记代码块
+### Rule 2: html2text Conversion Config
+- `ignore_links = True` — remove hyperlinks
+- `ignore_images = True` — remove image references
+- `ignore_emphasis = True` — remove bold/italic markers
+- `body_width = 0` — no automatic line wrapping
+- `single_line_break = True` — single line break between blocks
+- `skip_internal_links = True` — remove internal anchors
+- `bypass_tables = True` — keep table structure
+- `mark_code = False` — do not mark code blocks
 
-### Rule 3: 后处理
-- 去除空行（`line.strip()` 过滤空字符串）
-- 合并连续空行
-- 统一使用 UTF-8 编码输出
+### Rule 3: Post-processing
+- Remove empty lines (filter empty strings with `line.strip()`)
+- Merge consecutive empty lines
+- Output uniformly in UTF-8 encoding
 
-## 3. 差异比较规则
+## 3. Diff Comparison Rules
 
-### Rule 4: 基准文件选择
-- 将所有子目录名称按字母序排序
-- 排序后第一个子目录的 TXT 文件作为**基准文件**
-- 其余每个文件分别与基准文件做差异比较
+### Rule 4: Baseline File Selection
+- Sort all subdirectory names alphabetically
+- The TXT file of the first subdirectory after sorting is the **baseline file**
+- Each remaining file is diffed against the baseline file separately
 
-### Rule 5: 差异生成
-- 使用 `difflib.HtmlDiff` 生成 HTML 差异报告
-- 输出包含颜色标记的增删改对比
+### Rule 5: Diff Generation
+- Use `difflib.HtmlDiff` to generate the HTML diff report
+- Output includes color-marked additions/deletions/changes
 
-### Rule 6: 关键词高亮（防嵌套）
-- 所有关键词按长度**降序排列**后再高亮（优先匹配长词）
-- 使用 BeautifulSoup 只修改**文本节点**，不破坏 HTML 结构
-- 跳过 `<script>`, `<style>`, `<head>`, `<title>`, `<meta>` 标签
-- 匹配使用 `re.IGNORECASE` 不区分大小写
-- 包裹格式：`<span style="background-color:yellow">匹配内容</span>`
-- BeautifulSoup 解析失败时回退到全局正则替换
+### Rule 6: Keyword Highlighting (no nesting)
+- Sort all keywords by length in **descending order** before highlighting (match longer words first)
+- Use BeautifulSoup to modify only **text nodes**, without breaking HTML structure
+- Skip `<script>`, `<style>`, `<head>`, `<title>`, `<meta>` tags
+- Match case-insensitively with `re.IGNORECASE`
+- Wrap format: `<span style="background-color:yellow">matched text</span>`
+- If BeautifulSoup parsing fails, fall back to global regex replacement
 
-## 4. 关键词统计规则
+## 4. Keyword Counting Rules
 
-### Rule 7: 计数方式
-- 对每个 TXT 文件统计所有关键词出现次数
-- 使用 `txt_content.lower().count(keyword.lower())` 不区分大小写
-- 结果写入 Excel 工作表
+### Rule 7: Counting Method
+- For each TXT file, count occurrences of all keywords
+- Use `txt_content.lower().count(keyword.lower())` case-insensitively
+- Write results to an Excel worksheet
 
-### Rule 8: Excel 输出格式
-- 第一行：`['File Name'] + keywords`
-- 后续每行：`[子目录名, 关键词1次数, 关键词2次数, ...]`
-- 文件名：`output.xlsx`
+### Rule 8: Excel Output Format
+- First row: `['File Name'] + keywords`
+- Each following row: `[subdir name, keyword 1 count, keyword 2 count, ...]`
+- File name: `output.xlsx`
 
-## 5. 输出约束
-- 所有输出文件保存到指定的 output_folder
-- TXT 文件命名：`{subdir_name}.txt`
-- 差异 HTML 命名：`compare_{safe_base}_vs_{safe_compare}.html`
-- 差异 PNG 命名：`compare_{safe_base}_vs_{safe_compare}.png`
-- 文件名中的特殊字符替换为 `_`（只保留 `[A-Za-z0-9_.-]`）
+## 5. Output Constraints
+- All output files are saved to the specified output_folder
+- TXT file naming: `{subdir_name}.txt`
+- Diff HTML naming: `compare_{safe_base}_vs_{safe_compare}.html`
+- Diff PNG naming: `compare_{safe_base}_vs_{safe_compare}.png`
+- Special characters in file names are replaced with `_` (keep only `[A-Za-z0-9_.-]`)

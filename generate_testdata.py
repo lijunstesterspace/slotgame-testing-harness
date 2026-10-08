@@ -282,14 +282,14 @@ def main():
     else:
         # Fully Interactive Mode
         print("=" * 60)
-        print(" 老虎机 .testdata 批量文件生成工具 ")
+        print(" Slot machine .testdata batch file generator ")
         print("=" * 60)
-        print("格式 A (单组 - 块格式):")
-        print("  # 文件名1")
+        print("Format A (single group - block format):")
+        print("  # filename1")
         print("  21,4683")
-        print("格式 B (双组 - 单行嵌套格式):")
-        print("  文件名1\\t58,3\\t2,67933")
-        print("  文件名2\\t58,3\\t4,145")
+        print("Format B (two groups - single-line nested format):")
+        print("  filename1\\t58,3\\t2,67933")
+        print("  filename2\\t58,3\\t4,145")
         print("=" * 60)
         
         clip_text = get_clipboard_text()
@@ -298,49 +298,49 @@ def main():
         if clip_text:
             files_data = parse_multi_input(clip_text)
             if files_data:
-                print(f"检测到剪贴板中含有 {len(files_data)} 个文件的批量数据：")
+                print(f"Detected batch data for {len(files_data)} file(s) in the clipboard:")
                 for fname, data in files_data.items():
                     print(f"  - {fname} ({len(data)} spins)")
                 
-                use_clip = safe_input("\n是否直接使用剪贴板中的数据？(Y/n): ", "y").lower()
+                use_clip = safe_input("\nUse the data from the clipboard directly? (Y/n): ", "y").lower()
                 if use_clip not in ('n', 'no'):
                     pass
                 else:
                     files_data = {}
 
         if not files_data:
-            print("\n请粘贴您的数据：")
-            print("输入完成后，在 Windows 上按 Ctrl+Z 然后回车 (Linux/Mac 上按 Ctrl+D) 结束输入：")
+            print("\nPlease paste your data:")
+            print("When done, press Ctrl+Z then Enter on Windows (Ctrl+D on Linux/Mac) to finish input:")
             print("-" * 40)
             try:
                 stdin_text = sys.stdin.read()
                 files_data = parse_multi_input(stdin_text)
             except KeyboardInterrupt:
-                print("\n已取消。")
+                print("\nCancelled.")
                 return
                 
         if not files_data:
-            print("\n[错误] 未检测到有效数据，退出。")
+            print("\n[Error] No valid data detected, exiting.")
             return
 
-        # 获取全局基础配置
-        module_id = safe_input(f"\n请输入全局 moduleID [默认: 10539]: ", "10539")
-        stage = safe_input(f"请输入全局 stage [默认: BaseGame]: ", "BaseGame")
-        comment = safe_input(f"请输入全局 comment [默认: TestMode]: ", "TestMode")
+        # Get global base configuration
+        module_id = safe_input(f"\nEnter global moduleID [default: 10539]: ", "10539")
+        stage = safe_input(f"Enter global stage [default: BaseGame]: ", "BaseGame")
+        comment = safe_input(f"Enter global comment [default: TestMode]: ", "TestMode")
         
         # If there is only one file and it matches the default name, let the user customize the filename
         default_key = "generated_wins.testdata"
         if len(files_data) == 1 and default_key in files_data:
-            filename = safe_input(f"请输入输出文件名 [默认: {default_key}]: ", default_key)
+            filename = safe_input(f"Enter output filename [default: {default_key}]: ", default_key)
             if not filename.endswith('.testdata'):
                 filename += '.testdata'
             files_data = {filename: files_data[default_key]}
             
-        print(f"\n开始生成 {len(files_data)} 个文件...")
+        print(f"\nGenerating {len(files_data)} file(s)...")
         for filename, data in files_data.items():
             generate_testdata(data, module_id, stage, comment, filename)
             
-        print("\n[完成] 所有文件已成功生成！")
+        print("\n[Done] All files generated successfully!")
 
 if __name__ == '__main__':
     main()

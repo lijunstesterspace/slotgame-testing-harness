@@ -32,7 +32,7 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-# 但保留项目 spec 文件
+# But keep the project spec file
 !slot_harness.spec
 
 # Installer logs
@@ -197,7 +197,7 @@ server/.venv/
 venv/
 .venv/
 
-# EXE 打包产物
+# EXE packaging output
 server/static/
 build/
 dist/

@@ -1,19 +1,19 @@
-# SKILL: Helpfile转换分析插件接口契约规范
+# SKILL: Helpfile Conversion Analysis Plugin Interface Contract Specification
 
-## 1. 核心定位
-定义 Helpfile 转换分析相关 Plugin 工具层与 Agent 层的接口契约，保障参数格式一致。
+## 1. Core Purpose
+Defines the interface contract between the Helpfile conversion analysis Plugin tool layer and the Agent layer, ensuring consistent parameter formats.
 
-## 2. html_to_text_converter 接口契约
+## 2. html_to_text_converter Interface Contract
 
-**功能：** 批量将HTML帮助文件转换为纯文本
+**Function:** Batch convert HTML help files to plain text
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `source_folder` | string | 是 | 包含子目录（各含index.html）的源文件夹路径 |
-| `output_folder` | string | 是 | 转换后TXT文件输出路径 |
+| `source_folder` | string | Yes | Source folder path containing subdirectories (each with index.html) |
+| `output_folder` | string | Yes | Output path for converted TXT files |
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -32,20 +32,20 @@
 }
 ```
 
-## 3. diff_comparator 接口契约
+## 3. diff_comparator Interface Contract
 
-**功能：** 对转换后的TXT文件进行差异比较、关键词高亮、统计
+**Function:** Diff-compare converted TXT files, highlight keywords, compute statistics
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `txt_files` | array | 是 | TXT文件路径列表 `[{subdir_name, txt_path}]` |
-| `keywords` | array | 是 | 需要高亮和统计的关键词列表 |
-| `output_folder` | string | 是 | 差异报告输出路径 |
-| `baseline_file` | string | 否 | 基准文件路径（默认取字母序第一个） |
-| `generate_png` | boolean | 否 | 是否生成PNG截图，默认 true |
+| `txt_files` | array | Yes | List of TXT file paths `[{subdir_name, txt_path}]` |
+| `keywords` | array | Yes | List of keywords to highlight and count |
+| `output_folder` | string | Yes | Output path for diff reports |
+| `baseline_file` | string | No | Baseline file path (defaults to the alphabetically first) |
+| `generate_png` | boolean | No | Whether to generate PNG screenshots, default true |
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -65,21 +65,21 @@
 }
 ```
 
-## 4. helpfile_analyzer 接口契约
+## 4. helpfile_analyzer Interface Contract
 
-**功能：** 调用本地AI模型（Ollama）对转换和比较结果进行智能分析，生成分析报告
+**Function:** Call the local AI model (Ollama) to analyze conversion and comparison results and generate an analysis report
 
-**输入参数：**
-| 参数名 | 类型 | 必填 | 说明 |
+**Input parameters:**
+| Parameter | Type | Required | Description |
 |--------|------|------|------|
-| `txt_files` | array | 是 | TXT文件路径列表 `[{subdir_name, txt_path}]` |
-| `keywords` | array | 是 | 分析关键词列表 |
-| `comparison_results` | array | 否 | diff_comparator 输出的比较结果 |
-| `output_folder` | string | 是 | 分析报告输出路径 |
-| `ollama_base_url` | string | 否 | Ollama服务地址，默认 `http://localhost:11434` |
-| `ollama_model` | string | 否 | 模型名称，默认 `qwen3:latest` |
+| `txt_files` | array | Yes | List of TXT file paths `[{subdir_name, txt_path}]` |
+| `keywords` | array | Yes | List of analysis keywords |
+| `comparison_results` | array | No | Comparison results output by diff_comparator |
+| `output_folder` | string | Yes | Output path for analysis report |
+| `ollama_base_url` | string | No | Ollama service URL, default `http://localhost:11434` |
+| `ollama_model` | string | No | Model name, default `qwen3:latest` |
 
-**输出结构：**
+**Output structure:**
 ```json
 {
   "success": true,
@@ -102,9 +102,9 @@
 }
 ```
 
-## 5. 工具调用顺序约束
+## 5. Tool Call Order Constraint
 
-Agent 必须按以下顺序调用工具：
-1. `html_to_text_converter` → 批量转换 HTML 为 TXT
-2. `diff_comparator` → 差异比较 + 关键词高亮 + Excel 统计
-3. `helpfile_analyzer` → 调用本地 AI 生成智能分析报告
+The Agent must call tools in the following order:
+1. `html_to_text_converter` → batch convert HTML to TXT
+2. `diff_comparator` → diff comparison + keyword highlighting + Excel statistics
+3. `helpfile_analyzer` → call local AI to generate the analysis report

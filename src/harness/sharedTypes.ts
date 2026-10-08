@@ -145,7 +145,7 @@ export interface LLMAuditReq {
 
 // ─ HARNESS v2: Scenario / Pipeline / Execution Engine types ──
 
-/** 测试场景定义 */
+/** Test scenario definition */
 export interface TestScenario {
   id: string;
   label: string;
@@ -158,15 +158,15 @@ export interface TestScenario {
   icon: "zap" | "shield" | "bug" | "file-text" | "globe";
 }
 
-/** 单个步骤构建调用参数时可见的上下文：流水线启动参数 + 之前各步骤的产出 */
+/** Context visible to a step when building call params: pipeline start params + outputs of previous steps */
 export interface PipelineParamContext {
-  /** 启动流水线时传入的参数（用户输入、UI 状态等） */
+  /** Params passed when starting the pipeline (user input, UI state, etc.) */
   extraParams: Record<string, unknown>;
-  /** 之前每个步骤成功执行后的 result.content，key 为 stepId */
+  /** result.content of each previously successful step, keyed by stepId */
   stepResults: Record<string, unknown>;
 }
 
-/** 流水线步骤定义 */
+/** Pipeline step definition */
 export interface PipelineStepDef {
   id: string;
   plugin: string;
@@ -176,14 +176,14 @@ export interface PipelineStepDef {
   retryOnFail: boolean;
   maxRetries: number;
   /**
-   * 声明式参数构建函数：把启动参数 + 前置步骤产出，映射成这个 Plugin 调用所需的入参。
-   * 新增/调整一个场景的执行只需要在这里写映射规则，不需要改 ExecutionEngine 代码，
-   * 也不需要让 AI 自己决定"这一步该传什么参数"。
+   * Declarative param builder: maps start params + outputs of previous steps to the inputs this Plugin call needs.
+   * Adding/adjusting a scenario's execution only requires writing mapping rules here, not changing ExecutionEngine code,
+   * and the AI never has to decide "what params to pass for this step".
    */
   buildParams?: (ctx: PipelineParamContext) => Record<string, unknown>;
 }
 
-/** 流水线定义 */
+/** Pipeline definition */
 export interface PipelineDef {
   id: string;
   name: string;
@@ -191,7 +191,7 @@ export interface PipelineDef {
   stages: PipelineStepDef[][];
 }
 
-/** 步骤执行状态 */
+/** Step execution status */
 export type StepStatus =
   | "pending"
   | "running"
@@ -200,7 +200,7 @@ export type StepStatus =
   | "retrying"
   | "skipped";
 
-/** 步骤执行记录 */
+/** Step execution record */
 export interface StepExecutionRecord {
   stepId: string;
   plugin: string;
@@ -213,7 +213,7 @@ export interface StepExecutionRecord {
   error?: string;
 }
 
-/** 流水线执行状态 */
+/** Pipeline execution status */
 export type PipelineExecutionStatus =
   | "idle"
   | "running"
@@ -222,7 +222,7 @@ export type PipelineExecutionStatus =
   | "failed"
   | "aborted";
 
-/** 完整流水线执行上下文 */
+/** Full pipeline execution context */
 export interface PipelineExecutionContext {
   scenarioId: string;
   pipelineId: string;

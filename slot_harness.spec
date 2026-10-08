@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec 文件 - Slot Game Testing Harness 打包配置
-用法：pyinstaller slot_harness.spec --noconfirm
+PyInstaller spec file - Slot Game Testing Harness packaging configuration
+Usage: pyinstaller slot_harness.spec --noconfirm
 """
 import os
 from pathlib import Path
@@ -9,12 +9,12 @@ from pathlib import Path
 block_cipher = None
 
 # ---------------------------------------------------------------------------
-# 项目根目录（SPECPATH 即 spec 文件所在目录 = 项目根目录）
+# Project root (SPECPATH is the directory containing the spec file = project root)
 # ---------------------------------------------------------------------------
 ROOT = SPECPATH
 
 # ---------------------------------------------------------------------------
-# Hidden imports：PyInstaller 静态分析无法自动发现的模块
+# Hidden imports: modules that PyInstaller static analysis cannot discover automatically
 # ---------------------------------------------------------------------------
 hidden_imports = [
     # ---- FastAPI / uvicorn / starlette ----
@@ -47,16 +47,16 @@ hidden_imports = [
     "pydantic._internal",
     "annotated_types",
 
-    # ---- 数据库 ----
+    # ---- Database ----
     "aiosqlite",
     "sqlite3",
 
-    # ---- C 扩展 ----
+    # ---- C extensions ----
     "_cffi_backend",
     "cffi",
     "pycparser",
 
-    # ---- 序列化 / 工具 ----
+    # ---- Serialization / utilities ----
     "aiofiles",
     "structlog",
     "structlog.processors",
@@ -105,7 +105,7 @@ hidden_imports = [
     "System.Drawing",
     "System.Threading",
 
-    # ---- 标准库（PyInstaller 有时漏掉）----
+    # ---- Standard library (PyInstaller sometimes misses these) ----
     "asyncio",
     "contextlib",
     "dataclasses",
@@ -125,7 +125,7 @@ hidden_imports = [
     "logging.config",
     "logging.handlers",
 
-    # ---- server 子模块（确保全部打入）----
+    # ---- server submodules (ensure all are included) ----
     "server",
     "server.config",
     "server.main",
@@ -163,14 +163,14 @@ hidden_imports = [
 ]
 
 # ---------------------------------------------------------------------------
-# collect_all 辅助：将 _cffi_backend 的 .pyd 文件一并打包
+# collect_all helper: also bundle the _cffi_backend .pyd file
 # ---------------------------------------------------------------------------
 from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 cffi_datas, cffi_binaries, _ = collect_all("_cffi_backend")
 aiosqlite_datas, aiosqlite_binaries, _ = collect_all("aiosqlite")
 
-# 收集 server.tools.impl 包的所有子模块（PyInstaller 静态分析可能遗漏）
+# Collect all submodules of the server.tools.impl package (PyInstaller static analysis may miss them)
 try:
     impl_datas, impl_binaries, impl_hidden = collect_all("server.tools.impl")
 except Exception:
@@ -178,13 +178,13 @@ except Exception:
     print("[spec] WARNING: Could not collect_all server.tools.impl")
 
 # ---------------------------------------------------------------------------
-# 前端静态文件：server/static（Vite 构建产物）
+# Frontend static files: server/static (Vite build output)
 # ---------------------------------------------------------------------------
 static_dir = os.path.join(ROOT, "server", "static")
 static_datas = []
 if os.path.isdir(static_dir):
-    # PyInstaller 的 target 是目录路径，文件会以原名放入该目录
-    # 所以需要将同目录的文件分组，target 设为子目录路径
+    # PyInstaller's target is a directory path; files are placed into it under their original names
+    # so files in the same directory are grouped, with target set to the subdirectory path
     from collections import defaultdict
     groups = defaultdict(list)
     for f in Path(static_dir).rglob("*"):
@@ -202,13 +202,13 @@ else:
     print("[spec] WARNING: server/static not found, run npm run build first")
 
 # ---------------------------------------------------------------------------
-# .env 文件：不打包进 exe，运行时从 exe 所在目录读取，方便用户修改配置
+# .env file: not bundled into the exe; read at runtime from the exe directory so users can edit the config
 # ---------------------------------------------------------------------------
-env_datas = []  # 不再打包 .env，运行时从 exe 同目录读取
+env_datas = []  # .env is no longer bundled; read at runtime from the exe directory
 print("[spec] .env will be read from exe directory at runtime")
 
 # ---------------------------------------------------------------------------
-# verify_testdata.py / generate_testdata.py（工具脚本）
+# verify_testdata.py / generate_testdata.py (utility scripts)
 # ---------------------------------------------------------------------------
 script_datas = []
 for script_name in ("verify_testdata.py", "generate_testdata.py"):
@@ -218,7 +218,7 @@ for script_name in ("verify_testdata.py", "generate_testdata.py"):
         print(f"[spec] Including tool script: {script_name}")
 
 # ---------------------------------------------------------------------------
-# symbol_profiles/*.json：打包为只读种子；运行时 exe 同目录的 symbol_profiles/ 可写并优先
+# symbol_profiles/*.json: bundled as read-only seeds; at runtime symbol_profiles/ next to the exe is writable and takes precedence
 # ---------------------------------------------------------------------------
 profile_datas = []
 profiles_src = os.path.join(ROOT, "symbol_profiles")
@@ -250,12 +250,12 @@ a = Analysis(
 )
 
 # ---------------------------------------------------------------------------
-# PYZ（Python 字节码压缩包）
+# PYZ (Python bytecode archive)
 # ---------------------------------------------------------------------------
 pyz = PYZ(a.pure, cipher=block_cipher)
 
 # ---------------------------------------------------------------------------
-# EXE（单文件模式）
+# EXE (single-file mode)
 # ---------------------------------------------------------------------------
 exe = EXE(
     pyz,
@@ -271,10 +271,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,       # 无控制台窗口，纯桌面应用
+    console=False,       # No console window, pure desktop application
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,             # 可替换为项目 icon 路径，如 "assets/icon.ico"
+    icon=None,             # Can be replaced with a project icon path, e.g. "assets/icon.ico"
 )

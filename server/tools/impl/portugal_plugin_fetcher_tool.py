@@ -1,4 +1,4 @@
-"""Plugin: portugal_plugin_fetcher — 从游戏环境自动取回 Portugal Plugin outcome 字符串
+"""Plugin: portugal_plugin_fetcher — automatically fetches Portugal Plugin outcome strings from the game environment
 
 Flow (all in one Chrome, driven by Selenium):
   1. Log into the game — either a Titan Harness launcher URL (form filled like

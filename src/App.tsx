@@ -290,8 +290,8 @@ const Workbench: React.FC = () => {
       }
     }
 
-    // 自动意图路由：根据用户输入匹配场景
-    // 仅当路由结果得分很高（>100）时才覆盖用户手动选择的场景，避免误判
+    // Automatic intent routing: match a scenario from user input
+    // Only override the user's manually selected scenario when the routing score is very high (>100), to avoid misclassification
     let effectiveScenarioId = selectedScenarioId;
     const routeResult = routeIntent(promptIntent);
     if (routeResult && routeResult.scenario.id !== selectedScenarioId && routeResult.matchScore > 100) {

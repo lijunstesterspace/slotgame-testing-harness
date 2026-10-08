@@ -145,9 +145,9 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                   </div>
                   <div className="text-left">
                     <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                      AI 智能诊断分析
+                      AI Diagnostic Analysis
                       <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-500/30 border border-violet-500/50 text-violet-200">
-                        {report.aiDiagnosis.failedDiagnoses.length} 条诊断
+                        {report.aiDiagnosis.failedDiagnoses.length} diagnoses
                       </span>
                     </h4>
                     <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
@@ -175,7 +175,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                   {report.aiDiagnosis.failedDiagnoses.length > 0 && (
                     <div className="flex flex-col gap-2">
                       <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                        失败案例根因分析
+                        Root Cause Analysis of Failed Cases
                       </span>
                       {report.aiDiagnosis.failedDiagnoses.map((diag, idx) => (
                         <div key={idx} className="p-3 rounded-lg bg-slate-950/60 border border-slate-800 flex flex-col gap-2">
@@ -217,7 +217,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                   {report.aiDiagnosis.recommendations.length > 0 && (
                     <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-500/30">
                       <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
-                        建议操作
+                        Recommended Actions
                       </span>
                       <ul className="mt-1.5 flex flex-col gap-1">
                         {report.aiDiagnosis.recommendations.map((rec, idx) => (

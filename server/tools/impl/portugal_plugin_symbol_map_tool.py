@@ -1,4 +1,4 @@
-"""Plugin: portugal_plugin_symbol_map — 从后端提供的 Portugal Plugin Output Guide（Google Doc → Markdown）导入 letter → SYM 映射
+"""Plugin: portugal_plugin_symbol_map — imports the letter -> SYM mapping from the backend-provided Portugal Plugin Output Guide (Google Doc -> Markdown)
 
 Input is the Google Doc exported via File → Download → Markdown (.md), or the same text pasted.
 Confirmed against "Apex Dragon Power Combo™ - Portugal Report Plugin Output Guide.md" (matches

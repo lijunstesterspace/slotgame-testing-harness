@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 
 
 def _resolve_env_path() -> Path:
-    """解析 .env 文件路径：打包后从 exe 所在目录读取，开发时从项目根目录读取。"""
+    """Resolve the .env file path: read from the exe directory when packaged, from the project root during development."""
     if getattr(sys, 'frozen', False):
-        # PyInstaller 打包后：exe 所在目录
+        # After PyInstaller packaging: the directory containing the exe
         return Path(sys.executable).parent / ".env"
     else:
-        # 开发模式：项目根目录
+        # Development mode: project root directory
         return Path(__file__).resolve().parent.parent / ".env"
 
 

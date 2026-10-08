@@ -1,4 +1,4 @@
-# AGENT: Visual UI & Log Diagnosis Agent (视觉UI与日志诊断Agent)
+# AGENT: Visual UI & Log Diagnosis Agent
 
 ## ⚠️ Execution Model (read this first)
 
@@ -59,17 +59,17 @@ Proof: Google Sheet entry (58, 3) is labeled as "Bonus Feature_MINI Prize",
 Action Item: Correct Google Sheet row 4 to valid Mini Prize seed (e.g. Batch 58, Index 4).
 ```
 
-### Rule 1: Batch & Index Mismatch Detection (种子失配诊断)
-- **现象**：Google Sheet 填写的描述为 `Bonus Feature` 或 `High Win`，但服务器返回的响应 Payload 或视觉画面显示为 `BaseGame` 或 `$0.00` 派彩。
-- **结论**：`ORIGINAL_SHEET_DATA_ERROR`（原始表格录入错误）。
+### Rule 1: Batch & Index Mismatch Detection (Seed Mismatch Diagnosis)
+- **Symptom**: The Google Sheet description says `Bonus Feature` or `High Win`, but the server's response payload or the on-screen visuals show `BaseGame` or a `$0.00` payout.
+- **Conclusion**: `ORIGINAL_SHEET_DATA_ERROR` (original sheet data-entry error).
 
-### Rule 2: Out of Bounds Index (种子索引越界)
-- **现象**：服务器返回 HTTP 400 或 `Invalid Index` 报错。
-- **结论**：`INDEX_OUT_OF_BOUNDS`（表格输入的 Index 超出算法库最大范围）。
+### Rule 2: Out of Bounds Index (Seed Index Out of Range)
+- **Symptom**: The server returns HTTP 400 or an `Invalid Index` error.
+- **Conclusion**: `INDEX_OUT_OF_BOUNDS` (the Index entered in the sheet exceeds the maximum range of the algorithm library).
 
-### Rule 3: Client / WebGL Rendering Error (前端渲染错误)
-- **现象**：服务器返回成功派彩，但控制台抛出 `WebGL Context Lost` 或屏幕黑屏。
-- **结论**：`CLIENT_RENDER_BUG`（前端客户端渲染崩溃，非表格数据问题）。
+### Rule 3: Client / WebGL Rendering Error (Front-End Rendering Error)
+- **Symptom**: The server returns a successful payout, but the console throws `WebGL Context Lost` or the screen goes black.
+- **Conclusion**: `CLIENT_RENDER_BUG` (front-end client rendering crash, not a sheet data problem).
 
 ---
 

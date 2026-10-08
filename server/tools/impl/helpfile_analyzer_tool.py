@@ -1,4 +1,4 @@
-"""Plugin: helpfile_analyzer — 调用本地AI模型生成智能分析报告"""
+"""Plugin: helpfile_analyzer — calls a local AI model to generate an intelligent analysis report"""
 from __future__ import annotations
 import json
 import time
@@ -14,10 +14,10 @@ from server.tools.base import (
 from server.infra.logger import log
 
 
-# ── Ollama 客户端 ──────────────────────────────────────────────
+# ── Ollama client ──────────────────────────────────────────────
 
 async def _ollama_health_check(base_url: str) -> dict:
-    """检查 Ollama 服务是否在线"""
+    """Check whether the Ollama service is online"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{base_url}/api/tags")
@@ -36,7 +36,7 @@ async def _ollama_chat(
     messages: list[dict[str, str]],
     timeout_sec: int = 120,
 ) -> str:
-    """调用 Ollama /api/chat 接口（非流式）"""
+    """Call the Ollama /api/chat endpoint (non-streaming)"""
     async with httpx.AsyncClient(timeout=timeout_sec) as client:
         resp = await client.post(
             f"{base_url}/api/chat",
@@ -56,28 +56,28 @@ async def _ollama_chat(
         return data.get("message", {}).get("content", "")
 
 
-# ── 分析数据准备 ──────────────────────────────────────────────
+# ── Analysis data preparation ──────────────────────────────────────────────
 
 def _build_analysis_context(
     txt_files: list[dict],
     keywords: list[str],
     comparison_results: list[dict] | None,
 ) -> str:
-    """构建发送给 AI 的分析上下文"""
+    """Build the analysis context sent to the AI"""
     lines: list[str] = []
 
-    # 文件列表
+    # File list
     lines.append("=== File Inventory ===")
     for f in txt_files:
         lines.append(f"  - {f['subdir_name']}: {f['txt_path']}")
     lines.append("")
 
-    # 关键词列表
+    # Keyword list
     lines.append("=== Keywords Under Analysis ===")
     lines.append(f"  {', '.join(keywords)}")
     lines.append("")
 
-    # 差异比较结果
+    # Diff comparison results
     if comparison_results:
         lines.append("=== Comparison Results ===")
         for comp in comparison_results:
@@ -91,7 +91,7 @@ def _build_analysis_context(
                 lines.append(f"    Keyword counts: {count_str}")
         lines.append("")
 
-    # 每个文件的内容摘要（前500字符）
+    # Content excerpt of each file (first 500 characters)
     lines.append("=== File Content Summaries (first 500 chars each) ===")
     for f in txt_files:
         try:
@@ -106,7 +106,7 @@ def _build_analysis_context(
 
 
 def _build_ai_prompt(context: str) -> list[dict[str, str]]:
-    """构建发送给 AI 的消息列表"""
+    """Build the message list sent to the AI"""
     system_prompt = (
         "You are a Help File Quality Assurance Analyst AI.\n"
         "Your task is to analyze help file content differences and keyword coverage,\n"
@@ -143,11 +143,11 @@ def _build_ai_prompt(context: str) -> list[dict[str, str]]:
 
 
 def _parse_ai_response(raw: str) -> dict:
-    """解析 AI 返回的 JSON，处理可能的格式问题"""
-    # 去除可能的 markdown 代码块
+    """Parse the JSON returned by the AI, handling possible format issues"""
+    # Strip a possible markdown code block
     cleaned = raw.strip()
     if cleaned.startswith("```"):
-        # 去掉 ```json ... ``` 包裹
+        # Remove the ```json ... ``` wrapper
         lines = cleaned.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
@@ -155,7 +155,7 @@ def _parse_ai_response(raw: str) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # 尝试从文本中提取 JSON 对象
+        # Try to extract a JSON object from the text
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start >= 0 and end > start:
@@ -163,7 +163,7 @@ def _parse_ai_response(raw: str) -> dict:
                 return json.loads(cleaned[start:end + 1])
             except json.JSONDecodeError:
                 pass
-        # 最终回退
+        # Final fallback
         return {
             "summary": cleaned[:500],
             "keyDifferences": [],
@@ -173,17 +173,17 @@ def _parse_ai_response(raw: str) -> dict:
         }
 
 
-# ── HTML 报告生成 ─────────────────────────────────────────────
+# ── HTML report generation ─────────────────────────────────────────────
 
 def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -> str:
-    """生成人类可读的 HTML 分析报告"""
+    """Generate a human-readable HTML analysis report"""
     summary = analysis.get("summary", "No summary available")
     key_diffs = analysis.get("keyDifferences", [])
     kw_coverage = analysis.get("keywordCoverage", {})
     quality_issues = analysis.get("qualityIssues", [])
     recommendations = analysis.get("recommendations", [])
 
-    # 构建 HTML 片段
+    # Build HTML fragments
     diffs_html = ""
     for i, d in enumerate(key_diffs, 1):
         diffs_html += f'<li class="diff-item">{d}</li>\n'
@@ -385,7 +385,7 @@ class HelpfileAnalyzerTool(ToolPlugin):
 
         t0 = time.perf_counter()
 
-        # ── 1. 检查 Ollama 服务 ────────────────────────────────
+        # ── 1. Check the Ollama service ────────────────────────────────
         health = await _ollama_health_check(ollama_url)
         if not health["online"]:
             return ToolResult(
@@ -394,11 +394,11 @@ class HelpfileAnalyzerTool(ToolPlugin):
                       f" Please ensure Ollama is running at {ollama_url}",
             )
 
-        # 检查模型是否可用
+        # Check whether the model is available
         available_models = health.get("models", [])
         model_found = any(ollama_model in m for m in available_models)
         if not model_found and available_models:
-            # 尝试使用第一个可用模型
+            # Try to use the first available model
             fallback_model = available_models[0]
             log.warning(
                 "helpfile_analyzer.model_not_found",
@@ -410,11 +410,11 @@ class HelpfileAnalyzerTool(ToolPlugin):
 
         log.info("helpfile_analyzer.start", model=ollama_model, files=len(txt_files))
 
-        # ── 2. 构建分析上下文 ──────────────────────────────────
+        # ── 2. Build the analysis context ──────────────────────────────────
         context = _build_analysis_context(txt_files, keywords, comparison_results)
         messages = _build_ai_prompt(context)
 
-        # ── 3. 调用本地 AI 模型 ────────────────────────────────
+        # ── 3. Call the local AI model ────────────────────────────────
         try:
             raw_response = await _ollama_chat(ollama_url, ollama_model, messages, timeout_sec=120)
         except Exception as e:
@@ -423,14 +423,14 @@ class HelpfileAnalyzerTool(ToolPlugin):
                 error=f"ollama_chat_error:{e}",
             )
 
-        # ── 4. 解析 AI 响应 ────────────────────────────────────
+        # ── 4. Parse the AI response ────────────────────────────────────
         analysis = _parse_ai_response(raw_response)
         duration_ms = int((time.perf_counter() - t0) * 1000)
 
         log.info("helpfile_analyzer.complete", duration_ms=duration_ms)
 
-        # ── 5. 保存报告 ────────────────────────────────────────
-        # JSON 报告
+        # ── 5. Save reports ────────────────────────────────────────
+        # JSON report
         report_json = {
             "ai_analysis": analysis,
             "model_used": ollama_model,
@@ -441,7 +441,7 @@ class HelpfileAnalyzerTool(ToolPlugin):
         json_path = output_folder / "ai_analysis_report.json"
         json_path.write_text(json.dumps(report_json, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # HTML 报告
+        # HTML report
         html_content = _generate_analysis_html(analysis, ollama_model, duration_ms)
         html_path = output_folder / "ai_analysis_report.html"
         html_path.write_text(html_content, encoding="utf-8")

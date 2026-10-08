@@ -19,8 +19,8 @@ class ExecutionQueue:
 
 
 class SerialExecutionQueue(ExecutionQueue):
-    """A 级起步：串行执行，每个 execution 一个 asyncio.Lock per user，避免 Selenium Chrome 冲突。
-    接口和 Parallel 一致，未来换 RedisParallelQueue 不影响调用方。"""
+    """Level-A starting point: serial execution, one asyncio.Lock per user for each execution, to avoid Selenium Chrome conflicts.
+    The interface matches Parallel, so switching to RedisParallelQueue later does not affect callers."""
 
     def __init__(self, tool_registry: ToolRegistry, storage: StorageAsync | None = None):
         self._registry = tool_registry
@@ -82,7 +82,7 @@ class SerialExecutionQueue(ExecutionQueue):
 
 
 async def _emit(on_event: Callable[[dict], Any], evt: dict) -> None:
-    """on_event 允许是同步函数或 async 函数（tools_router 传入 async 回调）。"""
+    """on_event may be a sync function or an async function (tools_router passes an async callback)."""
     ret = on_event(evt)
     if asyncio.iscoroutine(ret):
         await ret

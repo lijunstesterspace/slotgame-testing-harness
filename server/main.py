@@ -18,10 +18,10 @@ from server.tools.impl import BUILTIN_TOOLS
 
 
 # ---------------------------------------------------------------------------
-# 静态文件目录：Vite 构建产物位于 server/static（开发时可能不存在）
+# Static file directory: Vite build output lives in server/static (may not exist during development)
 # ---------------------------------------------------------------------------
 def _resolve_static_dir() -> Path | None:
-    """返回前端构建产物目录，不存在则返回 None。"""
+    """Return the frontend build output directory, or None if it does not exist."""
     import sys
     if getattr(sys, 'frozen', False):
         meipass = Path(sys._MEIPASS)
@@ -33,7 +33,7 @@ def _resolve_static_dir() -> Path | None:
         for c in candidates:
             if c.is_dir() and (c / "index.html").exists():
                 return c
-    # 开发 / 源码模式
+    # Development / source mode
     src = Path(__file__).resolve().parent / "static"
     if src.is_dir() and (src / "index.html").exists():
         return src
@@ -90,8 +90,8 @@ class SharedDeps:
 
 shared = SharedDeps()
 
-# NOTE: routers 模块级执行 `from server.main import shared`，
-# 必须在 shared 定义之后再导入，否则部分初始化的模块会导致 ImportError。
+# NOTE: routers run `from server.main import shared` at module level,
+# so they must be imported after shared is defined, otherwise the partially initialized module causes ImportError.
 from server.api.tools_router import router as tools_router  # noqa: E402
 from server.api.executions_router import router as executions_router  # noqa: E402
 from server.api.records_router import router as records_router  # noqa: E402
@@ -133,20 +133,20 @@ async def healthz():
 
 @app.get("/api/status")
 async def api_status():
-    """API 状态接口（替代原 / 路由，避免与前端冲突）。"""
+    """API status endpoint (replaces the original / route to avoid conflicting with the frontend)."""
     return {"name": settings.app_name, "status": "ok",
             "docs": "/docs", "health": "/healthz"}
 
 
 # ---------------------------------------------------------------------------
-# 静态文件托管：使用 FileResponse（兼容 PyInstaller 打包环境）
+# Static file hosting: uses FileResponse (compatible with the PyInstaller packaged environment)
 # ---------------------------------------------------------------------------
 def _serve_static(file_path: Path) -> FileResponse | None:
-    """安全地返回静态文件，防止路径遍历攻击。"""
+    """Safely return a static file, preventing path traversal attacks."""
     if STATIC_DIR is None:
         return None
     resolved = (STATIC_DIR / file_path).resolve()
-    # 确保请求的文件在 STATIC_DIR 内
+    # Ensure the requested file is inside STATIC_DIR
     if not str(resolved).startswith(str(STATIC_DIR.resolve())):
         return None
     if resolved.is_file():
@@ -154,21 +154,21 @@ def _serve_static(file_path: Path) -> FileResponse | None:
     return None
 
 
-# 精确匹配前端构建产物中的文件
+# Exact match for files in the frontend build output
 @app.get("/assets/{filename:path}")
 async def _serve_assets(filename: str):
-    """服务 Vite 构建的 JS/CSS 资源文件。"""
+    """Serve JS/CSS asset files built by Vite."""
     resp = _serve_static(Path("assets") / filename)
     if resp:
         return resp
     return JSONResponse({"error": "not_found"}, status_code=404)
 
 
-# SPA catch-all：所有未匹配的 GET 请求返回 index.html
+# SPA catch-all: all unmatched GET requests return index.html
 @app.get("/{path:path}")
 async def _spa_catch_all(path: str, request: Request):
-    """SPA 路由 fallback：将前端路由请求返回 index.html。"""
-    # 如果请求的是 API 或 docs，不拦截（FastAPI 会优先匹配具体路由）
+    """SPA route fallback: return index.html for frontend route requests."""
+    # Do not intercept API or docs requests (FastAPI matches specific routes first)
     if path.startswith("api/") or path.startswith("docs") or path.startswith("openapi"):
         return JSONResponse({"error": "not_found"}, status_code=404)
     if STATIC_DIR is not None:

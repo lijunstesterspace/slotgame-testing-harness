@@ -1,4 +1,4 @@
-"""Plugin: portugal_plugin_reporter — 对 portugal_plugin_parser 结果做一致性检查并输出 TXT / JSON / HTML 报告
+"""Plugin: portugal_plugin_reporter — runs consistency checks on portugal_plugin_parser results and outputs TXT / JSON / HTML reports
 
 The TXT report is the exact "Parsed Results" text of ppvACCR1.0.py. The consistency checks are
 advisory only (they add findings, they never fail the step) — the original tool had no checks, so

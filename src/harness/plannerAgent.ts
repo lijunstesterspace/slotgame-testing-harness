@@ -2,17 +2,17 @@ import type { LlmProviderConfig } from "../types";
 import { createPlannerProvider, PlannerProvider, ChatMessage } from "./plannerProvider";
 
 /**
- * PlannerAgent — 收窄后的语义辅助单元（设计文档第1.2 / 10.7 / 11 节定义的AI职责边界）。
+ * PlannerAgent - a narrowed semantic helper unit (AI responsibility boundary defined in sections 1.2 / 10.7 / 11 of the design doc).
  *
- * 它不驱动流水线执行，也不决定"下一步该调用哪个工具"——那完全是 ExecutionEngine +
- * pipelineRegistry.ts 的职责（声明式定义、代码固化调度）。PlannerAgent 只承担三类
- * 轻量语义任务里的两类：
- *   - 简单对话交互（clarify）：向用户澄清缺失参数
- *   - 分析报告生成（summarizeStepResult）：把某个 Plugin 步骤的结构化结果整理成简明文本
- * 第三类"任务分类与推流"目前由各 Plugin 内部的确定性代码完成（见对应 agents/*.md 的
- * "Domain Reference" 部分），暂不需要在这里额外调用模型。
+ * It does not drive pipeline execution, nor decide "which tool to call next" - that is entirely the job of ExecutionEngine +
+ * pipelineRegistry.ts (declarative definitions, scheduling fixed in code). PlannerAgent only handles two of the three
+ * lightweight semantic task types:
+ *   - Simple conversational interaction (clarify): ask the user to clarify missing parameters
+ *   - Analysis report generation (summarizeStepResult): turn a Plugin step's structured result into concise text
+ * The third type, "task classification and routing", is currently done by deterministic code inside each Plugin (see the
+ * "Domain Reference" section of the corresponding agents/*.md), so no extra model call is needed here for now.
  *
- * 这两个方法都是单轮、无工具调用、无多步规划的调用——模型只回答，不执行。
+ * Both methods are single-turn calls with no tool calls and no multi-step planning - the model only answers, it does not act.
  */
 export class PlannerAgent {
   private readonly provider: PlannerProvider;
@@ -32,8 +32,8 @@ export class PlannerAgent {
   }
 
   /**
-   * 简单对话交互：给定场景上下文和一个问题，返回模型的单轮回答。
-   * 不做工具调用、不做多轮规划，只用于澄清缺失参数一类的轻量交互。
+   * Simple conversational interaction: given scenario context and a question, return the model's single-turn answer.
+   * No tool calls and no multi-turn planning; only for lightweight interactions such as clarifying missing parameters.
    */
   async clarify(scenarioContext: string, question: string, signal?: AbortSignal): Promise<string> {
     const messages: ChatMessage[] = [
@@ -52,9 +52,9 @@ export class PlannerAgent {
   }
 
   /**
-   * 分析报告生成：把一个 Pipeline 步骤的结构化结果整理成简明的分析/诊断文本。
-   * 输入是已经由代码/Plugin 产出的确定性结果，模型只负责归纳成人类可读的总结，
-   * 不参与该步骤"做了什么"的决策。
+   * Analysis report generation: turn a Pipeline step's structured result into concise analysis/diagnosis text.
+   * The input is a deterministic result already produced by code/Plugin; the model only condenses it into a human-readable summary
+   * and takes no part in deciding "what the step did".
    */
   async summarizeStepResult(
     scenarioContext: string,

@@ -213,8 +213,8 @@ def _parse_skill_frontmatter(text: str) -> dict:
         m = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
         if m:
             title = m.group(1).strip()
-    # Get description from "## 1. 核心定位" or first paragraph after title
-    m = re.search(r"##\s*\d+\.\s*核心定位\s*\n+(.+)", text)
+    # Get description from the "## 1. Core Purpose" section (older files use the Chinese heading 核心定位) or first paragraph after title
+    m = re.search(r"##\s*\d+\.\s*(?:Core Purpose|核心定位)\s*\n+(.+)", text)
     if m:
         description = m.group(1).strip()
     else:

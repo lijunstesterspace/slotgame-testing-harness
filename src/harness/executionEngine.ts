@@ -103,9 +103,13 @@ export class ExecutionEngine {
           await this.executeStep(stepDef, stepRecord);
         }
 
-        // Check whether any step in the stage failed
+        // Check whether any required step in the stage failed; optional steps only warn
         const stageFailed = stage.some((s) => {
           const rec = this.findStepRecord(s.id);
+          if (rec?.status === "failed" && s.optional) {
+            this.callbacks.onLog(`Optional step "${s.label}" failed — continuing without it`);
+            return false;
+          }
           return rec && rec.status === "failed";
         });
 

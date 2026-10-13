@@ -65,19 +65,50 @@ Defines the interface contract between the Helpfile conversion analysis Plugin t
 }
 ```
 
-## 4. helpfile_analyzer Interface Contract
+## 4a. helpfile_report Interface Contract
 
-**Function:** Call the local AI model (Ollama) to analyze conversion and comparison results and generate an analysis report
+**Function:** Build the deterministic comparison report (no AI): file inventory, keyword counts per file
+and differences vs the baseline. This report is always produced, even when no local model is available.
 
 **Input parameters:**
 | Parameter | Type | Required | Description |
 |--------|------|------|------|
 | `txt_files` | array | Yes | List of TXT file paths `[{subdir_name, txt_path}]` |
 | `keywords` | array | Yes | List of analysis keywords |
+| `output_folder` | string | Yes | Output path for the report |
 | `comparison_results` | array | No | Comparison results output by diff_comparator |
+| `baseline_file` | string | No | Baseline TXT path (from html_to_text_converter) |
+| `excel_report` | string | No | diff_comparator's Excel path, linked from the HTML |
+
+**Output structure:**
+```json
+{
+  "success": true,
+  "content": {
+    "report_html_path": "/output/helpfile_report.html",
+    "report_json_path": "/output/helpfile_report.json",
+    "files_count": 5,
+    "changed_count": 2,
+    "missing_keywords": ["keyword2"]
+  }
+}
+```
+
+## 4b. helpfile_analyzer Interface Contract
+
+**Function:** Call the local AI model (Ollama) to analyze `helpfile_report.json` and write an AI analysis
+report. Optional pipeline step: if it fails, the pipeline still completes with the 4a report.
+
+**Input parameters:**
+| Parameter | Type | Required | Description |
+|--------|------|------|------|
+| `report_json_path` | string | Yes | `helpfile_report.json` written by helpfile_report |
 | `output_folder` | string | Yes | Output path for analysis report |
 | `ollama_base_url` | string | No | Ollama service URL, default `http://localhost:11434` |
-| `ollama_model` | string | No | Model name, default `qwen3:latest` |
+| `ollama_model` | string | No | Model name, default `qwen3:latest` (the pipeline passes the model selected in the UI) |
+
+The call uses `think: false` and `format: "json"`; reasoning models otherwise spend minutes thinking
+on a local CPU before answering.
 
 **Output structure:**
 ```json
@@ -87,10 +118,6 @@ Defines the interface contract between the Helpfile conversion analysis Plugin t
     "ai_analysis": {
       "summary": "Overall content comparison summary...",
       "keyDifferences": ["Difference 1...", "Difference 2..."],
-      "keywordCoverage": {
-        "keyword1": {"total": 15, "files_with_hits": 4, "files_without_hits": 1},
-        "keyword2": {"total": 0, "files_with_hits": 0, "files_without_hits": 5}
-      },
       "qualityIssues": ["Issue 1...", "Issue 2..."],
       "recommendations": ["Recommendation 1...", "Recommendation 2..."]
     },
@@ -107,4 +134,5 @@ Defines the interface contract between the Helpfile conversion analysis Plugin t
 The Agent must call tools in the following order:
 1. `html_to_text_converter` → batch convert HTML to TXT
 2. `diff_comparator` → diff comparison + keyword highlighting + Excel statistics
-3. `helpfile_analyzer` → call local AI to generate the analysis report
+3. `helpfile_report` → deterministic HTML/JSON report (always produced)
+4. `helpfile_analyzer` → optional: local AI analyzes the report

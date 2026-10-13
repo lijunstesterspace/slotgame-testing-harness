@@ -38,7 +38,8 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
   easyhelp_checking: [
     { id: 't1-1', stage: 1, title: 'HTML to Text Conversion', description: 'Batch convert HTML help files to clean plain text', status: 'pending' },
     { id: 't1-2', stage: 1, title: 'Version Diff Comparison', description: 'Compare help file versions and highlight keyword differences', status: 'pending' },
-    { id: 't1-3', stage: 1, title: 'AI Analysis Report', description: 'Generate AI-powered analysis report with quality issues', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'HTML Report', description: 'Write the comparison report: keyword coverage per file and differences vs baseline', status: 'pending' },
+    { id: 't1-4', stage: 1, title: 'AI Analysis of Report', description: 'Optional: local model summarizes the report and flags quality issues', status: 'pending' },
   ],
   portugal_plugin: [
     { id: 't1-1', stage: 1, title: 'Resolve Symbol Mapping', description: "Import the attached Output Guide (.md) or use the stored map for this module", status: 'pending' },
@@ -244,6 +245,8 @@ const Workbench: React.FC = () => {
     },
     onStepFail: (stepId, error) => {
       addLog({ type: "TOOL_RES", toolName: stepId, content: stepId, detail: error, status: "error" });
+      // TOOL_RES only shows under "Tool Payloads"; echo the reason in the main COT log too
+      addLog({ type: "HARNESS_EVENT", content: `Step "${stepId}" failed: ${error}`, status: "error" });
     },
     onStatusChange: () => {},
     onLog: (message) => addLog({ type: "HARNESS_EVENT", content: message }),
@@ -556,6 +559,11 @@ const Workbench: React.FC = () => {
         extraParams.sourceFolder = folderPath;
         extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
         extraParams.keywords = promptIntent.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
+        // Analyze with the model picked in the UI; only meaningful when the provider is the local Ollama
+        if (plannerCfg.provider === "OLLAMA") {
+          extraParams.ollamaModel = selectedModel;
+          extraParams.ollamaBaseUrl = plannerCfg.baseUrl;
+        }
       }
 
       addLog({ type: "HARNESS_EVENT", content: `Running fixed pipeline "${pipeline.name}" (${pipeline.stages.length} stage(s))` });
@@ -649,6 +657,25 @@ const Workbench: React.FC = () => {
         });
       }
 
+      // easyhelp_checking: the HTML report always exists; the AI analysis only if the local model answered.
+      const helpReport = stepResults.report as
+        | { report_html_path: string; files_count: number; changed_count: number; missing_keywords: string[] }
+        | undefined;
+      if (helpReport) {
+        addLog({
+          type: "HARNESS_EVENT",
+          content:
+            `Helpfile report: ${helpReport.files_count} file(s), ${helpReport.changed_count} differ from baseline` +
+            (helpReport.missing_keywords.length ? `, keyword gaps: ${helpReport.missing_keywords.join(", ")}` : "") +
+            `. Report: ${helpReport.report_html_path}`,
+          status: helpReport.missing_keywords.length ? "warning" : "success",
+        });
+        const aiReport = stepResults.analyze as { report_html_path: string; model_used: string } | undefined;
+        addLog(aiReport
+          ? { type: "HARNESS_EVENT", content: `AI analysis (${aiReport.model_used}): ${aiReport.report_html_path}`, status: "success" }
+          : { type: "HARNESS_EVENT", content: "AI analysis skipped — the HTML report above is complete without it.", status: "warning" });
+      }
+
       // The real work (parse/generate/package etc.) is already done — let the user see
       // "completed" immediately. The AI summary below is decorative and must never make
       // them wait on a slow/cold-starting LLM for something that already succeeded.
@@ -662,7 +689,8 @@ const Workbench: React.FC = () => {
       const lastStage = pipeline.stages[pipeline.stages.length - 1];
       const lastStep = lastStage[lastStage.length - 1];
       const lastResult = stepResults[lastStep.id];
-      if (lastResult !== undefined) {
+      // easyhelp_checking already ran its own AI step; don't stack a second LLM summary on top
+      if (lastResult !== undefined && selectedScenarioId !== "easyhelp_checking") {
         planner
           .summarizeStepResult(getScenarioSystemPrompt(selectedScenarioId), lastStep.label, lastResult, controller.signal)
           .then((summary) => {

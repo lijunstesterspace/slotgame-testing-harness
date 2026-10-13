@@ -9,18 +9,19 @@ The `helpfile-conversion-pipeline` (see `src/harness/pipelineRegistry.ts`) decla
 order:
 
 ```
-convert (html_to_text_converter)  →  compare (diff_comparator)  →  analyze (helpfile_analyzer)
+convert (html_to_text_converter)  →  compare (diff_comparator)  →  report (helpfile_report)  →  analyze (helpfile_analyzer, optional)
 ```
 
-`ExecutionEngine` calls these three Plugins in this exact order, every time. The AI never decides
+`ExecutionEngine` calls these four Plugins in this exact order, every time. The AI never decides
 which Plugin runs next. Conversion (Rule 1) and diffing/keyword-highlighting (Rules 2-3) are
 implemented as **deterministic code** inside `server/tools/impl/html_to_text_converter_tool.py`
-and `server/tools/impl/diff_comparator_tool.py`.
+and `server/tools/impl/diff_comparator_tool.py`, and the HTML report is written by deterministic code in
+`server/tools/impl/helpfile_report_tool.py`.
 
 The one place a model genuinely runs in this scenario is **Rule 4 below** — and it already lives
 entirely server-side, inside the `helpfile_analyzer` Plugin
 (`server/tools/impl/helpfile_analyzer_tool.py`), which calls a local Ollama model directly with the
-conversion + diff results. This frontend `PlannerAgent` class is not involved in that call at all;
+report written by `helpfile_report`. This frontend `PlannerAgent` class is not involved in that call at all;
 it is documented here so the prompt/rule design for that server-side call stays traceable to one
 place.
 
@@ -29,13 +30,12 @@ place.
 For this scenario, AI involvement is:
 
 - **Analysis-report generation** (bucket 3 of the AI's role) — implemented server-side in the
-  `helpfile_analyzer` Plugin (see Rule 4), and optionally echoed to the user as a short frontend
-  summary via `PlannerAgent.summarizeStepResult()` after the pipeline completes.
+  `helpfile_analyzer` Plugin (see Rule 4).
 
 It never decides which files to scan, never picks the baseline, and never does the keyword
 diffing — all of that is 100% code, and the pipeline still produces TXT/diff/Excel output even if
-the AI analysis step is unavailable (it is the only step allowed to fail without failing the whole
-pipeline, per its Plugin's own error handling).
+the AI analysis step is unavailable: it is declared `optional: true` in the pipeline, so its failure
+is logged as a warning and the pipeline still completes with `helpfile_report.html`.
 
 ---
 
@@ -66,16 +66,16 @@ pipeline, per its Plugin's own error handling).
 - Falls back to global regex replacement if BeautifulSoup parsing fails.
 
 ### Rule 4: AI Analysis Report (the actual model call — implemented in `helpfile_analyzer_tool.py`)
-- After conversion and comparison, this Plugin invokes a local Ollama model directly (server-side,
-  via `ollama_base_url` / `ollama_model` params — no frontend PlannerAgent involved).
+- After `helpfile_report` has written `helpfile_report.json`, this Plugin reads it and invokes a local
+  Ollama model directly (server-side, via `ollama_base_url` / `ollama_model` params — no frontend
+  PlannerAgent involved).
 - It provides the model with:
-  - The file list and keyword-count summary
-  - Key diff snippets (top N most-changed sections)
-  - Keyword coverage statistics
+  - The file list
+  - Keyword coverage per file (already counted in code — the model must not recount)
+  - Diff lines vs the baseline (removed / added excerpts)
 - The model is asked to generate a structured analysis containing:
   - `summary`: overall content-comparison summary
   - `keyDifferences`: major content differences identified
-  - `keywordCoverage`: keyword distribution analysis
   - `qualityIssues`: potential inconsistencies or missing content
   - `recommendations`: actionable suggestions for improvement
 - The prompt for this call must stay tightly constrained (single JSON schema, low temperature,
@@ -98,6 +98,10 @@ Generated output package in `{output_folder}/`:
 **Keyword Analysis:**
 - `output.xlsx` — Excel workbook with keyword count per file
 
-**AI Analysis Report:**
+**Comparison Report (always produced, no AI):**
+- `helpfile_report.json` — file inventory, keyword coverage per file, diff excerpts vs baseline
+- `helpfile_report.html` — human-readable version of the above
+
+**AI Analysis Report (only when the local model answered):**
 - `ai_analysis_report.json` — structured AI analysis result
 - `ai_analysis_report.html` — human-readable HTML report with AI insights

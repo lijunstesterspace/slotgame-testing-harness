@@ -176,6 +176,11 @@ export interface PipelineStepDef {
   retryOnFail: boolean;
   maxRetries: number;
   /**
+   * Best-effort step: if it fails, the pipeline logs a warning and still completes.
+   * Use for extras (e.g. local-AI analysis) whose absence must not cost the user the main output.
+   */
+  optional?: boolean;
+  /**
    * Declarative param builder: maps start params + outputs of previous steps to the inputs this Plugin call needs.
    * Adding/adjusting a scenario's execution only requires writing mapping rules here, not changing ExecutionEngine code,
    * and the AI never has to decide "what params to pass for this step".

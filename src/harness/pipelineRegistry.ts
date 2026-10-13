@@ -114,7 +114,7 @@ export const PIPELINES: PipelineDef[] = [
   {
     id: "helpfile-conversion-pipeline",
     name: "Helpfile Conversion & Analysis",
-    description: "Convert HTML help files to text → diff-compare against baseline → generate AI analysis report",
+    description: "Convert HTML help files to text → diff-compare against baseline → HTML report → optional local-AI analysis",
     stages: [
       // Stage 0: Convert
       [
@@ -153,14 +153,13 @@ export const PIPELINES: PipelineDef[] = [
           }),
         },
       ],
-      // Stage 2: AI Analysis (analysis-report generation only — the actual model call
-      // happens server-side inside the helpfile_analyzer Plugin, not in this frontend layer)
+      // Stage 2: Report — deterministic HTML/JSON report, no AI. Always produced.
       [
         {
-          id: "analyze",
-          plugin: "helpfile_analyzer",
-          label: "AI Analysis Report",
-          description: "Generate an AI-assisted analysis report from the conversion + diff results",
+          id: "report",
+          plugin: "helpfile_report",
+          label: "Generate HTML Report",
+          description: "Write helpfile_report.html: file inventory, keyword coverage per file, differences vs baseline",
           dependsOn: ["compare"],
           retryOnFail: false,
           maxRetries: 0,
@@ -172,6 +171,29 @@ export const PIPELINES: PipelineDef[] = [
             keywords: extraParams.keywords ?? [],
             output_folder: extraParams.outputFolder ?? "",
             comparison_results: (stepResults.compare as { comparisons?: unknown[] } | undefined)?.comparisons ?? [],
+            baseline_file: (stepResults.convert as { baseline_file?: string } | undefined)?.baseline_file ?? "",
+            excel_report: (stepResults.compare as { excel_report?: string } | undefined)?.excel_report ?? "",
+          }),
+        },
+      ],
+      // Stage 3: AI Analysis — optional. The local model reads the report from stage 2; if Ollama is
+      // down or too slow the pipeline still completes and the user keeps the stage-2 report.
+      [
+        {
+          id: "analyze",
+          plugin: "helpfile_analyzer",
+          label: "AI Analysis of Report",
+          description: "Ask the local model to summarize the report and flag quality issues",
+          dependsOn: ["report"],
+          retryOnFail: false,
+          maxRetries: 0,
+          optional: true,
+          buildParams: ({ extraParams, stepResults }) => ({
+            report_json_path: (stepResults.report as { report_json_path?: string } | undefined)?.report_json_path ?? "",
+            output_folder: extraParams.outputFolder ?? "",
+            // Omitted when unset so the plugin's own defaults apply
+            ...(extraParams.ollamaModel ? { ollama_model: extraParams.ollamaModel } : {}),
+            ...(extraParams.ollamaBaseUrl ? { ollama_base_url: extraParams.ollamaBaseUrl } : {}),
           }),
         },
       ],

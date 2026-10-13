@@ -51,6 +51,40 @@ def _start_server():
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Server failed: {e}\n{traceback.format_exc()}\n")
 
 
+class _DesktopApi:
+    """Exposed to the page as window.pywebview.api.* — native dialogs return real absolute paths,
+    which a browser <input type=file> never does. The window is stored with a leading underscore
+    so pywebview does not try to expose it to JS as well."""
+
+    def __init__(self):
+        self._window = None
+
+    def pick_folder(self) -> str:
+        import webview
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        return result[0] if result else ""
+
+    def pick_html_files(self) -> list:
+        import webview
+        result = self._window.create_file_dialog(
+            webview.FileDialog.OPEN,
+            allow_multiple=True,
+            file_types=("HTML files (*.html;*.htm)", "All files (*.*)"),
+        )
+        return list(result) if result else []
+
+    def open_path(self, path: str) -> bool:
+        """Open a report or output folder with the Windows default handler. Limited to folders and
+        report-type files so the page cannot launch arbitrary executables."""
+        p = Path(path)
+        if not p.exists():
+            return False
+        if p.is_file() and p.suffix.lower() not in (".html", ".htm", ".xlsx", ".txt", ".json", ".png"):
+            return False
+        os.startfile(str(p))
+        return True
+
+
 def _open_webview():
     """Wait for the server to be ready, then open the desktop window with pywebview."""
     import webview
@@ -77,7 +111,9 @@ def _open_webview():
     page_url = f"{url}/"
 
     # Create the pywebview window
+    api = _DesktopApi()
     window = webview.create_window(
+        js_api=api,
         title=settings.app_name,
         url=page_url,
         width=1280,
@@ -86,6 +122,7 @@ def _open_webview():
         resizable=True,
         fullscreen=False,
     )
+    api._window = window
     webview.start(debug=False)
 
 

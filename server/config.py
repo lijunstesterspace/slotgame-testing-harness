@@ -21,12 +21,14 @@ load_dotenv(_env_path)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SERVER_DIR = Path(__file__).resolve().parent
-DATA_DIR = SERVER_DIR / "data"
+# A one-file exe unpacks into a temp _MEIxxxx folder that Windows deletes on exit — keep the DB,
+# uploads and reports next to the exe instead so History and outputs survive a restart.
+DATA_DIR = (Path(sys.executable).parent / "data") if getattr(sys, "frozen", False) else SERVER_DIR / "data"
 RUNS_DIR = DATA_DIR / "runs"
 ARTIFACTS_DIR = DATA_DIR / "artifacts"
 DB_PATH = DATA_DIR / "harness.db"
 
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 

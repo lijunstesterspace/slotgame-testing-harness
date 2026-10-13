@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
@@ -184,6 +185,36 @@ async def upload_folder(files: list[UploadFile] = File(...), user=Depends(requir
         saved_count += 1
 
     return {"folder": str(upload_dir), "count": saved_count}
+
+
+class StageLocalFilesReq(BaseModel):
+    paths: list[str]
+
+
+@router.post("/stage-local-files")
+async def stage_local_files(req: StageLocalFilesReq, user=Depends(require_user())):
+    """Desktop app only: loose HTML files picked with the native dialog arrive as real absolute
+    paths. Copy each to <staging>/<stem>/index.html so html_to_text_converter sees its usual
+    layout, and report the files' own folder so outputs can be written next to the inputs."""
+    from server.config import RUNS_DIR
+    import uuid
+
+    upload_dir = (RUNS_DIR / "uploads" / uuid.uuid4().hex).resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_count = 0
+    source_dir = ""
+    for raw in req.paths:
+        src = Path(raw)
+        if not src.is_file() or src.suffix.lower() not in (".html", ".htm"):
+            continue
+        dest = upload_dir / src.stem / "index.html"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        saved_count += 1
+        source_dir = source_dir or str(src.parent)
+
+    return {"folder": str(upload_dir), "count": saved_count, "source_dir": source_dir}
 
 
 # ---------------------------------------------------------------------------

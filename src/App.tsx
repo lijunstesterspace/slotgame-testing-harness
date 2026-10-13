@@ -4,6 +4,7 @@ import { Sidebar } from "./components/Sidebar";
 import { PipelineVisualization } from "./components/PipelineVisualization";
 import { ExecutionConsole } from "./components/ExecutionConsole";
 import { TestDataPreview } from "./components/TestDataPreview";
+import { EasyHelpReviewPanel, type EasyHelpResult } from "./components/EasyHelpReviewPanel";
 import { VerificationReportModal } from "./components/VerificationReportModal";
 import { LlmConfigModal } from "./components/LlmConfigModal";
 import { LlmConfigPage } from "./pages/LlmConfigPage";
@@ -136,6 +137,11 @@ const Workbench: React.FC = () => {
   const [modelOpen, setModelOpen] = useState(false);
   const [loginName, setLoginName] = useState<string>("");
   const [folderPath, setFolderPath] = useState<string>("");
+  // easyhelp_checking: where reports go when it differs from `${folderPath}\_easyhelp_output`
+  // (loose files picked natively are staged elsewhere but their reports belong next to them)
+  const [helpOutputFolder, setHelpOutputFolder] = useState<string>("");
+  // Result of the last easyhelp_checking run, shown in the right panel in place of TestDataPreview
+  const [easyHelpResult, setEasyHelpResult] = useState<EasyHelpResult | null>(null);
   const [uploadingFolder, setUploadingFolder] = useState(false);
   const [testdataFiles, setTestdataFiles] = useState<TestdataFileInfo[]>([]);
   const [selectedTestdataFiles, setSelectedTestdataFiles] = useState<TestdataFileInfo[]>([]);
@@ -451,6 +457,7 @@ const Workbench: React.FC = () => {
         setPromptIntent((prev) => (prev ? `${prev}\n${reply}` : reply));
       } else if (clarifyState.field === "folderPath") {
         setFolderPath(reply);
+        setHelpOutputFolder("");
       }
     }
     setClarifyState(null);
@@ -557,7 +564,7 @@ const Workbench: React.FC = () => {
         }
       } else if (selectedScenarioId === "easyhelp_checking") {
         extraParams.sourceFolder = folderPath;
-        extraParams.outputFolder = folderPath ? `${folderPath}\\_easyhelp_output` : "";
+        extraParams.outputFolder = helpOutputFolder || (folderPath ? `${folderPath}\\_easyhelp_output` : "");
         extraParams.keywords = promptIntent.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
         // Analyze with the model picked in the UI; only meaningful when the provider is the local Ollama
         if (plannerCfg.provider === "OLLAMA") {
@@ -569,6 +576,7 @@ const Workbench: React.FC = () => {
       addLog({ type: "HARNESS_EVENT", content: `Running fixed pipeline "${pipeline.name}" (${pipeline.stages.length} stage(s))` });
 
       const engine = new ExecutionEngine(harnessClient, engineCallbacks);
+      setEasyHelpResult(null);
       const finalCtx = await engine.run(pipeline, selectedScenarioId, promptIntent, extraParams, controller.signal);
       if (finalCtx.status !== "completed") {
         throw new Error(`Pipeline ended with status: ${finalCtx.status}`);
@@ -670,10 +678,26 @@ const Workbench: React.FC = () => {
             `. Report: ${helpReport.report_html_path}`,
           status: helpReport.missing_keywords.length ? "warning" : "success",
         });
-        const aiReport = stepResults.analyze as { report_html_path: string; model_used: string } | undefined;
+        const aiReport = stepResults.analyze as
+          | { report_html_path: string; model_used: string; ai_analysis?: { summary?: unknown; qualityIssues?: unknown } }
+          | undefined;
         addLog(aiReport
           ? { type: "HARNESS_EVENT", content: `AI analysis (${aiReport.model_used}): ${aiReport.report_html_path}`, status: "success" }
           : { type: "HARNESS_EVENT", content: "AI analysis skipped — the HTML report above is complete without it.", status: "warning" });
+        const issues = aiReport?.ai_analysis?.qualityIssues;
+        setEasyHelpResult({
+          outputFolder: helpReport.report_html_path.replace(/[\\/][^\\/]*$/, ""),
+          reportHtmlPath: helpReport.report_html_path,
+          filesCount: helpReport.files_count,
+          changedCount: helpReport.changed_count,
+          missingKeywords: helpReport.missing_keywords,
+          ai: aiReport && {
+            model: aiReport.model_used,
+            htmlPath: aiReport.report_html_path,
+            summary: String(aiReport.ai_analysis?.summary ?? ""),
+            qualityIssues: Array.isArray(issues) ? issues.map(String) : issues ? [String(issues)] : [],
+          },
+        });
       }
 
       // The real work (parse/generate/package etc.) is already done — let the user see
@@ -749,9 +773,11 @@ const Workbench: React.FC = () => {
     setError(null);
     setSelectedScenarioId("testdata_generation");
     setFolderPath("");
+    setHelpOutputFolder("");
     setTestdataFiles([]);
     setSelectedTestdataFiles([]);
     setSymbolGuide(null);
+    setEasyHelpResult(null);
   };
 
   const handleSaveLlmConfig = (cfg: LlmProviderConfig) => {
@@ -770,8 +796,56 @@ const Workbench: React.FC = () => {
   // its files' *content* (plus each file's relative path via webkitRelativePath). So we upload
   // the content and let the backend recreate the subdir/index.html structure at a real path —
   // no manual path typing, no "please paste the path" system alert. ──
-  const handleSelectFolderUpload = () => folderUploadInputRef.current?.click();
-  const handleSelectHelpFilesFlat = () => helpFilesFlatUploadInputRef.current?.click();
+  // In the packaged desktop app (pywebview) native dialogs give real absolute paths, so the run
+  // reads the user's own folder and writes _easyhelp_output next to it. A plain browser (dev mode)
+  // still falls back to uploading, whose output then lands in the server's staging folder.
+  const desktopApi = () =>
+    (window as any).pywebview?.api as
+      | { pick_folder?: () => Promise<string>; pick_html_files?: () => Promise<string[]> }
+      | undefined;
+
+  const handleSelectFolderUpload = async () => {
+    const api = desktopApi();
+    if (!api?.pick_folder) {
+      folderUploadInputRef.current?.click();
+      return;
+    }
+    const folder = await api.pick_folder();
+    if (!folder) return;
+    setError(null);
+    setFolderPath(folder);
+    setHelpOutputFolder(`${folder}\\_easyhelp_output`);
+  };
+
+  const handleSelectHelpFilesFlat = async () => {
+    const api = desktopApi();
+    if (!api?.pick_html_files) {
+      helpFilesFlatUploadInputRef.current?.click();
+      return;
+    }
+    const paths = await api.pick_html_files();
+    if (!paths?.length) return;
+    setUploadingFolder(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/tools/stage-local-files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.count) {
+        setError(res.ok ? "None of the selected files were HTML files." : `Staging failed: ${data.detail ?? res.status}`);
+        return;
+      }
+      setFolderPath(data.folder);
+      setHelpOutputFolder(data.source_dir ? `${data.source_dir}\\_easyhelp_output` : "");
+    } catch (err: any) {
+      setError(`Network error: ${err?.message ?? "Unknown error"}. Is the backend server running?`);
+    } finally {
+      setUploadingFolder(false);
+    }
+  };
 
   /** Shared by both easyhelp_checking upload modes — only how each file's relative path is
    * derived differs (a real folder pick already has one; loose files get a synthetic one). */
@@ -785,6 +859,7 @@ const Workbench: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setFolderPath(data.folder || "");
+        setHelpOutputFolder("");
         if (!data.count) {
           setError("No files were recognized (expected help files with index.html, or loose HTML files).");
         }
@@ -836,6 +911,7 @@ const Workbench: React.FC = () => {
         setTestdataFiles(data.files || []);
         setSelectedTestdataFiles(data.files || []);
         setFolderPath(data.folder || "");
+        setHelpOutputFolder("");
         if (!data.files?.length) {
           setError("None of the selected files were recognized as .testdata files.");
         }
@@ -977,12 +1053,11 @@ const Workbench: React.FC = () => {
     setTasks((STAGE1_TASKS[selectedScenarioId] ?? STAGE1_TASKS["testdata_generation"] ?? []).map(t => ({ ...t })));
   }, [selectedScenarioId]);
 
-  // TestDataPreview shows the testdata_generation scenario's generated records — it has
-  // nothing to do with game_verification's input (a folder of pre-existing .testdata files),
-  // so it must never render there (it would otherwise show stale/unrelated mock records).
-  // portugal_plugin produces no testdata records — its results go to the console + report files.
-  const showCenterFooter =
-    workflowStage >= 3 && selectedScenarioId !== "game_verification" && selectedScenarioId !== "portugal_plugin";
+  // TestDataPreview shows the testdata_generation scenario's generated records only. Every other
+  // scenario has no testdata records, and rendering it there would show stale/unrelated mock
+  // records — so it is opt-in per scenario, not opt-out.
+  const showCenterFooter = workflowStage >= 3 && selectedScenarioId === "testdata_generation";
+  const showEasyHelpReview = workflowStage >= 3 && selectedScenarioId === "easyhelp_checking" && easyHelpResult !== null;
 
   const errorBanner = error ? (
     <div className="bg-rose-500/10 border-b border-rose-500/30 text-rose-300 px-4 py-2.5 flex items-center gap-2 text-xs animate-in slide-in-from-top duration-300 font-mono">
@@ -1559,6 +1634,7 @@ const Workbench: React.FC = () => {
           {showCenterFooter && (
             <TestDataPreview records={testRecords} loginName={loginName} onRegenerate={handleRegenerate} />
           )}
+          {showEasyHelpReview && easyHelpResult && <EasyHelpReviewPanel result={easyHelpResult} />}
         </div>
       </main>
 

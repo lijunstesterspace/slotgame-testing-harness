@@ -1,6 +1,12 @@
-"""Plugin: helpfile_analyzer — calls a local AI model to generate an intelligent analysis report"""
+"""Plugin: helpfile_analyzer — asks a local AI model (Ollama) to analyze the helpfile report
+
+Runs after helpfile_report, reading the JSON that step wrote. It is an optional pipeline step:
+if Ollama is down or too slow, the deterministic helpfile_report.html is still there.
+"""
 from __future__ import annotations
+import html
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +18,13 @@ from server.tools.base import (
     ToolResult, HarnessContext,
 )
 from server.infra.logger import log
+
+
+# Local CPU inference is slow (a 4B model runs at ~7 tok/s); the plugin timeout must exceed this
+_OLLAMA_CHAT_TIMEOUT_SEC = 540
+
+# Models that cannot (or should not) answer a local chat request
+_NON_CHAT_MODEL_HINTS = ("embed", ":cloud", "-cloud")
 
 
 # ── Ollama client ──────────────────────────────────────────────
@@ -30,23 +43,45 @@ async def _ollama_health_check(base_url: str) -> dict:
         return {"online": False, "models": [], "error": str(e)}
 
 
+def _pick_model(requested: str, available: list[str]) -> str | None:
+    """Exact name first, then same family with another tag, then the first chat-capable local model"""
+    if requested in available:
+        return requested
+    base = requested.split(":")[0]
+    for m in available:
+        if m.split(":")[0] == base:
+            return m
+    for m in available:
+        if not any(h in m for h in _NON_CHAT_MODEL_HINTS):
+            return m
+    return None
+
+
 async def _ollama_chat(
     base_url: str,
     model: str,
     messages: list[dict[str, str]],
-    timeout_sec: int = 120,
+    timeout_sec: int = _OLLAMA_CHAT_TIMEOUT_SEC,
 ) -> str:
-    """Call the Ollama /api/chat endpoint (non-streaming)"""
-    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+    """Call the Ollama /api/chat endpoint (non-streaming).
+
+    think=False: reasoning models (qwen3 / qwen3.5 / deepseek-r1) otherwise spend thousands of
+    tokens thinking before the answer — on a local 4B model that alone takes several minutes.
+    format="json" makes Ollama constrain the output to a JSON object.
+    """
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_sec, connect=10)) as client:
         resp = await client.post(
             f"{base_url}/api/chat",
             json={
                 "model": model,
                 "messages": messages,
                 "stream": False,
+                "think": False,
+                "format": "json",
                 "options": {
                     "temperature": 0.3,
-                    "num_predict": 4096,
+                    "num_predict": 2048,
+                    "num_ctx": 8192,
                 },
             },
         )
@@ -58,51 +93,43 @@ async def _ollama_chat(
 
 # ── Analysis data preparation ──────────────────────────────────────────────
 
-def _build_analysis_context(
-    txt_files: list[dict],
-    keywords: list[str],
-    comparison_results: list[dict] | None,
-) -> str:
-    """Build the analysis context sent to the AI"""
+def _build_analysis_context(report: dict, max_chars: int = 12000) -> str:
+    """Turn helpfile_report's JSON into the prompt context: real diff lines + computed coverage"""
     lines: list[str] = []
 
-    # File list
-    lines.append("=== File Inventory ===")
-    for f in txt_files:
-        lines.append(f"  - {f['subdir_name']}: {f['txt_path']}")
+    lines.append(f"=== Files (baseline: {report.get('baseline', '?')}) ===")
+    for f in report.get("files", []):
+        lines.append(f"  - {f['name']} ({f['lines']} lines)")
     lines.append("")
 
-    # Keyword list
-    lines.append("=== Keywords Under Analysis ===")
-    lines.append(f"  {', '.join(keywords)}")
+    lines.append("=== Keyword Coverage (computed occurrence counts per file) ===")
+    coverage = report.get("keyword_coverage", {})
+    if coverage:
+        for kw, c in coverage.items():
+            per = ", ".join(f"{n}={v}" for n, v in c["per_file"].items())
+            lines.append(f"  '{kw}': {per}")
+    else:
+        lines.append("  (no keywords supplied)")
     lines.append("")
 
-    # Diff comparison results
-    if comparison_results:
-        lines.append("=== Comparison Results ===")
-        for comp in comparison_results:
-            if "error" in comp:
-                lines.append(f"  [{comp['target']}] Error: {comp['error']}")
-                continue
-            lines.append(f"  Baseline: {comp.get('baseline', 'N/A')} vs Target: {comp.get('target', 'N/A')}")
-            kc = comp.get("keyword_counts", {})
-            if kc:
-                count_str = ", ".join(f"{k}={v}" for k, v in kc.items())
-                lines.append(f"    Keyword counts: {count_str}")
+    lines.append("=== Differences vs Baseline ('-' = only in baseline, '+' = only in target) ===")
+    for comp in report.get("comparisons", []):
+        title = f"{comp.get('baseline')} vs {comp.get('target')}"
+        if "error" in comp:
+            lines.append(f"--- {title}: comparison error: {comp['error']}")
+            continue
+        if comp.get("identical"):
+            lines.append(f"--- {title}: identical")
+            continue
+        lines.append(f"--- {title}: -{comp['lines_removed']} / +{comp['lines_added']} lines")
+        lines.extend(f"- {l}" for l in comp.get("removed_excerpt", [])[:30])
+        lines.extend(f"+ {l}" for l in comp.get("added_excerpt", [])[:30])
         lines.append("")
 
-    # Content excerpt of each file (first 500 characters)
-    lines.append("=== File Content Summaries (first 500 chars each) ===")
-    for f in txt_files:
-        try:
-            content = Path(f["txt_path"]).read_text(encoding="utf-8")
-            snippet = content[:500].replace("\n", " ")
-            lines.append(f"  [{f['subdir_name']}]: {snippet}...")
-        except Exception:
-            lines.append(f"  [{f['subdir_name']}]: (unable to read)")
-    lines.append("")
-
-    return "\n".join(lines)
+    ctx = "\n".join(lines)
+    if len(ctx) > max_chars:
+        ctx = ctx[:max_chars] + "\n... (context truncated)"
+    return ctx
 
 
 def _build_ai_prompt(context: str) -> list[dict[str, str]]:
@@ -116,17 +143,12 @@ def _build_ai_prompt(context: str) -> list[dict[str, str]]:
         "{\n"
         '  "summary": "Overall summary of content comparison across all files",\n'
         '  "keyDifferences": ["List of major content differences found"],\n'
-        '  "keywordCoverage": {\n'
-        '    "keyword_name": {\n'
-        '      "total": 0,\n'
-        '      "files_with_hits": 0,\n'
-        '      "files_without_hits": 0,\n'
-        '      "assessment": "good/poor/missing"\n'
-        "    }\n"
-        "  },\n"
         '  "qualityIssues": ["List of potential content inconsistencies or missing sections"],\n'
         '  "recommendations": ["Actionable suggestions for improvement"]\n'
         "}\n\n"
+        "Keyword counts are already computed for you - do not recount them, but do point out\n"
+        "keywords that are missing from some files.\n"
+        "Base every statement on the diff lines provided; do not invent content.\n"
         "Be thorough but concise. Focus on actionable insights."
     )
 
@@ -144,8 +166,15 @@ def _build_ai_prompt(context: str) -> list[dict[str, str]]:
 
 def _parse_ai_response(raw: str) -> dict:
     """Parse the JSON returned by the AI, handling possible format issues"""
-    # Strip a possible markdown code block
-    cleaned = raw.strip()
+    # Strip reasoning blocks some models still inline into content
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    if not cleaned:
+        return {
+            "summary": "The model returned an empty response.",
+            "keyDifferences": [],
+            "qualityIssues": ["AI response was empty (output budget exhausted or model error)"],
+            "recommendations": ["Retry the analysis or pick a non-reasoning model"],
+        }
     if cleaned.startswith("```"):
         # Remove the ```json ... ``` wrapper
         lines = cleaned.split("\n")
@@ -167,7 +196,6 @@ def _parse_ai_response(raw: str) -> dict:
         return {
             "summary": cleaned[:500],
             "keyDifferences": [],
-            "keywordCoverage": {},
             "qualityIssues": ["AI response could not be parsed as structured JSON"],
             "recommendations": ["Retry the analysis or check Ollama model availability"],
         }
@@ -175,54 +203,27 @@ def _parse_ai_response(raw: str) -> dict:
 
 # ── HTML report generation ─────────────────────────────────────────────
 
-def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -> str:
+def _as_list(value: Any) -> list:
+    """Small models sometimes return a string where a list is expected"""
+    if isinstance(value, list):
+        return value
+    return [value] if value else []
+
+
+def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int, base_report_html: str) -> str:
     """Generate a human-readable HTML analysis report"""
-    summary = analysis.get("summary", "No summary available")
-    key_diffs = analysis.get("keyDifferences", [])
-    kw_coverage = analysis.get("keywordCoverage", {})
-    quality_issues = analysis.get("qualityIssues", [])
-    recommendations = analysis.get("recommendations", [])
+    esc = lambda v: html.escape(str(v))
+    summary = esc(analysis.get("summary", "No summary available"))
 
-    # Build HTML fragments
-    diffs_html = ""
-    for i, d in enumerate(key_diffs, 1):
-        diffs_html += f'<li class="diff-item">{d}</li>\n'
-    if not diffs_html:
-        diffs_html = '<li class="empty">No significant differences identified</li>'
+    def items(key: str, cls: str, prefix: str, empty: str) -> str:
+        out = "".join(f'<div class="{cls}">{prefix}{esc(v)}</div>\n' for v in _as_list(analysis.get(key)))
+        return out or f'<div class="empty">{empty}</div>'
 
-    kw_rows = ""
-    for kw, data in kw_coverage.items():
-        if isinstance(data, dict):
-            total = data.get("total", 0)
-            with_hits = data.get("files_with_hits", 0)
-            without_hits = data.get("files_without_hits", 0)
-            assessment = data.get("assessment", "unknown")
-        else:
-            total = with_hits = without_hits = 0
-            assessment = "unknown"
-        badge_cls = {
-            "good": "badge-good", "poor": "badge-poor", "missing": "badge-missing",
-        }.get(assessment, "badge-unknown")
-        kw_rows += f"""
-        <tr>
-            <td>{kw}</td>
-            <td>{total}</td>
-            <td>{with_hits}</td>
-            <td>{without_hits}</td>
-            <td><span class="badge {badge_cls}">{assessment}</span></td>
-        </tr>"""
-
-    issues_html = ""
-    for issue in quality_issues:
-        issues_html += f'<div class="issue-item">⚠ {issue}</div>\n'
-    if not issues_html:
-        issues_html = '<div class="empty">No quality issues detected</div>'
-
-    recs_html = ""
-    for rec in recommendations:
-        recs_html += f'<div class="rec-item">💡 {rec}</div>\n'
-    if not recs_html:
-        recs_html = '<div class="empty">No recommendations</div>'
+    diffs_html = items("keyDifferences", "diff-item", "", "No significant differences identified")
+    issues_html = items("qualityIssues", "issue-item", "⚠ ", "No quality issues detected")
+    recs_html = items("recommendations", "rec-item", "💡 ", "No recommendations")
+    base_link = (f'<a href="{esc(Path(base_report_html).resolve().as_uri())}">helpfile_report.html</a>'
+                 if base_report_html else "helpfile_report.html")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -241,6 +242,7 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         background: var(--bg); color: var(--text); padding: 2rem;
     }}
+    a {{ color: var(--cyan); }}
     .container {{ max-width: 960px; margin: 0 auto; }}
     header {{
         text-align: center; margin-bottom: 2rem;
@@ -265,17 +267,6 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
     .diff-item {{ background: rgba(6,182,212,0.08); border-left: 3px solid var(--cyan); }}
     .issue-item {{ background: rgba(245,158,11,0.08); color: var(--amber); }}
     .rec-item {{ background: rgba(16,185,129,0.08); color: var(--green); }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
-    th {{ text-align: left; padding: 0.5rem; color: var(--text-muted); border-bottom: 1px solid var(--border); }}
-    td {{ padding: 0.5rem; border-bottom: 1px solid rgba(51,65,85,0.5); }}
-    .badge {{
-        font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem;
-        border-radius: 6px; text-transform: uppercase;
-    }}
-    .badge-good {{ background: rgba(16,185,129,0.15); color: var(--green); }}
-    .badge-poor {{ background: rgba(245,158,11,0.15); color: var(--amber); }}
-    .badge-missing {{ background: rgba(239,68,68,0.15); color: var(--red); }}
-    .badge-unknown {{ background: rgba(148,163,184,0.15); color: var(--text-muted); }}
     .empty {{ font-size: 0.8rem; color: var(--text-muted); font-style: italic; }}
     .footer {{
         text-align: center; margin-top: 2rem; padding-top: 1rem;
@@ -288,8 +279,8 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
     <header>
         <h1>Helpfile AI Analysis Report</h1>
         <div class="meta">
-            <div>Model: {model_used} &nbsp;|&nbsp; Analysis Time: {duration_ms}ms</div>
-            <div>Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}</div>
+            <div>Model: {esc(model_used)} &nbsp;|&nbsp; Analysis Time: {duration_ms}ms</div>
+            <div>Generated: {time.strftime('%Y-%m-%d %H:%M:%S')} &nbsp;|&nbsp; Data: {base_link}</div>
         </div>
     </header>
 
@@ -300,17 +291,7 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
 
     <div class="section">
         <h2>Key Differences</h2>
-        <ul style="list-style:none;">{diffs_html}</ul>
-    </div>
-
-    <div class="section">
-        <h2>Keyword Coverage</h2>
-        <table>
-            <thead>
-                <tr><th>Keyword</th><th>Total</th><th>Files with Hits</th><th>Files without</th><th>Assessment</th></tr>
-            </thead>
-            <tbody>{kw_rows}</tbody>
-        </table>
+        {diffs_html}
     </div>
 
     <div class="section">
@@ -324,7 +305,8 @@ def _generate_analysis_html(analysis: dict, model_used: str, duration_ms: int) -
     </div>
 
     <div class="footer">
-        Slot Game Testing Harness &mdash; Helpfile AI Analysis Report (Local Ollama)
+        Slot Game Testing Harness &mdash; Helpfile AI Analysis Report (Local Ollama).
+        Keyword counts and full diffs are in the comparison report.
     </div>
 </div>
 </body>
@@ -339,26 +321,17 @@ class HelpfileAnalyzerTool(ToolPlugin):
         return ToolInfo(
             name="helpfile_analyzer",
             description=(
-                "Invokes local AI model (Ollama) to analyze help file conversion results. "
-                "Generates intelligent analysis report with content comparison summary, "
-                "keyword coverage assessment, quality issues, and recommendations."
+                "Invokes local AI model (Ollama) to analyze the report written by helpfile_report. "
+                "Produces a summary, key differences, quality issues and recommendations."
             ),
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(
-                    name="txt_files", type="array", required=True,
-                    description='TXT file entries: [{"subdir_name": "xxx", "txt_path": "/path/file.txt"}]',
-                ),
-                ToolParameter(
-                    name="keywords", type="array", required=True,
-                    description="Keywords for coverage analysis",
+                    name="report_json_path", type="string", required=True,
+                    description="helpfile_report.json written by the helpfile_report plugin",
                 ),
                 ToolParameter(
                     name="output_folder", type="string", required=True,
                     description="Absolute path for analysis report output",
-                ),
-                ToolParameter(
-                    name="comparison_results", type="array", default=None,
-                    description="Optional: diff_comparator comparison results for richer analysis",
                 ),
                 ToolParameter(
                     name="ollama_base_url", type="string", default="http://localhost:11434",
@@ -370,18 +343,22 @@ class HelpfileAnalyzerTool(ToolPlugin):
                 ),
             ]),
             permissions=["filesystem:read", "filesystem:write", "network:outbound"],
-            timeout_seconds=300,
-            version="1.0.0",
+            # Must exceed _OLLAMA_CHAT_TIMEOUT_SEC; tools_router waits exactly this long
+            timeout_seconds=_OLLAMA_CHAT_TIMEOUT_SEC + 60,
+            version="2.0.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
-        txt_files: list[dict] = params["txt_files"]
-        keywords: list[str] = params["keywords"]
+        report_json_path = Path(params["report_json_path"])
         output_folder = Path(params["output_folder"])
-        comparison_results: list[dict] | None = params.get("comparison_results")
-        ollama_url: str = params.get("ollama_base_url", "http://localhost:11434").rstrip("/")
-        ollama_model: str = params.get("ollama_model", "qwen3:latest")
+        ollama_url: str = (params.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+        ollama_model: str = params.get("ollama_model") or "qwen3:latest"
         output_folder.mkdir(parents=True, exist_ok=True)
+
+        try:
+            report = json.loads(report_json_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return ToolResult(success=False, error=f"report_unreadable:{report_json_path}: {e}")
 
         t0 = time.perf_counter()
 
@@ -394,55 +371,62 @@ class HelpfileAnalyzerTool(ToolPlugin):
                       f" Please ensure Ollama is running at {ollama_url}",
             )
 
-        # Check whether the model is available
         available_models = health.get("models", [])
-        model_found = any(ollama_model in m for m in available_models)
-        if not model_found and available_models:
-            # Try to use the first available model
-            fallback_model = available_models[0]
+        picked = _pick_model(ollama_model, available_models)
+        if picked is None:
+            return ToolResult(
+                success=False,
+                error=f"ollama_no_chat_model: '{ollama_model}' is not installed and no local chat model "
+                      f"is available (found: {available_models})",
+            )
+        if picked != ollama_model:
             log.warning(
                 "helpfile_analyzer.model_not_found",
                 requested=ollama_model,
-                fallback=fallback_model,
+                fallback=picked,
                 available=available_models,
             )
-            ollama_model = fallback_model
+            ollama_model = picked
 
-        log.info("helpfile_analyzer.start", model=ollama_model, files=len(txt_files))
+        log.info("helpfile_analyzer.start", model=ollama_model, files=len(report.get("files", [])))
 
-        # ── 2. Build the analysis context ──────────────────────────────────
-        context = _build_analysis_context(txt_files, keywords, comparison_results)
-        messages = _build_ai_prompt(context)
-
-        # ── 3. Call the local AI model ────────────────────────────────
+        # ── 2. Call the local AI model ────────────────────────────────
+        messages = _build_ai_prompt(_build_analysis_context(report))
         try:
-            raw_response = await _ollama_chat(ollama_url, ollama_model, messages, timeout_sec=120)
+            raw_response = await _ollama_chat(ollama_url, ollama_model, messages)
+        except httpx.TimeoutException as e:
+            # str() of an httpx timeout is usually empty, which hid the cause in the UI
+            return ToolResult(
+                success=False,
+                error=f"ollama_timeout:{type(e).__name__} - model '{ollama_model}' did not answer "
+                      f"within {_OLLAMA_CHAT_TIMEOUT_SEC}s",
+            )
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=f"ollama_chat_error:{e}",
+                error=f"ollama_chat_error:{type(e).__name__}: {e}",
             )
 
-        # ── 4. Parse the AI response ────────────────────────────────────
+        # ── 3. Parse the AI response ────────────────────────────────────
         analysis = _parse_ai_response(raw_response)
         duration_ms = int((time.perf_counter() - t0) * 1000)
 
         log.info("helpfile_analyzer.complete", duration_ms=duration_ms)
 
-        # ── 5. Save reports ────────────────────────────────────────
-        # JSON report
+        # ── 4. Save reports ────────────────────────────────────────
         report_json = {
             "ai_analysis": analysis,
             "model_used": ollama_model,
             "analysis_duration_ms": duration_ms,
-            "files_analyzed": len(txt_files),
-            "keywords_analyzed": keywords,
+            "source_report": str(report_json_path.resolve()),
         }
         json_path = output_folder / "ai_analysis_report.json"
         json_path.write_text(json.dumps(report_json, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # HTML report
-        html_content = _generate_analysis_html(analysis, ollama_model, duration_ms)
+        base_html = report_json_path.with_suffix(".html")
+        html_content = _generate_analysis_html(
+            analysis, ollama_model, duration_ms, str(base_html) if base_html.exists() else "",
+        )
         html_path = output_folder / "ai_analysis_report.html"
         html_path.write_text(html_content, encoding="utf-8")
 

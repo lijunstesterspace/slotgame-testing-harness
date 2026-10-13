@@ -147,6 +147,7 @@ hidden_imports = [
     "server.tools.impl.__init__",
     "server.tools.impl.diff_comparator_tool",
     "server.tools.impl.helpfile_analyzer_tool",
+    "server.tools.impl.helpfile_report_tool",
     "server.tools.impl.html_to_text_converter_tool",
     "server.tools.impl.log_diagnoser_tool",
     "server.tools.impl.portugal_plugin_fetcher_tool",

@@ -15,7 +15,8 @@ The current production plugin implementations live in `server/tools/impl/` and f
   - `log_diagnoser_tool.py` - Log diagnosis plugin
   - `html_to_text_converter_tool.py` - HTML help file to text converter plugin
   - `diff_comparator_tool.py` - Diff comparison and keyword highlighting plugin
-  - `helpfile_analyzer_tool.py` - AI analysis report plugin (calls local Ollama)
+  - `helpfile_report_tool.py` - Deterministic helpfile comparison report plugin (HTML/JSON, no AI)
+  - `helpfile_analyzer_tool.py` - Optional AI analysis of the helpfile report (calls local Ollama)
   - `portugal_plugin_parser_tool.py` - Portugal Plugin output parser plugin (ported from ppvACCR1.0.py)
   - `portugal_plugin_reporter_tool.py` - Portugal Plugin consistency check, PlayCheck reconciliation, and TXT/JSON/HTML report plugin
   - `portugal_plugin_fetcher_tool.py` - Automatically retrieves Portugal Plugin outcomes from the game environment via Game History → PlayCheck

@@ -50,7 +50,7 @@ export const SCENARIOS: TestScenario[] = [
     agentFile: "helpfile_conversion_agent.md",
     skills: ["skill-helpfile-conversion.md", "skill-helpfile-plugin-contract.md"],
     pipelineId: "helpfile-conversion-pipeline",
-    requiredPlugins: ["html_to_text_converter", "diff_comparator", "helpfile_analyzer"],
+    requiredPlugins: ["html_to_text_converter", "diff_comparator", "helpfile_report", "helpfile_analyzer"],
     icon: "file-text",
   },
   {

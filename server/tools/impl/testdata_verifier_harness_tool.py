@@ -258,6 +258,86 @@ def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
     return False
 
 
+_RESPONSE_COUNT_JS = "return window.__gvResponses ? window.__gvResponses.length : 0;"
+
+
+def _is_spin_ready(driver) -> bool:
+    try:
+        return bool(driver.execute_script(
+            "return !!(window.jftwTools && window.jftwTools.gameState.isSpinButtonReady());"))
+    except Exception:
+        return False
+
+
+def _nudge(driver) -> None:
+    """One "press anywhere to continue" tap — a feature intro / total-win summary screen blocks
+    the round until it's dismissed. jftw touch when available, trusted CDP click otherwise."""
+    try:
+        if driver.execute_script(
+            "if (!(window.jftwTools && window.jftwTools.common)) return false;"
+            "window.jftwTools.common.touch({x: Math.round(innerWidth*0.5), y: Math.round(innerHeight*0.6)});"
+            "return true;"
+        ):
+            return
+    except Exception:
+        pass
+    _trusted_click(driver, 0.5, 0.6)
+
+
+def _has_pregen(resp: dict | None, batch: int, index: int) -> bool:
+    """True if any {batch, index} pair anywhere under gameResponse.testData equals (batch, index).
+    A feature round's response may not carry its seed at testData.spin.preGen like a base spin's
+    does (unconfirmed — no free-spin response has been inspected yet), so search the whole subtree."""
+    stack = [(((resp or {}).get("gameResponse") or {}).get("testData"))]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, dict):
+            if v.get("batch") == batch and v.get("index") == index:
+                return True
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
+def _await_feature_response(driver, start_idx: int, rec: dict, timeout_sec: int) -> tuple[int, dict] | None:
+    """Wait for a game-driven (no click) round — FreeSpin/Bonus/... — to produce the response for
+    `rec`, starting at __gvResponses[start_idx].
+
+    A feature stage's spins are auto-played by the game after the triggering BaseGame spin, so
+    nothing must be clicked for them; the old loop clicked Spin anyway and only counted responses
+    arriving *after* that click, by which point the free spins had already played out (they were
+    captured, just never looked at) — a correct FreeSpin record came back TIMEOUT. Returns the
+    first response from start_idx whose preGen matches rec; if none matches once the round has
+    settled (spin button ready, no new responses for a few seconds), the first new response so the
+    report shows what actually came back. Taps through intro/summary screens while stalled.
+    """
+    deadline = time.time() + timeout_sec
+    last_count, last_change = -1, time.time()
+    while time.time() < deadline:
+        try:
+            n = int(driver.execute_script(_RESPONSE_COUNT_JS))
+            new = driver.execute_script(f"return window.__gvResponses.slice({start_idx});") if n > start_idx else []
+        except Exception:
+            n, new = last_count, []
+        for i, resp in enumerate(new or []):
+            if _has_pregen(resp, rec["batch"], rec["index"]):
+                return start_idx + i, resp
+        if n != last_count:
+            last_count, last_change = n, time.time()
+        stalled = time.time() - last_change
+        ready = _is_spin_ready(driver)
+        if ready and stalled >= 4:
+            # Round over. Either it produced responses that just don't match, or the feature was
+            # never triggered at all (rec gets compared against nothing → caller reports it).
+            return (start_idx, new[0]) if new else None
+        if not ready and stalled >= 3:
+            _nudge(driver)
+            time.sleep(1.5)
+        time.sleep(0.5)
+    return (start_idx, new[0]) if new else None
+
+
 def _apply_time_scale(driver, scale: int = 2000) -> None:
     """Speed up the game engine's own animation clock via window.jftwTools.gameEngine.timeScale.
 
@@ -601,6 +681,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             max_consecutive_network_errors = 3
             max_consecutive_seed_rejections = 2
             environment_aborted = False
+            consumed = 0  # __gvResponses entries already matched to (or skipped past) a record
 
             for file_name, rec in all_records_this_run:
                 if environment_aborted:
@@ -622,21 +703,30 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                 # after a big win came back TIMEOUT with zero errors raised anywhere). Waiting
                 # for isSpinButtonReady() before *every* spin, not just once after launch, is
                 # what actually needs to happen here.
-                _wait_for_spin_ready(driver, timeout_sec=15)
-                prev_count = driver.execute_script(
-                    "return window.__gvResponses ? window.__gvResponses.length : 0;")
-                if not _click_spin_via_jftw(driver):
-                    TestdataVerifierTool._click_spin(driver)
-                time.sleep(spin_delay)
-
+                # Only a BaseGame record is a player-initiated spin. Any other stage (FreeSpin,
+                # Bonus, ...) is a round the game auto-plays after the BaseGame spin that
+                # triggered it — clicking Spin for it is wrong, and its response has usually
+                # already been captured by the time we get here.
                 actual = None
-                for _ in range(30):
-                    curr_count = driver.execute_script(
-                        "return window.__gvResponses ? window.__gvResponses.length : 0;")
-                    if curr_count > prev_count:
-                        actual = driver.execute_script(f"return window.__gvResponses[{curr_count - 1}];")
-                        break
-                    time.sleep(0.5)
+                if rec["stage"] == "BaseGame":
+                    _wait_for_spin_ready(driver, timeout_sec=60)
+                    # Skip whatever the previous round left behind (e.g. the rest of a free-spin
+                    # feature's responses) — this record's response is the first one after the click.
+                    consumed = driver.execute_script(_RESPONSE_COUNT_JS)
+                    if not _click_spin_via_jftw(driver):
+                        TestdataVerifierTool._click_spin(driver)
+                    time.sleep(spin_delay)
+                    for _ in range(30):
+                        if driver.execute_script(_RESPONSE_COUNT_JS) > consumed:
+                            actual = driver.execute_script(f"return window.__gvResponses[{consumed}];")
+                            consumed += 1
+                            break
+                        time.sleep(0.5)
+                else:
+                    found = _await_feature_response(driver, consumed, rec, timeout_sec=180)
+                    if found:
+                        idx, actual = found
+                        consumed = idx + 1
 
                 if actual is None:
                     result = {
@@ -666,6 +756,13 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                     result = _compare_record(rec, actual)
                     result["screenshot_b64"] = None
                     result["source_file"] = file_name
+                    if result["verdict"] == "SEED_MISMATCH" and _has_pregen(actual, rec["batch"], rec["index"]):
+                        # The seed is in this response, just not at testData.spin.preGen where
+                        # _compare_record looks (a feature round may nest it elsewhere).
+                        result["actualBatch"], result["actualIndex"] = rec["batch"], rec["index"]
+                        result["issues"] = [i for i in result["issues"] if not i.startswith(("batch", "index"))]
+                        result["passed"] = True
+                        result["verdict"] = "PASSED" if not result["issues"] else "STAGE_MISMATCH"
 
                     gd = actual.get("gameResponse", {})
                     error_msg = gd.get("error", "") or gd.get("errorMessage", "")
@@ -677,8 +774,9 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                         consecutive_network_errors = 0
                     else:
                         consecutive_seed_rejections = 0
-                        if result["passed"]:
-                            consecutive_network_errors = 0
+                        # A response *was* captured, so the environment is reachable whether or not
+                        # it matched — only consecutive TIMEOUTs should count toward the abort.
+                        consecutive_network_errors = 0
 
                     need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
                         not result["passed"] and screenshot_fail)

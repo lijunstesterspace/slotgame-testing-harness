@@ -54,7 +54,6 @@ from server.tools.impl.testdata_verifier_tool import (
     _compare_record,
     _generate_html_report,
     _extract_testdata_key,
-    _dismiss_feature_splash,
     _force_kill_driver,
     TestdataVerifierTool,
 )
@@ -118,52 +117,144 @@ def _close_debug_panel_if_open(driver) -> None:
     time.sleep(1)
 
 
+_JFTW_PRESENT_JS = "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
+
+
+def _has_jftw(driver) -> bool:
+    try:
+        return bool(driver.execute_script(_JFTW_PRESENT_JS))
+    except Exception:
+        return False
+
+
+def _trusted_click(driver, fx: float, fy: float) -> None:
+    """Click at a fraction of the top-level viewport via CDP Input.dispatchMouseEvent.
+
+    Unlike a JS-dispatched MouseEvent (isTrusted=false, which canvas-rendered splashes ignore —
+    see _wait_for_spin_ready), CDP input goes through the browser's real input pipeline, so it is
+    hit-tested like a human click: it reaches a <canvas>, and it reaches into an iframe the game
+    may be running in. Coordinates are always top-level-viewport CSS pixels, regardless of which
+    frame the driver is currently switched into, so the size comes from Page.getLayoutMetrics
+    rather than the current frame's window.innerWidth."""
+    try:
+        m = driver.execute_cdp_cmd("Page.getLayoutMetrics", {})
+        vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
+        x = round(vp["clientWidth"] * fx)
+        y = round(vp["clientHeight"] * fy)
+        driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+        for t in ("mousePressed", "mouseReleased"):
+            driver.execute_cdp_cmd("Input.dispatchMouseEvent",
+                                   {"type": t, "x": x, "y": y, "button": "left", "clickCount": 1})
+    except Exception:
+        pass
+
+
+def _enter_game_context(driver, timeout_sec: int) -> str:
+    """Wait for window.jftwTools to attach, switching into the game's iframe if that's where it
+    lives, and make sure the console.log interceptor is installed in that same context.
+
+    Replaces a fixed `time.sleep(3)` followed by a single jftwTools check. On a live run against
+    grandBountyOpenWatersPowerComboDesktop (4.60.0) the browser then sat on the feature splash
+    ("PRESS ANYWHERE TO CONTINUE") indefinitely: either the (larger, desktop) bundle hadn't attached
+    jftwTools within 3s, or the launch page hosts the game in an iframe where the top-level
+    `window.jftwTools` never exists — both sent _wait_for_spin_ready down its no-jftw fallback.
+    Polls the top document and its iframes until timeout. Returns "top", "iframe[<n>]" or
+    "not_found" (driver left on the top document) for logging.
+    """
+    from selenium.webdriver.common.by import By
+    deadline = time.time() + timeout_sec
+    where = "not_found"
+    while time.time() < deadline:
+        driver.switch_to.default_content()
+        if _has_jftw(driver):
+            where = "top"
+            break
+        try:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+        except Exception:
+            frames = []
+        for i, frame in enumerate(frames):
+            try:
+                driver.switch_to.frame(frame)
+                if _has_jftw(driver):
+                    where = f"iframe[{i}]"
+                    break
+            except Exception:
+                pass
+            driver.switch_to.default_content()
+        if where != "not_found":
+            break
+        time.sleep(1)
+
+    # Page.addScriptToEvaluateOnNewDocument was registered on the harness tab before LAUNCH GAME
+    # opened the game in a *new* tab — CDP registrations are per-target, so it may never have run
+    # here. Register it on this target too (covers any later reload), and install it right now if
+    # it's missing. A late install still catches every future console.log call made through the
+    # global console object, which is all the interceptor relies on.
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
+    except Exception:
+        pass
+    try:
+        if not driver.execute_script("return !!window.__gvInstalled;"):
+            driver.execute_script(_INTERCEPTOR_JS)
+            log.warning("verifier_harness.interceptor_late_install", context=where)
+    except Exception:
+        pass
+    return where
+
+
 def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
     """Dismiss the intro/feature-splash and wait for the spin button to be ready.
 
     CONFIRMED on a live run: this game's splash is canvas-rendered, not real DOM — a raw
     synthetic MouseEvent dispatched via document.elementFromPoint(x,y).dispatchEvent(...) (the
-    same technique _dismiss_feature_splash uses, and the only thing available without this API)
-    never progressed window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after
-    24s of polling with no click at all attempted in between. window.jftwTools.common.touch(x, y)
-    — the game's own debug/test API (see jftw-game-client-sdk-automation-axiom's `window.jftwTools`
-    usage) — IS recognized as a real touch and reliably advanced the state to 'Idle' with
-    isSpinButtonReady() true within one 2s poll cycle on that same run. Falls back to the older
-    coordinate-click approach if jftwTools isn't present (a different game build might not expose
-    it) — in that fallback case there is no reliable readiness signal, so it just gives the
-    dismissal attempts a moment to land and proceeds optimistically, same as before this fix.
+    same technique _dismiss_feature_splash uses) never progressed
+    window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after 24s of polling.
+    window.jftwTools.common.touch(x, y) — the game's own debug/test API (see
+    jftw-game-client-sdk-automation-axiom's `window.jftwTools` usage) — IS recognized as a real
+    touch and reliably advanced the state to 'Idle' with isSpinButtonReady() true within one 2s
+    poll cycle on that same run.
+
+    jftwTools is re-checked on every poll (it can attach after this starts), and a trusted CDP
+    click (_trusted_click) backs up the jftw touch on alternate polls in case a game build's
+    touch() ignores the coordinates we pass. Without jftwTools there is no readiness signal, so
+    the fallback makes a few trusted clicks and proceeds optimistically — a trusted click, unlike
+    the old synthetic MouseEvent, does actually reach a canvas splash.
     """
-    has_jftw = False
-    try:
-        has_jftw = bool(driver.execute_script(
-            "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
-        ))
-    except Exception:
-        pass
-    if not has_jftw:
-        for _ in range(3):
-            _dismiss_feature_splash(driver, attempts=2)
-            _close_debug_panel_if_open(driver)
-        return True
     deadline = time.time() + timeout_sec
+    attempt = 0
     while time.time() < deadline:
-        try:
-            if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
-                return True
-        except Exception:
-            pass
-        try:
-            # {x, y} object form matches the colleague's automation suite's own usage
-            # (src/js/client/misc.js's touch()) — confirmed this platform's touch() also accepts
-            # two positional numbers on our own live run, but the object form is what the
-            # game's own test-automation code actually calls, so it's the safer long-term bet.
-            driver.execute_script(
-                "const w = window.innerWidth, h = window.innerHeight;"
-                "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
-            )
-        except Exception:
-            pass
+        has_jftw = _has_jftw(driver)
+        if has_jftw:
+            try:
+                if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
+                    return True
+            except Exception:
+                pass
+        elif attempt >= 3:
+            _close_debug_panel_if_open(driver)
+            return True
+        attempt += 1
+        if has_jftw:
+            try:
+                # {x, y} object form matches the colleague's automation suite's own usage
+                # (src/js/client/misc.js's touch()).
+                driver.execute_script(
+                    "const w = window.innerWidth, h = window.innerHeight;"
+                    "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
+                )
+            except Exception:
+                pass
+        if not has_jftw or attempt % 2 == 0:
+            _trusted_click(driver, 0.5, 0.6)
         time.sleep(2)
+    try:
+        state = driver.execute_script(
+            "try { return window.jftwTools.gameState.getActiveGameState(); } catch (e) { return null; }")
+    except Exception:
+        state = None
+    log.warning("verifier_harness.spin_not_ready", timeout_sec=timeout_sec, game_state=state)
     return False
 
 
@@ -484,11 +575,18 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             except Exception as e:
                 return ToolResult(success=False, error=f"harness_no_window_remained_after_launch:{e}")
 
-            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id)
-            time.sleep(3)  # let the game bundle attach window.jftwTools before we start polling
+            game_context = _enter_game_context(driver, timeout_sec=harness_load_timeout)
+            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id,
+                     game_context=game_context)
 
-            if not _wait_for_spin_ready(driver, timeout_sec=30):
+            if not _wait_for_spin_ready(driver, timeout_sec=60):
                 log.warning("verifier_harness.spin_not_ready_after_wait")
+                try:
+                    ss_path = screenshots_dir / "after_launch_not_ready.png"
+                    ss_path.write_bytes(driver.get_screenshot_as_png())
+                    artifacts.append(str(ss_path.resolve()))
+                except Exception:
+                    pass
 
             _apply_time_scale(driver)
 

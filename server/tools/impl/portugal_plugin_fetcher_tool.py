@@ -44,6 +44,7 @@ from server.tools.impl.testdata_verifier_tool import (
 from server.tools.impl.testdata_verifier_harness_tool import (
     HARNESS_DEFAULT_PASSWORD, _fill_labeled_field, _click_button_by_text,
     _wait_for_spin_ready, _apply_time_scale, _click_spin_via_jftw,
+    _enter_game_context,
 )
 from server.infra.logger import log
 
@@ -296,8 +297,10 @@ class PortugalPluginFetcherTool(ToolPlugin):
                     return fail("game_window_not_found_after_launch")
             else:
                 driver.get(game_url)
-            log.info("portugal_fetcher.launched", module_id=module_id, login_name=login_name)
-            time.sleep(3)
+            game_context = _enter_game_context(driver, timeout_sec=timeout)
+            diag["game_context"] = game_context
+            log.info("portugal_fetcher.launched", module_id=module_id, login_name=login_name,
+                     game_context=game_context)
             if not _wait_for_spin_ready(driver, timeout_sec=max(30, timeout // 2)):
                 log.warning("portugal_fetcher.spin_not_ready_after_launch")
             _apply_time_scale(driver)
@@ -326,7 +329,10 @@ class PortugalPluginFetcherTool(ToolPlugin):
                 time.sleep(2)
             diag["spins"] = game_results
 
-            # 3. Game History → PlayCheck tab
+            # 3. Game History → PlayCheck tab. The ••• menu belongs to the launch page's own
+            # chrome, so look for it from the top document even if the game itself is in an iframe.
+            if game_context.startswith("iframe"):
+                driver.switch_to.default_content()
             if not self._open_game_history(driver, timeout, diag):
                 return fail("game_history_not_opened: see diagnostics.menu_attempts / jftw_ids")
             deadline = time.time() + timeout

@@ -88,6 +88,7 @@ export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse):
     .slice()
     .reverse()
     .find((tc) =>
+      // "testdata_verifier" is the removed Selenium tool — kept so its old runs still reopen.
       tc.tool_name === "testdata_verifier" ||
       tc.tool_name === "testdata_verifier_api" ||
       tc.tool_name === "testdata_verifier_harness"
@@ -156,14 +157,8 @@ export async function runRealGameVerification(
   // (params in, ToolResult.content shape out) for all three tools — see each tool's module
   // docstring — so everything below this point (waiting, parsing, report building) is identical
   // regardless of which one actually ran.
-  // "selenium" is no longer offered in the UI (see App.tsx) — Harness replaced it as the
-  // browser-driven option — but the fallback below still handles it for any stray config that
-  // still specifies it explicitly. Absent method defaults to "harness", not "selenium".
   const method = config.verificationMethod ?? "harness";
-  const toolName =
-    method === "api" ? "testdata_verifier_api" :
-    method === "harness" ? "testdata_verifier_harness" :
-    "testdata_verifier";
+  const toolName = method === "api" ? "testdata_verifier_api" : "testdata_verifier_harness";
   const toolParams: Record<string, unknown> = {
     testdata_files: testdataFiles,
     spin_delay_sec: spinDelayMs / 1000,
@@ -193,23 +188,13 @@ export async function runRealGameVerification(
     toolParams.product_id = config.harnessProductId;
     toolParams.client_id = config.harnessClientId;
     if (config.harnessBrand) toolParams.brand = config.harnessBrand;
-  } else {
-    toolParams.target_url = config.targetUrl;
   }
   const prepared = await harnessClient.executeToolAsync(toolName, toolParams);
   const eid = prepared.execution_id;
   onStarted?.(eid);
 
   await new Promise<void>((resolve) => {
-    const unsub = harnessClient.streamExecution(eid, (evt, payload) => {
-      if (evt === "harness_event") {
-        const p = payload as any;
-        if (p.type === "TOOL_RES" && p.toolName === "testdata_verifier") {
-          try {
-            // Extract {passed, failed, total} from result_snippet
-          } catch {}
-        }
-      }
+    const unsub = harnessClient.streamExecution(eid, (evt) => {
       if (evt === "done") {
         resolve();
         setTimeout(unsub, 100);

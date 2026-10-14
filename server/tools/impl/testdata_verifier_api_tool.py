@@ -48,7 +48,7 @@ import httpx
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.testdata_verifier_tool import (
+from server.tools.impl.testdata_verify_common import (
     _parse_testdata,
     _compare_record,
     _generate_html_report,
@@ -71,7 +71,7 @@ def _derive_env(target_url: str) -> str:
     Every host on this platform follows the same <service>-<env>.installprogram.eu pattern —
     mobile-app1-gtp537, admin-app1-gtp537, axiomcore-app1-gtp537, api5-rhel1-gtp537 — confirmed
     across three different services on a live capture (see _derive_admin_testdata_url in
-    testdata_verifier_tool.py for the same pattern applied to the admin panel). Extracting just
+    the retired Selenium verifier for the same pattern applied to the admin panel). Extracting just
     the env slug once and reusing it to build every other host is more robust than hardcoding
     each host, and works the same way regardless of which environment (gtp537, gtp618, ...) the
     tester happens to be pointed at — confirmed the Okta token itself is environment-agnostic,

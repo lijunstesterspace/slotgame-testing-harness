@@ -3,8 +3,8 @@ from typing import Callable
 
 """Lightweight cancellation registry.
 
-A tool that runs long, blocking, cancellable work (currently only testdata_verifier's Selenium
-session) registers a zero-arg callback for its execution_id right after acquiring whatever
+A tool that runs long, blocking, cancellable work (the browser-driven tools'
+Selenium sessions) registers a zero-arg callback for its execution_id right after acquiring whatever
 resource needs tearing down (e.g. a WebDriver). The executions API can then call request_cancel()
 to trigger that teardown from the main event loop, without the tool itself needing to know
 anything about HTTP routes or the execution queue.

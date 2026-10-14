@@ -77,15 +77,18 @@ export const PIPELINES: PipelineDef[] = [
       [
         {
           id: "verify",
-          plugin: "testdata_verifier",
+          plugin: "testdata_verifier_harness",
           label: "Run Verification",
-          description: "Connect to real game environment via Selenium and run verification",
+          description: "Log in via the Titan Harness launcher page and run verification",
           dependsOn: [],
           retryOnFail: false,
           maxRetries: 0,
           buildParams: ({ extraParams }) => ({
             testdata_files: extraParams.testdataFilePaths ?? [],
-            target_url: extraParams.targetUrl ?? "",
+            harness_url: extraParams.harnessUrl ?? "",
+            axiom_api_key: extraParams.axiomApiKey ?? "",
+            product_id: extraParams.harnessProductId ?? "",
+            client_id: extraParams.harnessClientId ?? "",
             spin_delay_sec: extraParams.spinDelaySec ?? 3,
           }),
         },

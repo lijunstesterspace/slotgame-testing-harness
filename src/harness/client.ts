@@ -107,7 +107,7 @@ export class HarnessClient {
   }
 
   /** Requests cancellation of a running execution (currently only effective for
-   * testdata_verifier's Selenium session — see server/infra/cancellation.py). */
+   * the browser-driven tools' Selenium sessions — see server/infra/cancellation.py). */
   async cancelExecution(eid: string): Promise<{ ok: boolean }> {
     return jsonFetch(`/api/executions/${encodeURIComponent(eid)}/cancel`, { method: "POST" });
   }

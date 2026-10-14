@@ -16,7 +16,7 @@ Okta, no MFA. Two things confirmed on that same manual test:
   - The Password field comes pre-filled with a single shared, non-expiring value (`test1234$`)
     for every QA test account on this platform — not a per-account secret we need to look up.
   - Username and Module Id are the *same* loginName/moduleID already embedded in a .testdata
-    file's <Key> element (see _extract_testdata_key in testdata_verifier_tool.py) — this tool
+    file's <Key> element (see _extract_testdata_key in testdata_verify_common.py) — this tool
     derives them from the file being verified rather than asking for them again.
   - Product Id / Client Id / Brand are NOT derivable from the testdata file — they're fixed per
     game-module version, not per test case — so they're plain tool parameters here, defaulted to
@@ -48,14 +48,14 @@ import httpx
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.testdata_verifier_tool import (
+from server.tools.impl.testdata_verify_common import (
     _INTERCEPTOR_JS,
     _parse_testdata,
     _compare_record,
     _generate_html_report,
     _extract_testdata_key,
     _force_kill_driver,
-    TestdataVerifierTool,
+    _click_spin_by_selector,
 )
 from server.tools.impl.testdata_verifier_api_tool import _derive_env, _axiomcore_host
 from server.infra.logger import log
@@ -364,7 +364,7 @@ def _click_spin_via_jftw(driver) -> bool:
     `keypad`/`legacy` groups (NOT the 'uiSpinButton' id mentioned in an unrelated Spine-atlas
     console warning, which turned out to be a red herring). Returns False (rather than raising)
     when jftwTools isn't available, so the caller can fall back to
-    TestdataVerifierTool._click_spin's CSS-selector guessing.
+    _click_spin_by_selector's CSS-selector guessing.
 
     The isEnabledVisually check + short pauses before/after the touch mirror the colleague's
     automation suite's touchSpinButton() (src/js/client/keypad.js) — their comment there notes
@@ -714,7 +714,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                     # feature's responses) — this record's response is the first one after the click.
                     consumed = driver.execute_script(_RESPONSE_COUNT_JS)
                     if not _click_spin_via_jftw(driver):
-                        TestdataVerifierTool._click_spin(driver)
+                        _click_spin_by_selector(driver)
                     time.sleep(spin_delay)
                     for _ in range(30):
                         if driver.execute_script(_RESPONSE_COUNT_JS) > consumed:

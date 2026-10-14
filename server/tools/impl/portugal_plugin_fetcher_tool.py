@@ -38,8 +38,8 @@ from urllib.parse import parse_qs, urlparse, urlencode
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.testdata_verifier_tool import (
-    _INTERCEPTOR_JS, _force_kill_driver, TestdataVerifierTool,
+from server.tools.impl.testdata_verify_common import (
+    _INTERCEPTOR_JS, _force_kill_driver, _click_spin_by_selector,
 )
 from server.tools.impl.testdata_verifier_harness_tool import (
     HARNESS_DEFAULT_PASSWORD, _fill_labeled_field, _click_button_by_text,
@@ -312,7 +312,7 @@ class PortugalPluginFetcherTool(ToolPlugin):
                 _wait_for_spin_ready(driver, timeout_sec=30)
                 before = driver.execute_script("return (window.__gvResponses || []).length;")
                 if not _click_spin_via_jftw(driver):
-                    TestdataVerifierTool._click_spin(driver)
+                    _click_spin_by_selector(driver)
                 resp = None
                 for _ in range(60):
                     n = driver.execute_script("return (window.__gvResponses || []).length;")

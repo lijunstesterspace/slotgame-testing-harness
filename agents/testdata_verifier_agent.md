@@ -8,17 +8,17 @@ This file is loaded as **domain-reference context** for the `game_verification` 
 The `game-verify-pipeline` (see `src/harness/pipelineRegistry.ts`) declares the fixed step order:
 
 ```
-verify (testdata_verifier)  →  diagnose (log_diagnoser)
+verify (testdata_verifier_harness)  →  diagnose (log_diagnoser)
 ```
 
 In the current app, the `game_verification` scenario's UI path (`App.tsx: handleStartVerification`)
-drives verification directly through `runRealGameVerification` / the backend `testdata_verifier`
-Plugin (`server/tools/impl/testdata_verifier_tool.py`, Selenium-based) — this is already
+drives verification directly through `runRealGameVerification` / the backend verifier
+Plugins (`server/tools/impl/testdata_verifier_harness_tool.py` / `testdata_verifier_api_tool.py`, sharing `testdata_verify_common.py`) — this is already
 code-driven, not AI-driven. The `game-verify-pipeline` declaration above exists so this scenario
 can be run through the same `ExecutionEngine` as the other scenarios; either way, the AI never
 decides which Plugin runs next, and never issues the spin requests itself. Every rule below
 (retry counts, timeout thresholds, SSL/CORS handling, seed-rejection detection, etc.) is
-implemented as **deterministic code** inside `testdata_verifier_tool.py`. They are documented
+implemented as **deterministic code** inside `testdata_verify_common.py` / the verifier tools. They are documented
 here for engineers maintaining that Plugin, not as instructions for a model to follow at runtime.
 
 ## AI Responsibility (narrowed, per design doc §1.2 / §10.7 / §11)
@@ -35,7 +35,7 @@ AI summary is available.
 
 ---
 
-## Domain Reference: Real Game Environment Verification Protocols (implemented in `testdata_verifier_tool.py`)
+## Domain Reference: Real Game Environment Verification Protocols (implemented in `testdata_verify_common.py` / the verifier tools)
 
 ### Rule 1: Endpoint & Auth Connection
 - Verify target URL accessibility. Suppress untrusted SSL warnings if testing against internal staging servers.
@@ -60,7 +60,7 @@ AI summary is available.
 
 ---
 
-## Domain Reference: Exception Handling & Edge Cases (implemented in `testdata_verifier_tool.py`)
+## Domain Reference: Exception Handling & Edge Cases (implemented in `testdata_verify_common.py` / the verifier tools)
 
 ### Exception 1: Network Timeout
 - **Symptom**: `responseLogger` does not return within the configured timeout (default 5000ms).

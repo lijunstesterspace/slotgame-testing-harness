@@ -51,7 +51,7 @@ class SerialExecutionQueue(ExecutionQueue):
 
             # NOTE: this is stored as-is and re-fetched later as the *actual data channel* for
             # async tool results (see verificationEngine.ts's runRealGameVerification, which has
-            # no other way to get testdata_verifier's output back). It must NOT be truncated —
+            # no other way to get a verifier tool's output back). It must NOT be truncated —
             # a single failure/bonus screenshot's base64 payload alone is tens of KB, far past
             # any "preview snippet" length, and a truncated cut mid-JSON silently fails to parse
             # on the frontend, producing an all-zero report despite the tool having genuinely run.

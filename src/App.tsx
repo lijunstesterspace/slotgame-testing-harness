@@ -148,12 +148,10 @@ const Workbench: React.FC = () => {
   // game_verification: two selectable methods — call the game's own session/play APIs directly
   // over HTTP (testdata_verifier_api, needs a pasted Okta token), or drive a real Chrome through
   // the QA-only Titan Harness launcher page (testdata_verifier_harness, keeps screenshots, no
-  // Okta/MFA). "selenium" (the real game URL + Okta/MFA + borrowed Chrome profile) is no longer
-  // offered here — adopting the Harness login was specifically meant to retire that method's
-  // repeated-login friction — but the type keeps the option so History can still reopen old
-  // Selenium-based reports. Harness is now the default: fastest and most reliable of the three
-  // (see testdata_verifier_harness_tool.py), and keeps screenshots unlike Direct API.
-  const [verificationMethod, setVerificationMethod] = useState<"selenium" | "api" | "harness">("harness");
+  // Okta/MFA). Harness is the default: keeps screenshots unlike Direct API (see
+  // testdata_verifier_harness_tool.py). The original Selenium method (real game URL + Okta/MFA +
+  // borrowed Chrome profile) has been removed.
+  const [verificationMethod, setVerificationMethod] = useState<"api" | "harness">("harness");
   const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
   // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call, used by both
   // "api" (alongside oktaAccessToken for the game-session/play calls) and "harness" (alongside
@@ -364,10 +362,9 @@ const Workbench: React.FC = () => {
         timeoutMs: 5000,
         // runRealGameVerification actually reads `timeoutSeconds` (not `timeoutMs` above, which
         // is dead — nothing reads it) to decide how long to keep waiting on the backend before
-        // giving up and reporting "no result data". It must comfortably exceed
-        // testdata_verifier's own admin_login_timeout_sec (default 240s — a human may still be
-        // completing SSO + Okta Verify) plus real spin time, or the frontend times out and gives
-        // up *before* a run that would have genuinely succeeded ever gets to finish.
+        // giving up and reporting "no result data". It must comfortably exceed game load plus
+        // real spin time (free-spin features included), or the frontend times out and gives up
+        // *before* a run that would have genuinely succeeded ever gets to finish.
         timeoutSeconds: 600,
         autoRetryServerError: true,
         loginName,
@@ -891,8 +888,8 @@ const Workbench: React.FC = () => {
   };
 
   // ── TestData file upload (game_verification): the browser gives us file *content*, never an
-  // absolute path, so we upload the content and let the backend stage it to a real path that
-  // Selenium can hand to the admin panel's upload dialog. No manual path typing required. ──
+  // absolute path, so we upload the content and let the backend stage it to a real path the
+  // verifier tool can read and upload to Axiom. No manual path typing required. ──
   const testdataUploadInputRef = useRef<HTMLInputElement>(null);
   const [uploadingTestdata, setUploadingTestdata] = useState(false);
   const handleSelectTestdataFiles = () => testdataUploadInputRef.current?.click();
@@ -1257,11 +1254,9 @@ const Workbench: React.FC = () => {
               {/* Verification method: skip the browser entirely via the game's own APIs
                   directly (see testdata_verifier_api_tool.py), or drive a real browser through
                   the QA-only Titan Harness launcher page (no Okta/MFA — see
-                  testdata_verifier_harness_tool.py). The original Browser (Selenium) method —
-                  the real production URL + Okta/MFA login — has been retired as a selectable
-                  option here: the whole point of adopting the Harness login was to eliminate
-                  that method's repeated-login friction. Old Selenium-based reports are still
-                  viewable from History; buildReportFromExecutionDetail in verificationEngine.ts
+                  testdata_verifier_harness_tool.py). The original Selenium method (real
+                  production URL + Okta/MFA login) has been removed; its old reports are still
+                  viewable from History — buildReportFromExecutionDetail in verificationEngine.ts
                   still recognizes the "testdata_verifier" tool name for that reason. */}
               {selectedScenarioId === 'game_verification' && (
                 <div className="mb-3">

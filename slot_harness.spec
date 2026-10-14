@@ -159,7 +159,7 @@ hidden_imports = [
     "server.tools.impl.testdata_parser_tool",
     "server.tools.impl.testdata_verifier_api_tool",
     "server.tools.impl.testdata_verifier_harness_tool",
-    "server.tools.impl.testdata_verifier_tool",
+    "server.tools.impl.testdata_verify_common",
     "server.tools.impl.zip_packager_tool",
 ]
 
@@ -209,10 +209,10 @@ env_datas = []  # .env is no longer bundled; read at runtime from the exe direct
 print("[spec] .env will be read from exe directory at runtime")
 
 # ---------------------------------------------------------------------------
-# verify_testdata.py / generate_testdata.py (utility scripts)
+# generate_testdata.py (utility script)
 # ---------------------------------------------------------------------------
 script_datas = []
-for script_name in ("verify_testdata.py", "generate_testdata.py"):
+for script_name in ("generate_testdata.py",):
     script_path = os.path.join(ROOT, script_name)
     if os.path.isfile(script_path):
         script_datas.append((script_path, "."))

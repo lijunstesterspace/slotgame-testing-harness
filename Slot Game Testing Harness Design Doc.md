@@ -7,7 +7,7 @@
 > This revision re-checks every section against the current code (baseline: `main` branch, commit `6c03e2a`) on the principle that **"the code is the source of truth"**: wherever the document and the code disagreed, the document has been rewritten to match the code; vision content that has not landed yet is kept but explicitly marked "planned / not implemented". Main changes:
 >
 > - Scenarios and pipelines: corrected from "2–3 scenarios" to the **4 registered scenarios / 4 pipelines** (TestData Generation, TestData Verification, EasyHelp Checking, Portugal Plugin Verification); "log diagnosis" is no longer a standalone scenario and is now part of the verification report;
-> - **The TestData Verification scenario does not go through ExecutionEngine** — `verificationEngine.ts` drives one of three verification methods directly (the Titan Harness method by default), see 10.2 / 10.7;
+> - **The TestData Verification scenario does not go through ExecutionEngine** — `verificationEngine.ts` drives one of two verification methods directly (the Titan Harness method by default), see 10.2 / 10.7;
 > - The Agent / Skill / Plugin inventories were corrected to the real files (5 Agent files, 8 Skill files, 14 registered Plugins); Agents/Skills are **inlined at build time**, not hot-reloaded at runtime;
 > - The model gateway section was rewritten to the real Presets (OLLAMA / OPENAI / ANTHROPIC / CUSTOM), parameters (temperature 0.3, 512-token output cap) and actual AI call sites; KV caching, automatic model selection and token/cache statistics panels are marked not implemented;
 > - UI layout and directory structure rewritten to match the code; new Chapter 12 "Backend Service Architecture" and Chapter 13 "Code Status & Known Discrepancies".
@@ -116,7 +116,7 @@ Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all sub
 | Scenario | Plugins |
 |---|---|
 | TestData Generation | `testdata_parser` (parses pasted sheet text), `testdata_generator` (writes .testdata XML), `zip_packager` (ZIP + manifest) |
-| TestData Verification | `testdata_verifier_harness` (Titan Harness launcher login + Selenium, default), `testdata_verifier_api` (direct game HTTP APIs, no browser), `testdata_verifier` (real game URL + borrowed Chrome profile + Okta, legacy), `log_diagnoser` (rule-based failure attribution) |
+| TestData Verification | `testdata_verifier_harness` (Titan Harness launcher login + Selenium, default), `testdata_verifier_api` (direct game HTTP APIs, no browser), `log_diagnoser` (rule-based failure attribution) |
 | EasyHelp Checking | `html_to_text_converter`, `diff_comparator` (with keyword highlighting and Excel output), `helpfile_analyzer` (calls local Ollama server-side to produce an analysis report) |
 | Portugal Plugin | `portugal_plugin_symbol_map`, `portugal_plugin_fetcher` (Selenium → Game History → PlayCheck to fetch the outcome), `portugal_plugin_parser`, `portugal_plugin_reporter` (TXT/JSON/HTML reports) |
 
@@ -177,7 +177,7 @@ The Workbench is a "header + three columns + bottom status bar" layout:
 
 > **Login note**: Harness itself has **no login** — open it and use it. `require_user()` in `server/infra/security.py` always returns the fixed local user `LOCAL_USER`, with no password or session check; the earlier `auth_router.py` account system has been deleted. Harness login and the real game/admin environment's login are two unconnected systems, so the early assumption that "logging into Harness spares you from logging into the game environment" did not hold, and the login was removed.
 >
-> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** logs in through the QA-only Titan Harness launcher form (shared test password, no Okta/MFA), with testdata uploaded directly via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) is no longer offered in the UI, and its backend tool is kept only so history reports can be reopened.
+> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** logs in through the QA-only Titan Harness launcher form (shared test password, no Okta/MFA), with testdata uploaded directly via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) has been removed; its shared helpers live on in `testdata_verify_common.py`, and its old history reports still reopen (the frontend still recognizes the `testdata_verifier` tool name in stored executions).
 
 ### 4.2 Visual & Interaction Spec
 
@@ -277,7 +277,7 @@ slotgame-testing-harness/
 │   ├── infra/                 # storage (SQLite) / security / cancellation / process_runner / logger
 │   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (14 Plugins)
 ├── build.py / slot_harness.spec / harness.cmd   # PyInstaller + pywebview desktop packaging
-└── generate_testdata.py / verify_testdata.py    # standalone CLI scripts
+└── generate_testdata.py    # standalone CLI script
 ```
 
 > The original design-intent layout from project kick-off (`agents/agent-sheet-reader.md`, `plugins/google_sheet_reader.py`, `workflows/slot-test-pipeline.yaml`, `harness/scheduler.py`, etc.) did not land as drawn: the orchestration kernel is TypeScript in `src/harness/`, Plugins are Python in `server/tools/impl/`, and pipelines are declared in TypeScript in `pipelineRegistry.ts` (YAML pipeline configuration is a planned capability). The four-layer decoupling philosophy is unchanged.
@@ -422,7 +422,7 @@ The 4 registered scenarios:
 | id | label | pipelineId | requiredPlugins |
 |---|---|---|---|
 | `testdata_generation` | TestData Generation | `testdata-gen-pipeline` | testdata_parser, testdata_generator, zip_packager |
-| `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier, testdata_verifier_api, testdata_verifier_harness, log_diagnoser |
+| `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier_api, testdata_verifier_harness, log_diagnoser |
 | `easyhelp_checking` | EasyHelp Checking | `helpfile-conversion-pipeline` | html_to_text_converter, diff_comparator, helpfile_analyzer |
 | `portugal_plugin` | Portugal Plugin Verification | `portugal-plugin-verify-pipeline` | portugal_plugin_symbol_map, portugal_plugin_fetcher, portugal_plugin_parser, portugal_plugin_reporter |
 
@@ -468,7 +468,7 @@ The 4 current pipelines (the `PIPELINES` array):
 | Pipeline | Steps (plugin, retries) |
 |---|---|
 | `testdata-gen-pipeline` | parse (testdata_parser, 2 retries) → generate (testdata_generator, 2 retries) → package (zip_packager, no retry) |
-| `game-verify-pipeline` | verify (testdata_verifier, no retry) → diagnose (log_diagnoser, no retry) — **declared but not currently invoked**, see the addendum under Module Three |
+| `game-verify-pipeline` | verify (testdata_verifier_harness, no retry) → diagnose (log_diagnoser, no retry) — **declared but not currently invoked**, see the addendum under Module Three |
 | `helpfile-conversion-pipeline` | convert (html_to_text_converter, 1 retry) → compare (diff_comparator) → analyze (helpfile_analyzer) |
 | `portugal-plugin-verify-pipeline` | resolve_symbol_map → fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin (no retries) |
 
@@ -510,7 +510,7 @@ Execution engine (code-controlled, no AI involvement):
 This scenario **does not go through ExecutionEngine**; `game-verify-pipeline` is declared but never invoked. The actual path (`App.tsx` → `runRealGameVerification` in `utils/verificationEngine.ts`):
 
 1. The user uploads .testdata files or a folder via "+" (persisted by the backend's `/api/tools/upload-testdata`), then picks files and a verification method and enters credentials in the test-plan preview panel;
-2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness`, needing the Titan Harness launcher URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots; `selenium` → `testdata_verifier`, no longer offered in the UI;
+2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness`, needing the Titan Harness launcher URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots;
 3. `POST /api/tools/execute-async` runs it in the background; the frontend receives per-case progress live over SSE (`/api/executions/stream/{id}`), then reads the execution detail and builds the verification report;
 4. If any case failed, `runAIDiagnosis()` is called: the LLM outputs a diagnosis following the JSON template in the prompt; if the call throws, it falls back to calling the `log_diagnoser` Plugin for rule-based diagnosis;
 5. The report is shown in VerificationReportModal (which also has the frontend rule-based per-case diagnosis `logVisionDiagnoser.ts`) and can be reopened from the History page.
@@ -880,7 +880,7 @@ function selectModel(task: TestTask): "local" | "cloud" {
 - `ToolResult`: `success / content / error / execution_ms / artifacts`;
 - `HarnessContext`: `execution_id / user_id / user_role / session_token / work_dir`; each call's working directory is `server/data/runs/{execution_id}/{tool_name}/`;
 - `SerialExecutionQueue`: runs **serially** under a per-user asyncio lock so multiple Selenium Chromes don't collide (the interface leaves room to swap in a parallel queue);
-- `cancellation`: browser-driven Plugins (`testdata_verifier`, `testdata_verifier_harness`, `portugal_plugin_fetcher`) register a force-close callback after acquiring the WebDriver, which the cancel endpoint invokes.
+- `cancellation`: browser-driven Plugins (`testdata_verifier_harness`, `portugal_plugin_fetcher`) register a force-close callback after acquiring the WebDriver, which the cancel endpoint invokes.
 
 ### 12.4 Data Storage
 
@@ -901,7 +901,7 @@ The following inconsistencies — within the code, or between the code and the p
 
 | # | Current state | Impact |
 |---|---|---|
-| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step references only `testdata_verifier` (the legacy method no longer offered in the UI) | Pipeline declaration and actual execution disagree |
+| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step covers only the Harness method (not the API method) | Pipeline declaration and actual execution disagree |
 | 2 | `PipelineStepDef.dependsOn` is not checked by the execution engine; the `skipped` / `paused` / `idle` states are unused | Declarative metadata only |
 | 3 | `agents/ui_log_diagnoser_agent.md` is referenced by no scenario; the `log_diagnosis` scenario and `log-diagnose-pipeline` it mentions no longer exist | Orphaned file |
 | 4 | Agent data in `AgentPage.tsx` is hardcoded, and its "Planner Agent" still claims to "drive the conversation loop and tool orchestration"; the Skill display data in `PluginPage.tsx` is hardcoded too | Display may drift from actual responsibilities/files |

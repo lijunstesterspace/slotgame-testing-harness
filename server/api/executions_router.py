@@ -118,7 +118,7 @@ async def new_execution(req: NewExecutionReq, user=Depends(require_user())):
 @router.post("/{eid}/cancel")
 async def cancel_execution(eid: str, user=Depends(require_user())):
     """Stop a running execution. Only takes effect for tools that registered a cancel callback
-    (see server/infra/cancellation.py) — currently just testdata_verifier's Selenium session.
+    (see server/infra/cancellation.py) — the browser-driven tools' Selenium sessions.
     The execution's own exception handling (not this endpoint) is what finalizes its status once
     the cancelled call unwinds, so this only reports whether a cancellable task was found."""
     storage: StorageAsync = shared.storage
@@ -132,7 +132,7 @@ async def cancel_execution(eid: str, user=Depends(require_user())):
 @router.get("/runs/{execution_id}/{tool_name}/{filename:path}")
 async def download_run_file(execution_id: str, tool_name: str, filename: str, user=Depends(require_user())):
     """Serve a file a Plugin wrote into its own work_dir (RUNS_DIR/<execution_id>/<tool_name>/...) —
-    e.g. testdata_verifier's standalone report.html, which previously had no download route at
+    e.g. a verifier tool's standalone report.html, which previously had no download route at
     all and just sat on disk unreachable from the UI."""
     base = (RUNS_DIR / execution_id / tool_name).resolve()
     target = (base / filename).resolve()

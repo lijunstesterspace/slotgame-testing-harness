@@ -18,11 +18,7 @@
 ```
 testdata updating tool/
 ├── generate_testdata.py     # .testdata generator (Python CLI / interactive)
-├── verify_testdata.py       # Automated verifier (Selenium + HTML report)
 ├── generator_gui.html       # Visual web-based generator (works out of the box)
-├── mock_game.html           # Mock game page (for debugging the verifier)
-├── report.html              # Sample verification report
-├── screenshots/             # Directory for screenshots taken during verification
 └── README.md                # This file
 ```
 
@@ -89,30 +85,14 @@ python generate_testdata.py -m 10539 -s BaseGame -c TestMode -f input_data.txt
 echo "Bonus_MINI  58,3  2,67933" | python generate_testdata.py -m 10539
 ```
 
-### Option 3: Automated Verification
+### Option 3: Verification Against the Game
 
-```bash
-# Verify by clicking SPIN manually
-python verify_testdata.py -f generated_wins.testdata -u "https://your-game-url.com"
-
-# Trigger SPIN automatically with the space bar (5-second interval)
-python verify_testdata.py -f generated_wins.testdata -u "https://your-game-url.com" --auto-spin --spin-delay 5.0
-```
+Verification runs from the AI Assistant front end (Option 0): pick the TestData Verification
+scenario, then the Harness method (Titan Harness launcher login, with screenshots) or Direct API.
 
 ## Installing Dependencies
 
 The generator (`generate_testdata.py`) depends only on the Python standard library; **no additional installation is required**.
-
-The verifier (`verify_testdata.py`) requires Selenium:
-
-```bash
-pip install selenium
-```
-
-If Selenium is not installed when you first run `verify_testdata.py`, the script automatically runs `pip install selenium`. You also need:
-
-- The **Google Chrome** browser installed
-- A **ChromeDriver** that matches your Chrome version (Selenium 4.6+ manages this automatically; no manual download needed)
 
 ## Input Data Format
 
@@ -189,50 +169,7 @@ The two formats can be **pasted mixed together**; the parser recognizes them aut
 
 **In interactive mode**, the script first tries to read the clipboard; if it detects valid data, it asks whether to use it directly.
 
-## verify_testdata.py Parameters
-
-| Parameter | Short | Default | Description |
-|------|------|--------|------|
-| `--file` | `-f` | **Required** | Path to the `.testdata` file to verify |
-| `--url` | `-u` | **Required** | Game page URL |
-| `--output` | `-o` | `report.html` | Save path for the generated HTML report |
-| `--auto-spin` | — | Off | When enabled, automatically presses the space bar to trigger SPIN |
-| `--spin-delay` | — | `5.0` | Interval in seconds between automatic SPINs |
-
-### Verification Flow
-
-1. The script launches Chrome and opens the specified URL
-2. The user logs in and loads the game in the browser
-3. Switch back to the console and press `Enter` to start listening
-4. After each SPIN, the game page's console must output a log line like `batch: 58, index: 3`
-5. The script captures that log automatically and compares it one by one against the expected sequence parsed from the testdata
-6. Every comparison automatically takes a browser screenshot and saves it to `screenshots/`
-7. After all SPINs are done, an HTML report is generated in the current directory (with overall statistics, per-entry details, and click-to-enlarge thumbnails)
-
-## Debugging with the Mock Game
-
-Use the bundled `mock_game.html` to verify the flow without a real game:
-
-```bash
-# 1. Start a local static server (pick any one)
-python -m http.server 8000
-
-# 2. Run the verifier with the URL pointing at the mock page
-python verify_testdata.py ^
-  -f P5P_Bonus_Mini.testdata ^
-  -u "http://localhost:8000/mock_game.html" ^
-  --auto-spin --spin-delay 1.0
-```
-
-The mock page is preloaded with two SPIN entries: `(58,3)` → `(2,67933)`. Pressing the space bar or clicking the button both output a log line to the console.
-
 ## FAQ
-
-**Q: The verifier doesn't receive the batch/index log?**
-A: Make sure the game page's console actually outputs in the `batch: X, index: Y` format (matched by regex; other text before or after is fine). You can first open the browser DevTools → Console to confirm manually.
-
-**Q: Chrome fails to start or the version is incompatible?**
-A: Upgrade to the latest Chrome and Selenium: `pip install --upgrade selenium`. Selenium Manager in Selenium 4.6+ automatically downloads the matching ChromeDriver version.
 
 **Q: In nested Bonus mode, why is the stage in the XML fixed to BaseGame/Bonus, ignoring the CLI --stage?**
 A: The double-pair template (4 values) means "Base Game triggers Bonus", so it always writes an outer `stage="BaseGame"` + an inner Feature with `stage="Bonus"`, regardless of the --stage argument (which only applies to the single-pair template).

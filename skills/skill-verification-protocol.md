@@ -92,6 +92,6 @@ Must output a verification report in standard JSON format:
 **The only valid format (must be followed strictly):**
 ```xml
 <tool_call>
-<name>testdata_verifier</name>
-<params>{"targetUrl": "...", "testdataFilePath": "...", "loginName": "..."}</params>
-</tool_call>
+<name>testdata_verifier_harness</name>
+<params>{"harness_url": "...", "testdata_files": ["..."], "axiom_api_key": "...", "product_id": "...", "client_id": "..."}</params>
+</tool_call>

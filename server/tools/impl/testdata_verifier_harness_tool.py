@@ -16,7 +16,7 @@ Okta, no MFA. Two things confirmed on that same manual test:
   - The Password field comes pre-filled with a single shared, non-expiring value (`test1234$`)
     for every QA test account on this platform — not a per-account secret we need to look up.
   - Username and Module Id are the *same* loginName/moduleID already embedded in a .testdata
-    file's <Key> element (see _extract_testdata_key in testdata_verifier_tool.py) — this tool
+    file's <Key> element (see _extract_testdata_key in testdata_verify_common.py) — this tool
     derives them from the file being verified rather than asking for them again.
   - Product Id / Client Id / Brand are NOT derivable from the testdata file — they're fixed per
     game-module version, not per test case — so they're plain tool parameters here, defaulted to
@@ -48,15 +48,14 @@ import httpx
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.testdata_verifier_tool import (
+from server.tools.impl.testdata_verify_common import (
     _INTERCEPTOR_JS,
     _parse_testdata,
     _compare_record,
     _generate_html_report,
     _extract_testdata_key,
-    _dismiss_feature_splash,
     _force_kill_driver,
-    TestdataVerifierTool,
+    _click_spin_by_selector,
 )
 from server.tools.impl.testdata_verifier_api_tool import _derive_env, _axiomcore_host
 from server.infra.logger import log
@@ -118,53 +117,225 @@ def _close_debug_panel_if_open(driver) -> None:
     time.sleep(1)
 
 
+_JFTW_PRESENT_JS = "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
+
+
+def _has_jftw(driver) -> bool:
+    try:
+        return bool(driver.execute_script(_JFTW_PRESENT_JS))
+    except Exception:
+        return False
+
+
+def _trusted_click(driver, fx: float, fy: float) -> None:
+    """Click at a fraction of the top-level viewport via CDP Input.dispatchMouseEvent.
+
+    Unlike a JS-dispatched MouseEvent (isTrusted=false, which canvas-rendered splashes ignore —
+    see _wait_for_spin_ready), CDP input goes through the browser's real input pipeline, so it is
+    hit-tested like a human click: it reaches a <canvas>, and it reaches into an iframe the game
+    may be running in. Coordinates are always top-level-viewport CSS pixels, regardless of which
+    frame the driver is currently switched into, so the size comes from Page.getLayoutMetrics
+    rather than the current frame's window.innerWidth."""
+    try:
+        m = driver.execute_cdp_cmd("Page.getLayoutMetrics", {})
+        vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
+        x = round(vp["clientWidth"] * fx)
+        y = round(vp["clientHeight"] * fy)
+        driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+        for t in ("mousePressed", "mouseReleased"):
+            driver.execute_cdp_cmd("Input.dispatchMouseEvent",
+                                   {"type": t, "x": x, "y": y, "button": "left", "clickCount": 1})
+    except Exception:
+        pass
+
+
+def _enter_game_context(driver, timeout_sec: int) -> str:
+    """Wait for window.jftwTools to attach, switching into the game's iframe if that's where it
+    lives, and make sure the console.log interceptor is installed in that same context.
+
+    Replaces a fixed `time.sleep(3)` followed by a single jftwTools check. On a live run against
+    grandBountyOpenWatersPowerComboDesktop (4.60.0) the browser then sat on the feature splash
+    ("PRESS ANYWHERE TO CONTINUE") indefinitely: either the (larger, desktop) bundle hadn't attached
+    jftwTools within 3s, or the launch page hosts the game in an iframe where the top-level
+    `window.jftwTools` never exists — both sent _wait_for_spin_ready down its no-jftw fallback.
+    Polls the top document and its iframes until timeout. Returns "top", "iframe[<n>]" or
+    "not_found" (driver left on the top document) for logging.
+    """
+    from selenium.webdriver.common.by import By
+    deadline = time.time() + timeout_sec
+    where = "not_found"
+    while time.time() < deadline:
+        driver.switch_to.default_content()
+        if _has_jftw(driver):
+            where = "top"
+            break
+        try:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+        except Exception:
+            frames = []
+        for i, frame in enumerate(frames):
+            try:
+                driver.switch_to.frame(frame)
+                if _has_jftw(driver):
+                    where = f"iframe[{i}]"
+                    break
+            except Exception:
+                pass
+            driver.switch_to.default_content()
+        if where != "not_found":
+            break
+        time.sleep(1)
+
+    # Page.addScriptToEvaluateOnNewDocument was registered on the harness tab before LAUNCH GAME
+    # opened the game in a *new* tab — CDP registrations are per-target, so it may never have run
+    # here. Register it on this target too (covers any later reload), and install it right now if
+    # it's missing. A late install still catches every future console.log call made through the
+    # global console object, which is all the interceptor relies on.
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
+    except Exception:
+        pass
+    try:
+        if not driver.execute_script("return !!window.__gvInstalled;"):
+            driver.execute_script(_INTERCEPTOR_JS)
+            log.warning("verifier_harness.interceptor_late_install", context=where)
+    except Exception:
+        pass
+    return where
+
+
 def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
     """Dismiss the intro/feature-splash and wait for the spin button to be ready.
 
     CONFIRMED on a live run: this game's splash is canvas-rendered, not real DOM — a raw
     synthetic MouseEvent dispatched via document.elementFromPoint(x,y).dispatchEvent(...) (the
-    same technique _dismiss_feature_splash uses, and the only thing available without this API)
-    never progressed window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after
-    24s of polling with no click at all attempted in between. window.jftwTools.common.touch(x, y)
-    — the game's own debug/test API (see jftw-game-client-sdk-automation-axiom's `window.jftwTools`
-    usage) — IS recognized as a real touch and reliably advanced the state to 'Idle' with
-    isSpinButtonReady() true within one 2s poll cycle on that same run. Falls back to the older
-    coordinate-click approach if jftwTools isn't present (a different game build might not expose
-    it) — in that fallback case there is no reliable readiness signal, so it just gives the
-    dismissal attempts a moment to land and proceeds optimistically, same as before this fix.
+    same technique _dismiss_feature_splash uses) never progressed
+    window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after 24s of polling.
+    window.jftwTools.common.touch(x, y) — the game's own debug/test API (see
+    jftw-game-client-sdk-automation-axiom's `window.jftwTools` usage) — IS recognized as a real
+    touch and reliably advanced the state to 'Idle' with isSpinButtonReady() true within one 2s
+    poll cycle on that same run.
+
+    jftwTools is re-checked on every poll (it can attach after this starts), and a trusted CDP
+    click (_trusted_click) backs up the jftw touch on alternate polls in case a game build's
+    touch() ignores the coordinates we pass. Without jftwTools there is no readiness signal, so
+    the fallback makes a few trusted clicks and proceeds optimistically — a trusted click, unlike
+    the old synthetic MouseEvent, does actually reach a canvas splash.
     """
-    has_jftw = False
+    deadline = time.time() + timeout_sec
+    attempt = 0
+    while time.time() < deadline:
+        has_jftw = _has_jftw(driver)
+        if has_jftw:
+            try:
+                if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
+                    return True
+            except Exception:
+                pass
+        elif attempt >= 3:
+            _close_debug_panel_if_open(driver)
+            return True
+        attempt += 1
+        if has_jftw:
+            try:
+                # {x, y} object form matches the colleague's automation suite's own usage
+                # (src/js/client/misc.js's touch()).
+                driver.execute_script(
+                    "const w = window.innerWidth, h = window.innerHeight;"
+                    "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
+                )
+            except Exception:
+                pass
+        if not has_jftw or attempt % 2 == 0:
+            _trusted_click(driver, 0.5, 0.6)
+        time.sleep(2)
     try:
-        has_jftw = bool(driver.execute_script(
-            "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
-        ))
+        state = driver.execute_script(
+            "try { return window.jftwTools.gameState.getActiveGameState(); } catch (e) { return null; }")
+    except Exception:
+        state = None
+    log.warning("verifier_harness.spin_not_ready", timeout_sec=timeout_sec, game_state=state)
+    return False
+
+
+_RESPONSE_COUNT_JS = "return window.__gvResponses ? window.__gvResponses.length : 0;"
+
+
+def _is_spin_ready(driver) -> bool:
+    try:
+        return bool(driver.execute_script(
+            "return !!(window.jftwTools && window.jftwTools.gameState.isSpinButtonReady());"))
+    except Exception:
+        return False
+
+
+def _nudge(driver) -> None:
+    """One "press anywhere to continue" tap — a feature intro / total-win summary screen blocks
+    the round until it's dismissed. jftw touch when available, trusted CDP click otherwise."""
+    try:
+        if driver.execute_script(
+            "if (!(window.jftwTools && window.jftwTools.common)) return false;"
+            "window.jftwTools.common.touch({x: Math.round(innerWidth*0.5), y: Math.round(innerHeight*0.6)});"
+            "return true;"
+        ):
+            return
     except Exception:
         pass
-    if not has_jftw:
-        for _ in range(3):
-            _dismiss_feature_splash(driver, attempts=2)
-            _close_debug_panel_if_open(driver)
-        return True
+    _trusted_click(driver, 0.5, 0.6)
+
+
+def _has_pregen(resp: dict | None, batch: int, index: int) -> bool:
+    """True if any {batch, index} pair anywhere under gameResponse.testData equals (batch, index).
+    A feature round's response may not carry its seed at testData.spin.preGen like a base spin's
+    does (unconfirmed — no free-spin response has been inspected yet), so search the whole subtree."""
+    stack = [(((resp or {}).get("gameResponse") or {}).get("testData"))]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, dict):
+            if v.get("batch") == batch and v.get("index") == index:
+                return True
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
+def _await_feature_response(driver, start_idx: int, rec: dict, timeout_sec: int) -> tuple[int, dict] | None:
+    """Wait for a game-driven (no click) round — FreeSpin/Bonus/... — to produce the response for
+    `rec`, starting at __gvResponses[start_idx].
+
+    A feature stage's spins are auto-played by the game after the triggering BaseGame spin, so
+    nothing must be clicked for them; the old loop clicked Spin anyway and only counted responses
+    arriving *after* that click, by which point the free spins had already played out (they were
+    captured, just never looked at) — a correct FreeSpin record came back TIMEOUT. Returns the
+    first response from start_idx whose preGen matches rec; if none matches once the round has
+    settled (spin button ready, no new responses for a few seconds), the first new response so the
+    report shows what actually came back. Taps through intro/summary screens while stalled.
+    """
     deadline = time.time() + timeout_sec
+    last_count, last_change = -1, time.time()
     while time.time() < deadline:
         try:
-            if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
-                return True
+            n = int(driver.execute_script(_RESPONSE_COUNT_JS))
+            new = driver.execute_script(f"return window.__gvResponses.slice({start_idx});") if n > start_idx else []
         except Exception:
-            pass
-        try:
-            # {x, y} object form matches the colleague's automation suite's own usage
-            # (src/js/client/misc.js's touch()) — confirmed this platform's touch() also accepts
-            # two positional numbers on our own live run, but the object form is what the
-            # game's own test-automation code actually calls, so it's the safer long-term bet.
-            driver.execute_script(
-                "const w = window.innerWidth, h = window.innerHeight;"
-                "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
-            )
-        except Exception:
-            pass
-        time.sleep(2)
-    return False
+            n, new = last_count, []
+        for i, resp in enumerate(new or []):
+            if _has_pregen(resp, rec["batch"], rec["index"]):
+                return start_idx + i, resp
+        if n != last_count:
+            last_count, last_change = n, time.time()
+        stalled = time.time() - last_change
+        ready = _is_spin_ready(driver)
+        if ready and stalled >= 4:
+            # Round over. Either it produced responses that just don't match, or the feature was
+            # never triggered at all (rec gets compared against nothing → caller reports it).
+            return (start_idx, new[0]) if new else None
+        if not ready and stalled >= 3:
+            _nudge(driver)
+            time.sleep(1.5)
+        time.sleep(0.5)
+    return (start_idx, new[0]) if new else None
 
 
 def _apply_time_scale(driver, scale: int = 2000) -> None:
@@ -193,7 +364,7 @@ def _click_spin_via_jftw(driver) -> bool:
     `keypad`/`legacy` groups (NOT the 'uiSpinButton' id mentioned in an unrelated Spine-atlas
     console warning, which turned out to be a red herring). Returns False (rather than raising)
     when jftwTools isn't available, so the caller can fall back to
-    TestdataVerifierTool._click_spin's CSS-selector guessing.
+    _click_spin_by_selector's CSS-selector guessing.
 
     The isEnabledVisually check + short pauses before/after the touch mirror the colleague's
     automation suite's touchSpinButton() (src/js/client/keypad.js) — their comment there notes
@@ -484,11 +655,18 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             except Exception as e:
                 return ToolResult(success=False, error=f"harness_no_window_remained_after_launch:{e}")
 
-            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id)
-            time.sleep(3)  # let the game bundle attach window.jftwTools before we start polling
+            game_context = _enter_game_context(driver, timeout_sec=harness_load_timeout)
+            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id,
+                     game_context=game_context)
 
-            if not _wait_for_spin_ready(driver, timeout_sec=30):
+            if not _wait_for_spin_ready(driver, timeout_sec=60):
                 log.warning("verifier_harness.spin_not_ready_after_wait")
+                try:
+                    ss_path = screenshots_dir / "after_launch_not_ready.png"
+                    ss_path.write_bytes(driver.get_screenshot_as_png())
+                    artifacts.append(str(ss_path.resolve()))
+                except Exception:
+                    pass
 
             _apply_time_scale(driver)
 
@@ -503,6 +681,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             max_consecutive_network_errors = 3
             max_consecutive_seed_rejections = 2
             environment_aborted = False
+            consumed = 0  # __gvResponses entries already matched to (or skipped past) a record
 
             for file_name, rec in all_records_this_run:
                 if environment_aborted:
@@ -524,21 +703,30 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                 # after a big win came back TIMEOUT with zero errors raised anywhere). Waiting
                 # for isSpinButtonReady() before *every* spin, not just once after launch, is
                 # what actually needs to happen here.
-                _wait_for_spin_ready(driver, timeout_sec=15)
-                prev_count = driver.execute_script(
-                    "return window.__gvResponses ? window.__gvResponses.length : 0;")
-                if not _click_spin_via_jftw(driver):
-                    TestdataVerifierTool._click_spin(driver)
-                time.sleep(spin_delay)
-
+                # Only a BaseGame record is a player-initiated spin. Any other stage (FreeSpin,
+                # Bonus, ...) is a round the game auto-plays after the BaseGame spin that
+                # triggered it — clicking Spin for it is wrong, and its response has usually
+                # already been captured by the time we get here.
                 actual = None
-                for _ in range(30):
-                    curr_count = driver.execute_script(
-                        "return window.__gvResponses ? window.__gvResponses.length : 0;")
-                    if curr_count > prev_count:
-                        actual = driver.execute_script(f"return window.__gvResponses[{curr_count - 1}];")
-                        break
-                    time.sleep(0.5)
+                if rec["stage"] == "BaseGame":
+                    _wait_for_spin_ready(driver, timeout_sec=60)
+                    # Skip whatever the previous round left behind (e.g. the rest of a free-spin
+                    # feature's responses) — this record's response is the first one after the click.
+                    consumed = driver.execute_script(_RESPONSE_COUNT_JS)
+                    if not _click_spin_via_jftw(driver):
+                        _click_spin_by_selector(driver)
+                    time.sleep(spin_delay)
+                    for _ in range(30):
+                        if driver.execute_script(_RESPONSE_COUNT_JS) > consumed:
+                            actual = driver.execute_script(f"return window.__gvResponses[{consumed}];")
+                            consumed += 1
+                            break
+                        time.sleep(0.5)
+                else:
+                    found = _await_feature_response(driver, consumed, rec, timeout_sec=180)
+                    if found:
+                        idx, actual = found
+                        consumed = idx + 1
 
                 if actual is None:
                     result = {
@@ -568,6 +756,13 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                     result = _compare_record(rec, actual)
                     result["screenshot_b64"] = None
                     result["source_file"] = file_name
+                    if result["verdict"] == "SEED_MISMATCH" and _has_pregen(actual, rec["batch"], rec["index"]):
+                        # The seed is in this response, just not at testData.spin.preGen where
+                        # _compare_record looks (a feature round may nest it elsewhere).
+                        result["actualBatch"], result["actualIndex"] = rec["batch"], rec["index"]
+                        result["issues"] = [i for i in result["issues"] if not i.startswith(("batch", "index"))]
+                        result["passed"] = True
+                        result["verdict"] = "PASSED" if not result["issues"] else "STAGE_MISMATCH"
 
                     gd = actual.get("gameResponse", {})
                     error_msg = gd.get("error", "") or gd.get("errorMessage", "")
@@ -579,8 +774,9 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                         consecutive_network_errors = 0
                     else:
                         consecutive_seed_rejections = 0
-                        if result["passed"]:
-                            consecutive_network_errors = 0
+                        # A response *was* captured, so the environment is reachable whether or not
+                        # it matched — only consecutive TIMEOUTs should count toward the abort.
+                        consecutive_network_errors = 0
 
                     need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
                         not result["passed"] and screenshot_fail)

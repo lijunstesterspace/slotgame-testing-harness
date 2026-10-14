@@ -62,13 +62,11 @@ export interface VerificationConfig {
   folderPath?: string;
   testdataFilePath?: string;
   testdataFilePaths?: string[];  // Support multiple testdata files
-  /** "selenium" (default): drive a real Chrome via testdata_verifier (real game URL + Okta/MFA
-   * login). "api": skip the browser entirely and hit the game's own session/play APIs directly
-   * via testdata_verifier_api — needs oktaAccessToken. "harness": drive a real Chrome via
-   * testdata_verifier_harness, but through the QA-only Titan Harness launcher page instead of
-   * the real game URL — no Okta/MFA, keeps screenshots. See each tool's module docstring for
-   * the confirmed mechanism. */
-  verificationMethod?: "selenium" | "api" | "harness";
+  /** "harness" (default): drive a real Chrome via testdata_verifier_harness through the QA-only
+   * Titan Harness launcher page — no Okta/MFA, keeps screenshots. "api": skip the browser
+   * entirely and hit the game's own session/play APIs directly via testdata_verifier_api — needs
+   * oktaAccessToken. See each tool's module docstring for the confirmed mechanism. */
+  verificationMethod?: "api" | "harness";
   /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". Bootstraps
    * the *game* session (api5-rhel1) — unrelated to axiomApiKey below. */
   oktaAccessToken?: string;
@@ -142,7 +140,7 @@ export interface VerificationReport {
   results: VerificationResult[];
   aiDiagnosis?: AIDiagnosisResult;
   /** Server-relative URL for the standalone HTML verification report (with embedded
-   * screenshots), if the backend produced one — see testdata_verifier_tool.py's report_url. */
+   * screenshots), if the backend produced one — see the verifier tools' report_url. */
   reportUrl?: string;
   /** Set only when the run produced zero cases because testdata_verifier errored out before
    * ever uploading/spinning (e.g. admin login timeout) — surfaced in the modal as a banner

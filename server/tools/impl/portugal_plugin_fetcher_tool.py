@@ -41,7 +41,7 @@ from server.game_session.launcher import (
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.testdata_verify_common import (
+from server.tools.impl.selenium_page_drivers import (
     _INTERCEPTOR_JS, _force_kill_driver, _click_spin_by_selector,
     _fill_labeled_field, _click_button_by_text,
     _wait_for_spin_ready, _apply_time_scale, _click_spin_via_jftw,

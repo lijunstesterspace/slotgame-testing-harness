@@ -154,6 +154,7 @@ hidden_imports = [
     "server.tools.impl.portugal_plugin_parser_tool",
     "server.tools.impl.portugal_plugin_reporter_tool",
     "server.tools.impl.portugal_plugin_symbol_map_tool",
+    "server.tools.impl.selenium_page_drivers",
     "server.tools.impl.symbol_profiles",
     "server.tools.impl.testdata_generator_tool",
     "server.tools.impl.testdata_parser_tool",

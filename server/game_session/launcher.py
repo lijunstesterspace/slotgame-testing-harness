@@ -5,7 +5,7 @@ Two launch modes:
     (http://localhost:5241/...) or a remote one. The URL itself logs in.
   - titan:  the QA-only Titan Harness launcher page (…/harness/<game>), a form whose "LAUNCH GAME"
     button opens the game in a new tab. Field strategies are ported from the retired Selenium tool
-    (testdata_verify_common._fill_labeled_field), which was confirmed against the live page.
+    (selenium_page_drivers._fill_labeled_field), which was confirmed against the live page.
 
 Chrome must keep rendering while nobody looks at it: a hidden or occluded page stops animating and
 the game's state machine stops advancing (seen live: stuck at PostInit until the pane was shown).

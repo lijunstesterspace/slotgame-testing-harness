@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from server.tools.impl.html_to_text_converter_tool import pick_baseline
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter,
     ToolResult, HarnessContext,
@@ -285,7 +286,7 @@ class HelpfileReportTool(ToolPlugin):
             return ToolResult(success=False, error="txt_files_empty: No TXT files provided")
         output_folder.mkdir(parents=True, exist_ok=True)
 
-        baseline_file = params.get("baseline_file") or sorted(txt_files, key=lambda f: f["subdir_name"])[0]["txt_path"]
+        baseline_file = params.get("baseline_file") or pick_baseline(txt_files)["txt_path"]
         data = build_report_data(
             txt_files,
             params.get("keywords") or [],

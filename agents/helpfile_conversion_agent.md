@@ -54,7 +54,7 @@ is logged as a warning and the pipeline still completes with `helpfile_report.ht
 
 ### Rule 2: Baseline Selection & Diff Comparison (implemented in `diff_comparator_tool.py`)
 - Sorts all subdirectory names alphabetically.
-- The first subdirectory's TXT becomes the **baseline file** (unless overridden).
+- The English subdirectory's TXT (`en`, else `en-*` / `en_*`) becomes the **baseline file**; the alphabetically first one only if there is no English file (unless overridden).
 - Compares each remaining file against the baseline using `difflib.HtmlDiff`.
 - Generates per-file diff HTML with color-coded changes.
 

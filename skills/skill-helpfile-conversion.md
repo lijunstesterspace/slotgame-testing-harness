@@ -29,7 +29,7 @@ Skill for batch conversion, diff comparison and keyword analysis of Helpfile hel
 
 ### Rule 4: Baseline File Selection
 - Sort all subdirectory names alphabetically
-- The TXT file of the first subdirectory after sorting is the **baseline file**
+- The English help file is the **baseline file**: subdirectory `en` first, then one whose name has an `en` token (`en-gb`, `en_us`); only if there is no English file, the first subdirectory after sorting
 - Each remaining file is diffed against the baseline file separately
 
 ### Rule 5: Diff Generation

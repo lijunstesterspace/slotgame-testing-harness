@@ -42,7 +42,7 @@ Defines the interface contract between the Helpfile conversion analysis Plugin t
 | `txt_files` | array | Yes | List of TXT file paths `[{subdir_name, txt_path}]` |
 | `keywords` | array | Yes | List of keywords to highlight and count |
 | `output_folder` | string | Yes | Output path for diff reports |
-| `baseline_file` | string | No | Baseline file path (defaults to the alphabetically first) |
+| `baseline_file` | string | No | Baseline file path (defaults to the English file: `en`, then `en-*`, else the alphabetically first) |
 | `generate_png` | boolean | No | Whether to generate PNG screenshots, default true |
 
 **Output structure:**

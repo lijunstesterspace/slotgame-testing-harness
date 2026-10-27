@@ -85,6 +85,16 @@ if errorlevel 1 (
     goto :skip_frontend
 )
 
+:: Call "npm", not "npm.cmd": cmd resolves it through PATHEXT, so it works both for the official
+:: installer (npm.cmd) and for version managers that only put an npm.exe shim on PATH (nvm-windows 2.x)
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Node.js was found but npm was not
+    echo [HINT] Reinstall Node.js, or with nvm run: nvm use ^<version^>
+    pause
+    exit /b 1
+)
+
 :: Clean the old server/static first (avoid leftover old build output)
 if exist "server\static" (
     echo [INFO] Cleaning old server/static output...
@@ -100,12 +110,12 @@ if exist "node_modules" (
 :: Check node_modules
 if not exist "node_modules" (
     echo [INFO] Installing frontend dependencies...
-    call npm.cmd ci
+    call npm ci
 )
 
 :: Build frontend into server/static
 echo [INFO] Running npm run build - output to server/static...
-call npm.cmd run build
+call npm run build
 if errorlevel 1 (
     echo [ERROR] Frontend build failed
     pause

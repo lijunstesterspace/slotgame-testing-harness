@@ -2,6 +2,15 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
+> **Revision note (2026-10-27, incremental code-aligned revision)**
+>
+> Re-checked against `main` at commit `5e95502` (23 commits after the previous baseline `6c03e2a`), same "code is the source of truth" principle. Main changes:
+>
+> - Plugins: **15** registered (new `helpfile_report`); the EasyHelp pipeline is now **4 stages** (convert → compare → report → optional AI analyze), and `PipelineStepDef` gained an `optional` flag the engine honors;
+> - `testdata_verifier_harness` now drives the browser with **Playwright** through the new `server/game_session/` layer (not Selenium), accepts either a Titan Harness launcher URL or a direct game launch URL, and stops cooperatively on cancel; Selenium page drivers moved to `selenium_page_drivers.py`;
+> - `helpfile_analyzer` now uses the model picked in the UI when the active Provider is Ollama;
+> - UI (EasyHelp review panel), directory structure, API list (`/api/tools/stage-local-files`), artifact locations and Chapter 13 were updated accordingly.
+
 > **Revision note (2026-10-08, full code-aligned revision)**
 >
 > This revision re-checks every section against the current code (baseline: `main` branch, commit `6c03e2a`) on the principle that **"the code is the source of truth"**: wherever the document and the code disagreed, the document has been rewritten to match the code; vision content that has not landed yet is kept but explicitly marked "planned / not implemented". Main changes:
@@ -111,13 +120,13 @@ Dedicated skill manuals that fix rules and constrain AI behavior. `skills/` hold
 
 #### Layer 4: Plugin Local Tool Layer (execution layer)
 
-Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all subclassing `ToolPlugin` (MCP-compatible name / description / inputSchema), registered in `BUILTIN_TOOLS` in `server/tools/impl/__init__.py`, and loaded into `ToolRegistry` at backend startup. There are currently 14:
+Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all subclassing `ToolPlugin` (MCP-compatible name / description / inputSchema), registered in `BUILTIN_TOOLS` in `server/tools/impl/__init__.py`, and loaded into `ToolRegistry` at backend startup. There are currently 15:
 
 | Scenario | Plugins |
 |---|---|
 | TestData Generation | `testdata_parser` (parses pasted sheet text), `testdata_generator` (writes .testdata XML), `zip_packager` (ZIP + manifest) |
-| TestData Verification | `testdata_verifier_harness` (Titan Harness launcher login + Selenium, default), `testdata_verifier_api` (direct game HTTP APIs, no browser), `log_diagnoser` (rule-based failure attribution) |
-| EasyHelp Checking | `html_to_text_converter`, `diff_comparator` (with keyword highlighting and Excel output), `helpfile_analyzer` (calls local Ollama server-side to produce an analysis report) |
+| TestData Verification | `testdata_verifier_harness` (default; real browser via Playwright through `server/game_session/`, entered through the Titan Harness launcher or a direct game launch URL), `testdata_verifier_api` (direct game HTTP APIs, no browser), `log_diagnoser` (rule-based failure attribution) |
+| EasyHelp Checking | `html_to_text_converter`, `diff_comparator` (with keyword highlighting and Excel output), `helpfile_report` (deterministic `helpfile_report.html` / `.json`, no AI), `helpfile_analyzer` (optional; calls local Ollama server-side to analyze that report) |
 | Portugal Plugin | `portugal_plugin_symbol_map`, `portugal_plugin_fetcher` (Selenium → Game History → PlayCheck to fetch the outcome), `portugal_plugin_parser`, `portugal_plugin_reporter` (TXT/JSON/HTML reports) |
 
 > Note: the originally planned "Google Sheet Reader Plugin (spreadsheet API connection, raw-data fetching)" is **not implemented**. TestData generation currently takes its data from sheet rows the user **pastes** into the input box, or a local text/CSV file attached via "+" (read in the browser and folded into the input box); a Google Sheet URL in the input box is only used for scenario/URL-type validation and is never fetched.
@@ -135,7 +144,7 @@ The actual fixed flow per scenario:
 | Scenario | Driven by | Fixed steps |
 |---|---|---|
 | TestData Generation | ExecutionEngine | `testdata_parser` → `testdata_generator` → `zip_packager` |
-| EasyHelp Checking | ExecutionEngine | `html_to_text_converter` → `diff_comparator` → `helpfile_analyzer` |
+| EasyHelp Checking | ExecutionEngine | `html_to_text_converter` → `diff_comparator` → `helpfile_report` → `helpfile_analyzer` (optional: a failure only warns, the stage-3 report is kept) |
 | Portugal Plugin Verification | ExecutionEngine | `portugal_plugin_symbol_map` → `portugal_plugin_fetcher` (pass-through in paste mode) → `portugal_plugin_parser` → `portugal_plugin_reporter` |
 | TestData Verification | `verificationEngine.ts` directly (**not** ExecutionEngine) | One selected verifier Plugin (async execution + live SSE progress) → AI diagnosis when there are failed cases (falls back to `log_diagnoser` on failure) |
 
@@ -167,7 +176,8 @@ The Workbench is a "header + three columns + bottom status bar" layout:
 
 - **Right: pipeline and artifacts**
     - **PipelineVisualization**: a generic 5-stage progress bar (Intent → Generate → Review → Verify → Complete) reflecting the workflow stage rather than the specific Pipeline steps;
-    - **TestDataPreview**: shown only after TestData Generation completes, with XML preview and ZIP download.
+    - **TestDataPreview**: shown only after TestData Generation completes, with XML preview and ZIP download;
+    - **EasyHelpReviewPanel**: shown only after EasyHelp Checking completes, linking the generated HTML report (and the AI analysis when that optional step succeeded).
 
 - **Standalone pages**: model management (LlmConfigPage — multi-model config store and connectivity test), Plugin (backend tool list + skill list), Agents, History (past executions; verification reports can be reopened).
 
@@ -177,7 +187,7 @@ The Workbench is a "header + three columns + bottom status bar" layout:
 
 > **Login note**: Harness itself has **no login** — open it and use it. `require_user()` in `server/infra/security.py` always returns the fixed local user `LOCAL_USER`, with no password or session check; the earlier `auth_router.py` account system has been deleted. Harness login and the real game/admin environment's login are two unconnected systems, so the early assumption that "logging into Harness spares you from logging into the game environment" did not hold, and the login was removed.
 >
-> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** logs in through the QA-only Titan Harness launcher form (shared test password, no Okta/MFA), with testdata uploaded directly via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) has been removed; its shared helpers live on in `testdata_verify_common.py`, and its old history reports still reopen (the frontend still recognizes the `testdata_verifier` tool name in stored executions).
+> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** opens a real browser with Playwright (`server/game_session/`) and logs in either through the QA-only Titan Harness launcher form (shared QA test password by default, overridable via the `harness_password` param; no Okta/MFA) or through a direct game launch URL that carries the account in its query string, with testdata uploaded directly via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) has been removed; its shared helpers live on in `testdata_verify_common.py` and its Selenium page drivers in `selenium_page_drivers.py` (still used by `portugal_plugin_fetcher`), and its old history reports still reopen (the frontend still recognizes the `testdata_verifier` tool name in stored executions).
 
 ### 4.2 Visual & Interaction Spec
 
@@ -225,13 +235,13 @@ The frontend's unified gateway is `src/utils/llmGateway.ts` (`streamUniversalLlm
 | `PlannerAgent.clarify()` | Frontend | Active model (gateway) | One clarifying question when a required input is missing; Enter-key simple dialogue |
 | `PlannerAgent.summarizeStepResult()` | Frontend | Active model (gateway) | 3–6 sentence summary of the last step's result after the pipeline completes |
 | `runAIDiagnosis()` | Frontend `verificationEngine.ts` | Config saved in localStorage (gateway) | Root-cause diagnosis of failed verification cases (JSON) |
-| `helpfile_analyzer` Plugin | Backend Python | **Direct Ollama call** (default `http://localhost:11434`, `qwen3:latest`, temperature 0.3), bypassing the frontend gateway | EasyHelp analysis report |
+| `helpfile_analyzer` Plugin | Backend Python | **Direct Ollama call**, bypassing the frontend gateway (temperature 0.3). When the active Provider is `OLLAMA`, the frontend passes the selected model and Base URL; otherwise the plugin defaults apply (`http://localhost:11434`, `qwen3:latest`). If the requested model is not installed, it picks another installed local chat model | Optional AI analysis of the EasyHelp report |
 
 ### 5.4 Why a Multi-Gateway Design Instead of Hardcoding Two Providers
 
 - **Built for future extensibility, not a current necessity**: the current 4 fixed pipelines are covered by the local 7B model; the point of the multi-gateway design is so that changing the model source in the future, or plugging in a customer's own model API, requires no rework of the Harness;
 
-- **Architectural decoupling**: a change in model source only affects the Provider adaptation layer, and has no effect on intent routing, pipeline definitions, the execution engine, or Agent/Skill content — consistent with the "complete decoupling between layers" extensibility principle in Chapter 9 (`helpfile_analyzer`'s direct server-side call is currently the one exception);
+- **Architectural decoupling**: a change in model source only affects the Provider adaptation layer, and has no effect on intent routing, pipeline definitions, the execution engine, or Agent/Skill content — consistent with the "complete decoupling between layers" extensibility principle in Chapter 9 (`helpfile_analyzer`'s direct server-side Ollama call is currently the one exception — it follows the UI model choice only when that choice is an Ollama model);
 
 - **Not general-purpose bloat**: a multi-gateway design does not mean introducing general-purpose AI chat/office capability — after a Provider switch, the AI's scope of responsibility stays the same, so this does not violate the "not a general-purpose AI tool" positioning stated in section 1.3.
 
@@ -266,7 +276,7 @@ slotgame-testing-harness/
 │   │   ├── logVisionDiagnoser.ts  # rule-based per-case diagnosis in the verification report modal
 │   │   ├── paytableSheetParser.ts # paytable parsing for frontend mock data
 │   │   └── zipGenerator.ts        # frontend ZIP generation (TestDataPreview download)
-│   ├── components/            # Header / Sidebar / ExecutionConsole / PipelineVisualization / TestDataPreview / VerificationReportModal / LlmConfigModal / XmlViewer
+│   ├── components/            # Header / Sidebar / ExecutionConsole / PipelineVisualization / TestDataPreview / EasyHelpReviewPanel / VerificationReportModal / LlmConfigModal / XmlViewer
 │   ├── pages/                 # LlmConfigPage / PluginPage / AgentPage / HistoryPage
 │   └── App.tsx                # Workbench: scenario state, parameter assembly, run entry points
 ├── server/                    # Backend: FastAPI
@@ -275,9 +285,16 @@ slotgame-testing-harness/
 │   ├── api/                   # tools_router / executions_router / records_router
 │   ├── services/execution_queue.py  # serial execution queue
 │   ├── infra/                 # storage (SQLite) / security / cancellation / process_runner / logger
-│   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (14 Plugins)
+│   ├── game_session/          # Playwright game-session layer used by testdata_verifier_harness
+│   │                          #   (launcher / session / protocol / capture / env, plus a smoke script)
+│   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (15 Plugins, plus shared helpers:
+│                              #   testdata_verify_common.py, selenium_page_drivers.py, symbol_profiles.py)
+├── tests/                     # pytest: game_session protocol (with recorded fixtures) and account assignment
+├── docs/                      # supplementary design notes and plans
 ├── build.py / slot_harness.spec / harness.cmd   # PyInstaller + pywebview desktop packaging
-└── generate_testdata.py    # standalone CLI script
+├── generate_testdata.py       # standalone CLI script
+└── assign_testdata_accounts.py  # CLI: rewrite each .testdata <Key loginName> to its own test account
+                                 #   (automate01, automate02, ...) so a whole folder can be verified together
 ```
 
 > The original design-intent layout from project kick-off (`agents/agent-sheet-reader.md`, `plugins/google_sheet_reader.py`, `workflows/slot-test-pipeline.yaml`, `harness/scheduler.py`, etc.) did not land as drawn: the orchestration kernel is TypeScript in `src/harness/`, Plugins are Python in `server/tools/impl/`, and pipelines are declared in TypeScript in `pipelineRegistry.ts` (YAML pipeline configuration is a planned capability). The four-layer decoupling philosophy is unchanged.
@@ -324,7 +341,7 @@ This chapter explains: **how to add plugins, Agent skills, test pipelines, and b
 
 ### 9.2 Plugin Expansion (the core expansion method)
 
-14 Plugins have landed so far (see 2.2). SLOT-specific plugin directions for the future:
+15 Plugins have landed so far (see 2.2). SLOT-specific plugin directions for the future:
 
 - **SLOT numeric-validation plugin**: multiplier validation, probability validation, compliance checks on random-value distributions;
 - **Level/storyline test plugin**: batch generation and validity verification of multi-scenario storyline data;
@@ -337,8 +354,8 @@ This chapter explains: **how to add plugins, Agent skills, test pipelines, and b
 1. Create `xxx_tool.py` in `server/tools/impl/`, subclass `ToolPlugin`, declare `info` (name / description / inputSchema) and implement `_run_impl`;
 2. Register it in `BUILTIN_TOOLS` in `server/tools/impl/__init__.py` (it is loaded into `ToolRegistry` at backend startup and listed by `/api/tools/list`);
 3. If it belongs to a scenario, add it to `SCENARIO_PLUGINS` in `server/api/tools_router.py` and to that scenario's `requiredPlugins` in `intentRouter.ts`;
-4. Reference it as a step in `pipelineRegistry.ts`, declaring its input mapping with `buildParams`;
-5. If it runs long and should be interruptible by the Stop button, call `server/infra/cancellation.register()` with a teardown callback after acquiring the resource (e.g. a WebDriver).
+4. Reference it as a step in `pipelineRegistry.ts`, declaring its input mapping with `buildParams` (mark it `optional: true` if the pipeline should complete without it);
+5. If it runs long and should be interruptible by the Stop button, call `server/infra/cancellation.register()` with a cancel callback after acquiring the resource — either a force-close (e.g. `portugal_plugin_fetcher` kills its WebDriver) or a cooperative signal (e.g. `testdata_verifier_harness` sets a cancel event its Playwright session checks) — and `unregister()` when done.
 
 > Note: the frontend execution engine only appends the `__execution_id` metadata key; `ToolPlugin.validate()` rejects any parameter outside the inputSchema as `unknown_param`.
 
@@ -423,7 +440,7 @@ The 4 registered scenarios:
 |---|---|---|---|
 | `testdata_generation` | TestData Generation | `testdata-gen-pipeline` | testdata_parser, testdata_generator, zip_packager |
 | `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier_api, testdata_verifier_harness, log_diagnoser |
-| `easyhelp_checking` | EasyHelp Checking | `helpfile-conversion-pipeline` | html_to_text_converter, diff_comparator, helpfile_analyzer |
+| `easyhelp_checking` | EasyHelp Checking | `helpfile-conversion-pipeline` | html_to_text_converter, diff_comparator, helpfile_report, helpfile_analyzer |
 | `portugal_plugin` | Portugal Plugin Verification | `portugal-plugin-verify-pipeline` | portugal_plugin_symbol_map, portugal_plugin_fetcher, portugal_plugin_parser, portugal_plugin_reporter |
 
 **Routing strategy** (no AI dependency):
@@ -452,6 +469,7 @@ interface PipelineStepDef {
   dependsOn: string[];         // Prerequisite steps (declarative, see note below)
   retryOnFail: boolean;        // Whether to retry on failure
   maxRetries: number;
+  optional?: boolean;          // A failure only logs a warning; the pipeline continues
   buildParams?: (ctx: PipelineParamContext) => Record<string, unknown>;  // input mapping
 }
 
@@ -469,7 +487,7 @@ The 4 current pipelines (the `PIPELINES` array):
 |---|---|
 | `testdata-gen-pipeline` | parse (testdata_parser, 2 retries) → generate (testdata_generator, 2 retries) → package (zip_packager, no retry) |
 | `game-verify-pipeline` | verify (testdata_verifier_harness, no retry) → diagnose (log_diagnoser, no retry) — **declared but not currently invoked**, see the addendum under Module Three |
-| `helpfile-conversion-pipeline` | convert (html_to_text_converter, 1 retry) → compare (diff_comparator) → analyze (helpfile_analyzer) |
+| `helpfile-conversion-pipeline` | convert (html_to_text_converter, 1 retry) → compare (diff_comparator) → report (helpfile_report, deterministic HTML/JSON) → analyze (helpfile_analyzer, **optional**, reads the report's JSON) |
 | `portugal-plugin-verify-pipeline` | resolve_symbol_map → fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin (no retries) |
 
 `buildParams` is the key to "the AI does not decide parameters": e.g. the generate step takes `stepResults.parse.records`, and the Portugal parse step uses the `symbol_map` resolved in stage 0 directly. A step without `buildParams` falls back to passing `extraParams` through unchanged.
@@ -491,14 +509,15 @@ Execution engine (code-controlled, no AI involvement):
         result = POST /api/tools/execute { tool_name: step.plugin, params }
         success → status = success, stepResults[step.id] = result.content, next step
         failure → retry if attempts remain, otherwise status = failed
-    any failed step in the stage → pipeline = failed, stop
+    any failed non-optional step in the stage → pipeline = failed, stop
+    (a failed optional step only logs a warning)
   all done → pipeline = completed
   AbortSignal fired → pipeline = aborted
 ```
 
 - Step states: `pending / running / retrying / success / failed` (the type also has `skipped`, currently unused); pipeline states: `running / completed / failed / aborted` (the type also has `idle / paused`, currently unused);
 - `EngineCallbacks` (onStepChange / onStepComplete / onStepFail / onStatusChange / onLog) mirror progress into the task list and the execution console;
-- **Stop**: the frontend AbortController stops further steps; for a browser-driven Plugin still running on the backend (`portugal_plugin_fetcher`, etc.), the frontend also calls `POST /api/executions/{id}/cancel`, and the backend cancellation registry force-closes the WebDriver.
+- **Stop**: the frontend AbortController stops further steps; for a browser-driven Plugin still running on the backend (`portugal_plugin_fetcher`, `testdata_verifier_harness`), the frontend also calls `POST /api/executions/{id}/cancel`, and the backend cancellation registry runs the Plugin's registered callback — `portugal_plugin_fetcher` force-closes its Selenium WebDriver, `testdata_verifier_harness` sets a cancel event that its Playwright session stops on.
 
 **Where the AI sits in a pipeline run** (orchestrated by App.tsx, always outside the engine):
 
@@ -510,7 +529,7 @@ Execution engine (code-controlled, no AI involvement):
 This scenario **does not go through ExecutionEngine**; `game-verify-pipeline` is declared but never invoked. The actual path (`App.tsx` → `runRealGameVerification` in `utils/verificationEngine.ts`):
 
 1. The user uploads .testdata files or a folder via "+" (persisted by the backend's `/api/tools/upload-testdata`), then picks files and a verification method and enters credentials in the test-plan preview panel;
-2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness`, needing the Titan Harness launcher URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots;
+2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness` (Playwright via `server/game_session/`), for which the frontend requires a URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`. The Plugin itself picks its mode from the URL: a `/harness/` launcher URL fills the Titan Harness form, any other URL is treated as the game's own launch URL carrying the account in its query string; on the backend Product Id / Client Id are only needed for launcher URLs (see Chapter 13). One session logs into a single account/module, so `assign_testdata_accounts.py` can give each file its own account before a folder is verified; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots;
 3. `POST /api/tools/execute-async` runs it in the background; the frontend receives per-case progress live over SSE (`/api/executions/stream/{id}`), then reads the execution detail and builds the verification report;
 4. If any case failed, `runAIDiagnosis()` is called: the LLM outputs a diagnosis following the JSON template in the prompt; if the call throws, it falls back to calling the `log_diagnoser` Plugin for rule-based diagnosis;
 5. The report is shown in VerificationReportModal (which also has the frontend rule-based per-case diagnosis `logVisionDiagnoser.ts`) and can be reopened from the History page.
@@ -603,7 +622,7 @@ src/harness/
 - How the AI's (7B model's) three responsibilities are realized in code:
   1. **Simple conversational interaction** — implemented: single-turn chat via the Enter key in the input box; one clarifying question when a required input is missing (`PlannerAgent.clarify`);
   2. **Task classification and relay** — handled by deterministic code: scenario routing is keyword scoring, and data classification/grouping is done by rules inside each Plugin (e.g. testdata_parser groups files by rule); no model is called for this today;
-  3. **Analysis-report generation** — implemented: the post-pipeline step-result summary (`summarizeStepResult`), AI diagnosis of failed verification cases (`runAIDiagnosis`), and the EasyHelp analysis report (`helpfile_analyzer` calling Ollama server-side);
+  3. **Analysis-report generation** — implemented: the post-pipeline step-result summary (`summarizeStepResult`), AI diagnosis of failed verification cases (`runAIDiagnosis`), and the optional EasyHelp AI analysis (`helpfile_analyzer` calling Ollama server-side on top of the deterministic `helpfile_report`);
 
 - The additional pipelines in section 9.5 and the "translation file verification" in section 10.3 are **architectural-extensibility examples for the future**, not implemented features.
 
@@ -702,7 +721,7 @@ Any work beyond these three categories (e.g. precise numeric computation, autono
 | Scenario | Code layer | AI layer |
 |---|---|---|
 | TestData Verification | Runs the selected verifier Plugin, SSE progress, report aggregation, rule-based diagnosis fallback | Root-cause diagnosis of failed cases (JSON: summary / diagnoses / recommendations) |
-| EasyHelp Checking | HTML→TXT conversion, baseline diff, keyword counting and highlighting, Excel output | `helpfile_analyzer` generates the analysis report (server-side Ollama); post-pipeline step summary |
+| EasyHelp Checking | HTML→TXT conversion, baseline diff, keyword counting and highlighting, Excel output, HTML/JSON report (`helpfile_report`) | Optional `helpfile_analyzer` analysis of that report (server-side Ollama); post-pipeline step summary |
 | Portugal Plugin | Symbol-map import/validation/self-test, PlayCheck fetch, parsing, totals and consistency checks, TXT/JSON/HTML reports | Clarifying question when input is missing; post-pipeline step summary |
 
 ### 11.3 Key Points of 7B-Model Prompt Design
@@ -754,7 +773,7 @@ const goodPrompt = `
 | `clarify` (Enter chat) | Logs an "AI chat unavailable" warning; no effect on any flow |
 | `summarizeStepResult` | Runs asynchronously; failure only logs a warning — the pipeline is already completed and is neither rolled back nor blocked |
 | `runAIDiagnosis` | Extracts the JSON object from the response with a regex and parses it; parse failure → raw text becomes the summary; call throws → falls back to `log_diagnoser` rule-based diagnosis; if `log_diagnoser` also fails → returns a minimal diagnosis |
-| `helpfile_analyzer` | The plugin has its own fallback result (prompting to check Ollama model availability) |
+| `helpfile_analyzer` | Requested model not installed → uses another installed local chat model; none available, timeout or call error → returns a failed result (`ollama_no_chat_model` / `ollama_timeout` / `ollama_chat_error`). It is an `optional` step, so the pipeline still completes and the deterministic `helpfile_report.html` is kept |
 
 **Illustrative code (envisioned, using the translation scenario; not implemented)**:
 
@@ -812,7 +831,7 @@ async function runTranslationCheck(files: TranslationFile[]) {
 **Recommended strategy**:
 - **Development/debugging phase**: use the 7B local model exclusively, for rapid iteration;
 - **Batch production phase**: use the 7B local model for simple tasks, and switch to a cloud Provider on the model-management page as needed for complex semantic judgment;
-- **HARNESS auto-routing** (planned, **not implemented**): code would choose the model source by task complexity. Today, every frontend call uses the single model the user selected in the model drop-down / model-management page, and `helpfile_analyzer` always uses local Ollama server-side.
+- **HARNESS auto-routing** (planned, **not implemented**): code would choose the model source by task complexity. Today, every frontend call uses the single model the user selected in the model drop-down / model-management page, and `helpfile_analyzer` always uses local Ollama server-side (the selected model when the active Provider is Ollama, otherwise its own default).
 
 ```typescript
 // Planned auto model-selection logic (does not exist in the code today)
@@ -863,6 +882,7 @@ function selectModel(task: TestTask): "local" | "cloud" {
 | `POST /api/tools/execute-async` | Runs one Plugin in the background, with progress pushed over SSE (used by TestData Verification) |
 | `POST /api/tools/upload-testdata` | Uploads .testdata files and writes them to a real path |
 | `POST /api/tools/upload-folder` | Uploads help files (a folder or loose files), laid out as `subdir/index.html` |
+| `POST /api/tools/stage-local-files` | Desktop app only: stages loose HTML files picked with the native dialog (real absolute paths) as `<stem>/index.html`, and returns their source folder so reports can be written next to them |
 | `GET /api/tools/skills/list` | Lists Skill-file metadata from the `skills/` directory |
 | `POST /api/executions/new` | Creates an execution record |
 | `GET /api/executions/mine` / `GET /api/executions/{id}` | Execution history list / execution detail (with tool_calls and records) |
@@ -879,8 +899,8 @@ function selectModel(task: TestTask): "local" | "cloud" {
 - `ToolPlugin.execute()`: handles timing and catches exceptions, turning them into `ToolResult(success=False, error=...)`; a Plugin only implements `_run_impl`;
 - `ToolResult`: `success / content / error / execution_ms / artifacts`;
 - `HarnessContext`: `execution_id / user_id / user_role / session_token / work_dir`; each call's working directory is `server/data/runs/{execution_id}/{tool_name}/`;
-- `SerialExecutionQueue`: runs **serially** under a per-user asyncio lock so multiple Selenium Chromes don't collide (the interface leaves room to swap in a parallel queue);
-- `cancellation`: browser-driven Plugins (`testdata_verifier_harness`, `portugal_plugin_fetcher`) register a force-close callback after acquiring the WebDriver, which the cancel endpoint invokes.
+- `SerialExecutionQueue`: runs **serially** under a per-user asyncio lock so multiple browser sessions (Selenium or Playwright) don't collide (the interface leaves room to swap in a parallel queue);
+- `cancellation`: browser-driven Plugins register a cancel callback, which the cancel endpoint invokes — `portugal_plugin_fetcher` registers a WebDriver force-close, `testdata_verifier_harness` registers a cancel event its Playwright session checks.
 
 ### 12.4 Data Storage
 
@@ -891,23 +911,25 @@ SQLite (`server/data/harness.db`) with four tables:
 - `test_records`: test records from TestData generation (case, format, module, batch/index, file name, XML snippet);
 - `llm_audit`: LLM-call audit (nothing writes to it today).
 
-Artifact directories: `server/data/runs/` (per-execution working directories; `config.py` defines `HARNESS_RUN_TTL_HOURS`, but no cleanup logic uses it yet) and `server/data/artifacts/` (downloadable reports and ZIPs); Portugal symbol maps persist in the repository-root `symbol_profiles/`.
+Artifact directories: `server/data/runs/` (per-execution working directories; `config.py` defines `HARNESS_RUN_TTL_HOURS`, but no cleanup logic uses it yet) and `server/data/artifacts/` (downloadable reports and ZIPs); Portugal symbol maps persist in the repository-root `symbol_profiles/`. EasyHelp Checking writes its outputs (TXT, Excel, `helpfile_report.html/.json`, `ai_analysis_report.html/.json`) to an `_easyhelp_output` folder: next to the source files when they are a real local path (picked with the desktop app's native dialog, or a folder path typed in answer to the clarifying question), otherwise (browser upload) under the upload staging folder in `server/data/runs/uploads/`.
 
 ---
 
 ## 13. Code Status & Known Discrepancies (new)
 
-The following inconsistencies — within the code, or between the code and the plan — were found during this revision. The document now describes the code as it is; whether to change the code is a separate decision.
+The following inconsistencies — within the code, or between the code and the plan — were found during the revisions. The document describes the code as it is; whether to change the code is a separate decision. Status as of 2026-10-27 (commit `5e95502`).
 
-| # | Current state | Impact |
-|---|---|---|
-| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step covers only the Harness method (not the API method) | Pipeline declaration and actual execution disagree |
-| 2 | `PipelineStepDef.dependsOn` is not checked by the execution engine; the `skipped` / `paused` / `idle` states are unused | Declarative metadata only |
-| 3 | `agents/ui_log_diagnoser_agent.md` is referenced by no scenario; the `log_diagnosis` scenario and `log-diagnose-pipeline` it mentions no longer exist | Orphaned file |
-| 4 | Agent data in `AgentPage.tsx` is hardcoded, and its "Planner Agent" still claims to "drive the conversation loop and tool orchestration"; the Skill display data in `PluginPage.tsx` is hardcoded too | Display may drift from actual responsibilities/files |
-| 5 | The frontend never calls `auditLlm`, so the `llm_audit` table and the executions token fields stay empty; the UI shows no token / latency / cache statistics | The monitoring panel in 4.1 is planned only |
-| 6 | `helpfile_analyzer` calls Ollama directly server-side with default model `qwen3:latest`, ignoring the frontend model switch | The only call that bypasses the unified gateway |
-| 7 | The input-box model drop-down `MODEL_OPTIONS` is hardcoded (with labels like `deepseek-chat`, `claude-3-haiku`) and doesn't map one-to-one onto the Provider Presets | Options may not match the current Provider |
-| 8 | TestData Generation's `gamePrefix` (P5P) and default `moduleId` (105359) are hardcoded in App.tsx; Google Sheet URLs are never fetched | Other games rely on the Module ID in the pasted text |
-| 9 | Test-plan preview checkboxes don't affect execution, except Portugal's "Save Imported Mapping"; TestDataPreview's "Regenerate" just resets to mock records | Interactions are weaker than the UI implies |
-| 10 | `plugins/README.md`, `workflows/README.md` and `skill-generator-plugin-contract.md` still mention the nonexistent `game_verifier_tool.py` / "pipeline hardcoded in plannerAgent.ts" | Supporting docs are out of date |
+| # | Current state | Impact | Status |
+|---|---|---|---|
+| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step covers only the Harness method (not the API method) | Pipeline declaration and actual execution disagree | Open |
+| 2 | `PipelineStepDef.dependsOn` is not checked by the execution engine; the `skipped` / `paused` / `idle` states are unused (the newer `optional` flag, by contrast, is honored) | Declarative metadata only | Open |
+| 3 | `agents/ui_log_diagnoser_agent.md` is referenced by no scenario; the `log_diagnosis` scenario and `log-diagnose-pipeline` it mentions no longer exist | Orphaned file | Open |
+| 4 | Agent data in `AgentPage.tsx` is hardcoded, and its "Planner Agent" still claims to "drive the conversation loop and tool orchestration" (and lists only three scenarios); the Skill display data in `PluginPage.tsx` is hardcoded too | Display may drift from actual responsibilities/files | Open |
+| 5 | The frontend never calls `auditLlm`, so the `llm_audit` table and the executions token fields stay empty; the UI shows no token / latency / cache statistics; `HARNESS_RUN_TTL_HOURS` is defined but no cleanup uses it | The monitoring panel in 4.1 is planned only | Open |
+| 6 | `helpfile_analyzer` calls Ollama directly server-side. It now receives the UI-selected model and Base URL when the active Provider is `OLLAMA`; with any other Provider it still falls back to its own default (`qwen3:latest` on `localhost:11434`) | The only call that bypasses the unified gateway | Partially resolved |
+| 7 | The input-box model drop-down `MODEL_OPTIONS` is hardcoded (with labels like `deepseek-chat`, `claude-3-haiku`) and doesn't map one-to-one onto the Provider Presets | Options may not match the current Provider | Open |
+| 8 | TestData Generation's `gamePrefix` (P5P) and default `moduleId` (105359) are hardcoded in App.tsx; Google Sheet URLs are never fetched, yet the scenario description in `intentRouter.ts` still says "Parse Paytable from Google Sheet" | Other games rely on the Module ID in the pasted text | Open |
+| 9 | Test-plan preview checkboxes don't affect execution, except Portugal's "Save Imported Mapping"; TestDataPreview's "Regenerate" just resets to mock records | Interactions are weaker than the UI implies | Open |
+| 10 | Supporting docs are out of date: `plugins/README.md` lists the nonexistent `game_verifier_tool.py`; `workflows/README.md` says pipelines are hardcoded in `plannerAgent.ts`; `skill-generator-plugin-contract.md` still has a `game_verifier` "with Selenium" contract; `skill-verification-protocol.md` and the root `README.md` still describe Selenium-based verification, while `testdata_verifier_harness` now uses Playwright | Supporting docs are out of date | Open (scope grew) |
+| 11 | `pipelineRegistry.ts` header comment says steps within a stage "can run in parallel" (the engine runs them serially), and a comment on the helpfile pipeline says it "was missing from this registry until now" | Stale code comments | Open |
+| 12 | `testdata_verifier_harness` accepts a direct game launch URL, where Product Id / Client Id are not needed (both are optional on the backend), but `verificationEngine.ts` always requires both and its error text asks for a "Titan Harness launcher page URL" | The direct-URL mode is harder to use from the UI than the Plugin allows | Open |

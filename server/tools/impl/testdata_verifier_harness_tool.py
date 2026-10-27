@@ -87,6 +87,29 @@ def _error_result(error: SessionError, source_file: str) -> dict:
     return _empty_result(source_file, verdict, [detail])
 
 
+def _not_run_reason(*, stopped: bool, abort_reason: str | None,
+                    max_network_errors: int, max_seed_rejections: int) -> tuple[str, str]:
+    """Verdict + issue line for a record that was never played, because the run ended first.
+
+    The two abort causes are not interchangeable. A run stopped by timeouts/page reloads really was
+    an environment failure; one stopped by rejected seeds was not — the server was refusing the
+    seeds we queued. docs/p0-testdata-verification-findings.md records what produces that: a
+    .testdata <Key> whose loginName/moduleID does not match the URL, or a drifted seed queue.
+    Reporting it as "environment unavailable" sends the reader after the wrong problem, so the
+    seed case gets its own verdict and points at the testdata instead.
+    """
+    if stopped:
+        return "CANCELLED", "Stopped by the user"
+    if abort_reason == "environment":
+        return "NETWORK_ERROR", (
+            f"Not verified: run stopped after {max_network_errors} consecutive timeouts/page "
+            "reloads — the game environment became unavailable")
+    return "SEED_REJECTED", (
+        f"Not verified: run stopped after {max_seed_rejections} consecutive seeds rejected by the "
+        "server — check the .testdata <Key> loginName/moduleID against the URL, and whether the "
+        "seed queue has drifted")
+
+
 def _spin_of(result: PlayResult) -> PlayResponse | None:
     """The player-initiated Spin response of a play. Only it carries the <TestData> echo."""
     for captured in result.responses:
@@ -361,7 +384,10 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         ]
         max_consecutive_network_errors, max_consecutive_seed_rejections = 3, 2
         consecutive_network_errors = consecutive_seed_rejections = 0
-        environment_aborted = False
+        # Why the run stopped early, if it did: "environment" (timeouts/reloads) and "seeds"
+        # (the server refusing the queued seeds) are unrelated causes and must not be reported
+        # as each other — a rejected seed is testdata/seed-queue trouble, not a network fault.
+        abort_reason: str | None = None
         cancel_event = threading.Event()
         cancellation.register(ctx.execution_id, cancel_event.set)
 
@@ -377,12 +403,12 @@ class TestdataVerifierHarnessTool(ToolPlugin):
 
                 last_spin: PlayResponse | None = None
                 for file_name, rec in records_flat:
-                    if cancel_event.is_set() or environment_aborted:
-                        stopped = cancel_event.is_set()
-                        all_results.append(_empty_result(
-                            file_name, "CANCELLED" if stopped else "NETWORK_ERROR",
-                            ["Stopped by the user" if stopped
-                             else "Verification aborted: environment unavailable"]))
+                    if cancel_event.is_set() or abort_reason is not None:
+                        verdict, issue = _not_run_reason(
+                            stopped=cancel_event.is_set(), abort_reason=abort_reason,
+                            max_network_errors=max_consecutive_network_errors,
+                            max_seed_rejections=max_consecutive_seed_rejections)
+                        all_results.append(_empty_result(file_name, verdict, [issue]))
                         all_records_flat.append(rec)
                         continue
 
@@ -422,13 +448,16 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                                 Path(shot).read_bytes()).decode("utf-8")
 
                     if consecutive_network_errors >= max_consecutive_network_errors:
-                        environment_aborted = True
+                        abort_reason = "environment"
                         result["issues"].append(
-                            f"Environment UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts")
+                            f"Environment UNAVAILABLE: {max_consecutive_network_errors} consecutive "
+                            "timeouts/page reloads — remaining records will not be verified")
                     elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
-                        environment_aborted = True
+                        abort_reason = "seeds"
                         result["issues"].append(
-                            f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected")
+                            f"Seeds REJECTED by the server {max_consecutive_seed_rejections} times in a "
+                            "row — remaining records will not be verified; this is a testdata/seed-queue "
+                            "problem, not an environment failure")
 
                     all_results.append(result)
                     all_records_flat.append(rec)

@@ -17,12 +17,14 @@ from server.game_session.capture import Captured, PlayCapture
 from server.game_session.launcher import Browser, LaunchSpec, launch, open_browser
 from server.game_session.protocol import PlayResponse
 from server.game_session.session import (
-    Cancelled, GameSession, PageReloaded, PlayResult, SessionConfig, SessionError, SpinNotStarted, StuckInState,
+    Cancelled, GameSession, LaunchFailed, PageReloaded, PlayResult, SessionConfig, SessionError,
+    SpinNotStarted, StuckInState,
 )
 
 __all__ = [
-    "Browser", "Captured", "Cancelled", "GameSession", "LaunchSpec", "PageReloaded", "PlayCapture", "PlayResponse",
-    "PlayResult", "SessionConfig", "SessionError", "SpinNotStarted", "StuckInState", "open_session",
+    "Browser", "Captured", "Cancelled", "GameSession", "LaunchFailed", "LaunchSpec", "PageReloaded",
+    "PlayCapture", "PlayResponse", "PlayResult", "SessionConfig", "SessionError", "SpinNotStarted",
+    "StuckInState", "open_session",
 ]
 
 

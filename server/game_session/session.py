@@ -80,6 +80,13 @@ class SessionError(Exception):
         self.code, self.message, self.state = code, message, state
 
 
+class LaunchFailed(SessionError):
+    """The browser or the game page never came up — raised before any play could start."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(code, message)
+
+
 class StuckInState(SessionError):
     def __init__(self, state: str | None, dwell_sec: float, touches: int):
         super().__init__("STUCK_IN_STATE",
@@ -135,6 +142,10 @@ class PlayResult:
 class SessionConfig:
     time_scale: int = 400                  # jftwTools.gameEngine.timeScale percent (100 = normal speed)
     poll_sec: float = 0.25
+    # A throwing evaluate() is not proof that the page reloaded — it also fails while a navigation
+    # is in flight — so status() retries this many times (this long apart) before believing it.
+    status_retries: int = 3
+    status_retry_sec: float = 0.3
     touch_after_sec: float = 1.5           # dwell in a blocking state before the first touch
     touch_every_sec: float = 2.0           # then keep touching at this interval until the state changes
     stall_touch_after_sec: float = 8.0     # any state, no progress at all for this long -> touch too
@@ -191,13 +202,24 @@ class GameSession:
 
     # ── primitives ──────────────────────────────────────────────────────────
     def status(self) -> dict[str, Any]:
-        try:
-            st = self.frame.evaluate(STATUS_JS)
-        except Exception:
-            raise PageReloaded()
-        if st.get("tracerId") != self._tracer_id:
-            raise PageReloaded(st.get("state"))
-        return st
+        """Read the live state, raising PageReloaded once the page is genuinely gone.
+
+        The tracer id is the verdict, not the exception: a page that reloaded still answers, just
+        without the tracer (or with a different id). Only when every retry throws is the frame
+        really unreachable.
+        """
+        last_error: Exception | None = None
+        for _ in range(self.config.status_retries):
+            try:
+                st = self.frame.evaluate(STATUS_JS)
+            except Exception as e:
+                last_error = e
+                time.sleep(self.config.status_retry_sec)
+                continue
+            if st.get("tracerId") != self._tracer_id:
+                raise PageReloaded(st.get("state"))
+            return st
+        raise PageReloaded() from last_error
 
     def is_idle(self, st: dict[str, Any] | None = None) -> bool:
         st = st or self.status()

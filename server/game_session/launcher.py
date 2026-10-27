@@ -5,7 +5,7 @@ Two launch modes:
     (http://localhost:5241/...) or a remote one. The URL itself logs in.
   - titan:  the QA-only Titan Harness launcher page (…/harness/<game>), a form whose "LAUNCH GAME"
     button opens the game in a new tab. Field strategies are ported from the retired Selenium tool
-    (testdata_verifier_harness_tool._fill_labeled_field), which was confirmed against the live page.
+    (testdata_verify_common._fill_labeled_field), which was confirmed against the live page.
 
 Chrome must keep rendering while nobody looks at it: a hidden or occluded page stops animating and
 the game's state machine stops advancing (seen live: stuck at PostInit until the pane was shown).
@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from server.game_session.capture import PlayCapture
 from server.game_session.env import is_local_url
+from server.game_session.session import LaunchFailed
 
 TITAN_DEFAULT_PASSWORD = "test1234$"
 
@@ -122,26 +123,45 @@ def _fill_titan_field(page, candidates: list[str], value: str) -> bool:
 
 def launch(browser: Browser, spec: LaunchSpec, capture: PlayCapture, timeout_sec: float = 90.0):
     """Return the Page running the game. `capture` is attached to the whole browser context before
-    anything loads, so the Refresh response of a Titan-opened tab is not missed."""
+    anything loads, so the Refresh response of a Titan-opened tab is not missed.
+
+    Every way this can fail is reported as a LaunchFailed, so callers get one error shape instead of
+    a mix of Playwright timeouts and RuntimeErrors. Messages name the page, never the full URL — a
+    direct launch URL carries the account password in its query string.
+    """
     timeout_ms = int(timeout_sec * 1000)
+    page_url = spec.url.split("?")[0]
     capture.attach(browser.context)
     if spec.mode == "direct":
         page = browser.context.new_page()
-        page.goto(spec.url, wait_until="domcontentloaded", timeout=timeout_ms)
+        try:
+            page.goto(spec.url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as e:
+            raise LaunchFailed("GAME_PAGE_NOT_LOADED",
+                               f"{page_url} did not load within {timeout_sec:.0f}s: {e}") from e
         return page
 
     form = browser.context.new_page()
-    form.goto(spec.url, wait_until="domcontentloaded", timeout=timeout_ms)
-    form.wait_for_selector("input", timeout=timeout_ms)
+    try:
+        form.goto(spec.url, wait_until="domcontentloaded", timeout=timeout_ms)
+        form.wait_for_selector("input", timeout=timeout_ms)
+    except Exception as e:
+        raise LaunchFailed("TITAN_PAGE_NOT_LOADED",
+                           f"{page_url} showed no harness form within {timeout_sec:.0f}s: {e}") from e
     values = {"username": spec.username, "password": spec.password or TITAN_DEFAULT_PASSWORD,
               "product_id": spec.product_id, "module_id": spec.module_id,
               "client_id": spec.client_id, "brand": spec.brand or "IslandParadise"}
     missing = [cands[0] for key, cands in _TITAN_FIELDS if not _fill_titan_field(form, cands, values[key])]
     if missing:
-        raise RuntimeError(f"titan_form_fields_not_found:{missing}")
+        raise LaunchFailed("TITAN_FORM_FIELDS_NOT_FOUND",
+                           f"{missing} — check the harness page's DOM (open {page_url} manually and "
+                           f"look at these fields' formcontrolname/name/id)")
     button = form.get_by_role("button", name="LAUNCH GAME")
     if not button.count():
         button = form.get_by_text("LAUNCH GAME", exact=False)
+    if not button.count():
+        raise LaunchFailed("LAUNCH_GAME_BUTTON_NOT_FOUND",
+                           f"no LAUNCH GAME control on {page_url}")
     # CONFIRMED on the Selenium tool's live run: LAUNCH GAME opens the game in a new tab and closes
     # its own. expect_page() catches that tab; if the harness navigates in place instead, keep `form`.
     try:
@@ -151,5 +171,10 @@ def launch(browser: Browser, spec: LaunchSpec, capture: PlayCapture, timeout_sec
     except Exception:
         page = form
     if page is not form:
-        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception as e:
+            raise LaunchFailed("GAME_PAGE_NOT_LOADED",
+                               f"the game tab opened by {page_url} did not load within "
+                               f"{timeout_sec:.0f}s: {e}") from e
     return page

@@ -1,404 +1,149 @@
 """
-Harness-based TestData verification — the "third" login mechanism.
+TestData verification through a real browser, without an interactive Okta/MFA prompt in any mode.
 
-Still browser-driven (Selenium), so screenshots keep working — unlike testdata_verifier_api.
-But unlike testdata_verifier, the browser never touches the real production game URL, a borrowed
-Chrome profile, or an interactive Okta/MFA prompt. It goes straight to an internal QA-only
-"Titan Harness" launcher page instead — the same one a colleague's separate Playwright
-automation suite (jftw-game-client-sdk-automation-axiom) already uses for its own login.
+Two ways in, both chosen from the URL itself (LaunchSpec.mode):
+  - harness — the URL contains `/harness/`: the internal QA-only "Titan Harness" launcher page.
+    Its form is filled from the .testdata file's <Key> (username=loginName, moduleId=moduleID)
+    plus the per-version Product Id / Client Id / Brand, then submitted via its LAUNCH GAME
+    button, which opens an already-authenticated game session.
+  - direct — any other URL: the game's own launch URL. It carries the account in its query string
+    (?username=..&password=..&moduleId=..), which is exactly the URL a tester opens by hand, so
+    the page authenticates itself and no Okta session is involved either.
 
-Confirmed against a live manual test (2026-09-16) against
-  https://mobile-app1-gtp537.installprogram.eu/htmlGames/4.54.0/harness/apexDragonPowerComboV94
-The harness page is a plain HTML form (Username / Password / Product Id / Module Id / Client Id /
-Brand, plus Market/Host dropdowns and some toggles left at their page defaults) that, once
-submitted via its "LAUNCH GAME" button, drops straight into an authenticated game session — no
-Okta, no MFA. Two things confirmed on that same manual test:
-  - The Password field comes pre-filled with a single shared, non-expiring value (`test1234$`)
-    for every QA test account on this platform — not a per-account secret we need to look up.
-  - Username and Module Id are the *same* loginName/moduleID already embedded in a .testdata
-    file's <Key> element (see _extract_testdata_key in testdata_verify_common.py) — this tool
-    derives them from the file being verified rather than asking for them again.
-  - Product Id / Client Id / Brand are NOT derivable from the testdata file — they're fixed per
-    game-module version, not per test case — so they're plain tool parameters here, defaulted to
-    the values confirmed working for moduleId 105170 (productId=5001, clientId=40300,
-    brand=IslandParadise). Market/Host were left at the page's own defaults on that same test and
-    are not touched by this tool at all — only fill in what was actually needed.
+The browser work is done by server/game_session (Playwright) rather than Selenium. That layer
+makes the *play* the unit of verification instead of the base round, which removes the three
+failure modes this tool used to be built around:
+  - a feature round (FreeSpin/Bonus/...) is auto-played by the game after the spin that triggered
+    it, so Spin is never clicked for it; the nested <Feature><PreGen/></Feature> seed is read from
+    the triggering Spin's <TestData> echo;
+  - blocking intro/outro/summary screens are advanced by touching repeatedly until the game state
+    actually changes, instead of one touch plus a fixed sleep;
+  - responses are read at the network layer with a monotonic seq, so "this play's responses" is a
+    seq range rather than a count that a stray response can shift.
 
-TestData upload uses the same direct-HTTP Axiom call as testdata_verifier_api (x-api-key header,
-POST .../Upload/TestDataFile, field name testDataFormFile) instead of Selenium clicking through
-the admin panel — that panel login also required Okta, so removing it here removes the *second*
-Okta dependency this tool would otherwise still have.
+TestData upload is still a direct HTTP call (x-api-key, POST /Upload/TestDataFile) — the admin
+panel that used to do it required Okta, so this keeps that second Okta dependency removed.
 
-UNVERIFIED: the exact DOM selectors for the harness page's input fields and "LAUNCH GAME" button
-were written from a screenshot, not a live DOM inspection (this internal QA page isn't reachable
-from outside the tester's own network). _fill_labeled_field() tries several common
-formcontrolname/name/id/placeholder strategies per field and reports exactly which field it
-couldn't find, but the very first live run against this tool should be watched closely — expect
-to need one round of selector fixes, the same way testdata_verifier's upload-button and
-splash-dismissal selectors were fixed after their first live runs.
+The environment slug (gtp537, ...) is needed *before* the browser starts, to build the upload host:
+  - pass `env` explicitly, or
+  - it is derived from the game URL's host when that host is <service>-<env>.installprogram.eu.
+A local client (http://localhost:5241/...) has no env in its URL even though the game it plays
+against is remote, so `env` must be passed for it — the tool says so instead of guessing.
+
+UNVERIFIED against a live run: this rewrite is covered by unit tests on the protocol layer only.
+The harness form's field selectors are unchanged in spirit from the Selenium version (several
+formcontrolname/name/id strategies per field), and the harness-launched build is known to show an
+extra "Mock Server / F2 Dev Panel" overlay that the production URL never shows — the retired
+Selenium tool had to close it explicitly (_close_debug_panel_if_open). Watch the first live run for
+that overlay landing on a touch point.
 """
 from __future__ import annotations
-import time
+
+import base64
+import threading
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
+from server.game_session import (
+    LaunchSpec, PlayResponse, PlayResult, SessionConfig, SessionError, open_session,
+)
+from server.game_session.env import axiomcore_host, require_env_before_launch
+from server.infra.logger import log
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
 from server.tools.impl.testdata_verify_common import (
-    _INTERCEPTOR_JS,
-    _parse_testdata,
-    _compare_record,
-    _generate_html_report,
+    HARNESS_DEFAULT_PASSWORD,
+    _check_key_matches_url,
     _extract_testdata_key,
-    _force_kill_driver,
-    _click_spin_by_selector,
+    _extract_url_identity,
+    _generate_html_report,
+    _parse_testdata,
 )
-from server.tools.impl.testdata_verifier_api_tool import _derive_env, _axiomcore_host
-from server.infra.logger import log
-
-HARNESS_DEFAULT_PASSWORD = "test1234$"
 
 
-def _fill_labeled_field(driver, candidates: list[str], value: str) -> bool:
-    """Fill a text input matched by any of `candidates` (formcontrolname/name/id/placeholder,
-    case-insensitive). The harness page's exact DOM wasn't inspectable ahead of time (internal,
-    VPN-only), only screenshotted — trying several common Angular-Material-style attribute
-    strategies per candidate is more robust than committing to a single guessed selector."""
-    from selenium.webdriver.common.by import By
-    for name in candidates:
-        for by, sel in [
-            (By.CSS_SELECTOR, f"input[formcontrolname='{name}' i]"),
-            (By.CSS_SELECTOR, f"input[name='{name}' i]"),
-            (By.CSS_SELECTOR, f"input#{name}"),
-            (By.CSS_SELECTOR, f"input[placeholder='{name}' i]"),
-        ]:
-            try:
-                el = driver.find_element(by, sel)
-                if el.is_displayed():
-                    el.clear()
-                    el.send_keys(value)
-                    return True
-            except Exception:
-                continue
-    return False
+# ── result builders: every case yields the same dict the report renderer expects ──────────────
+
+def _empty_result(source_file: str, verdict: str, issues: list[str]) -> dict:
+    return {
+        "passed": False, "verdict": verdict,
+        "actualBatch": None, "actualIndex": None, "actualStage": "N/A",
+        "actualWin": 0, "actualWager": 0,
+        "issues": issues, "screenshot_b64": None, "source_file": source_file,
+    }
 
 
-def _close_debug_panel_if_open(driver) -> None:
-    """The harness-launched build exposes a "Mock Server / F2 Dev Panel" overlay that the real
-    production URL never shows — confirmed on a live run: it ended up open (via a corner icon
-    near the top-right of the screen — the same icon testdata_verifier's splash-dismissal fix
-    was written to avoid clicking) while the feature splash was still showing underneath it, and
-    its footprint sat over roughly the right quarter of the screen, right where a spin button
-    commonly lives. If it's open, click that same corner icon again (it's a toggle) to close it."""
-    try:
-        is_open = driver.execute_script(
-            "return !!Array.from(document.querySelectorAll('*')).find("
-            "  el => el.textContent && el.textContent.includes('Mock Server') && el.offsetParent !== null);"
-        )
-    except Exception:
-        return
-    if not is_open:
-        return
-    try:
-        driver.execute_script(
-            "const x = Math.round(window.innerWidth * 0.965);"
-            "const y = Math.round(window.innerHeight * 0.08);"
-            "const el = document.elementFromPoint(x, y);"
-            "if (el) { for (const t of ['mousedown','mouseup','click']) {"
-            "  el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: x, clientY: y}));"
-            "} }"
-        )
-    except Exception:
-        pass
-    time.sleep(1)
+def _error_result(error: SessionError, source_file: str) -> dict:
+    """A play that never produced a response. The session's error code says why."""
+    verdict = "PAGE_RELOADED" if error.code == "PAGE_RELOADED" else "TIMEOUT"
+    detail = f"{error.code}: {error.message}" + (f" (state={error.state})" if error.state else "")
+    return _empty_result(source_file, verdict, [detail])
 
 
-_JFTW_PRESENT_JS = "return !!(window.jftwTools && window.jftwTools.gameState && window.jftwTools.common);"
+def _spin_of(result: PlayResult) -> PlayResponse | None:
+    """The player-initiated Spin response of a play. Only it carries the <TestData> echo."""
+    for captured in result.responses:
+        if captured.play is not None and captured.play.verb == "Spin":
+            return captured.play
+    return None
 
 
-def _has_jftw(driver) -> bool:
-    try:
-        return bool(driver.execute_script(_JFTW_PRESENT_JS))
-    except Exception:
-        return False
+def _compare_play(record: dict, play: PlayResponse | None, source_file: str) -> dict:
+    """Judge one .testdata record against the Spin response that consumed it.
 
-
-def _trusted_click(driver, fx: float, fy: float) -> None:
-    """Click at a fraction of the top-level viewport via CDP Input.dispatchMouseEvent.
-
-    Unlike a JS-dispatched MouseEvent (isTrusted=false, which canvas-rendered splashes ignore —
-    see _wait_for_spin_ready), CDP input goes through the browser's real input pipeline, so it is
-    hit-tested like a human click: it reaches a <canvas>, and it reaches into an iframe the game
-    may be running in. Coordinates are always top-level-viewport CSS pixels, regardless of which
-    frame the driver is currently switched into, so the size comes from Page.getLayoutMetrics
-    rather than the current frame's window.innerWidth."""
-    try:
-        m = driver.execute_cdp_cmd("Page.getLayoutMetrics", {})
-        vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
-        x = round(vp["clientWidth"] * fx)
-        y = round(vp["clientHeight"] * fy)
-        driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
-        for t in ("mousePressed", "mouseReleased"):
-            driver.execute_cdp_cmd("Input.dispatchMouseEvent",
-                                   {"type": t, "x": x, "y": y, "button": "left", "clickCount": 1})
-    except Exception:
-        pass
-
-
-def _enter_game_context(driver, timeout_sec: int) -> str:
-    """Wait for window.jftwTools to attach, switching into the game's iframe if that's where it
-    lives, and make sure the console.log interceptor is installed in that same context.
-
-    Replaces a fixed `time.sleep(3)` followed by a single jftwTools check. On a live run against
-    grandBountyOpenWatersPowerComboDesktop (4.60.0) the browser then sat on the feature splash
-    ("PRESS ANYWHERE TO CONTINUE") indefinitely: either the (larger, desktop) bundle hadn't attached
-    jftwTools within 3s, or the launch page hosts the game in an iframe where the top-level
-    `window.jftwTools` never exists — both sent _wait_for_spin_ready down its no-jftw fallback.
-    Polls the top document and its iframes until timeout. Returns "top", "iframe[<n>]" or
-    "not_found" (driver left on the top document) for logging.
+    The expected seeds are read back out of that response's <TestData> echo, which repeats the whole
+    record the server consumed: the base seed at path "Spin" and a nested feature seed at
+    "Spin/Feature". Both are therefore verifiable from the one response (confirmed live).
     """
-    from selenium.webdriver.common.by import By
-    deadline = time.time() + timeout_sec
-    where = "not_found"
-    while time.time() < deadline:
-        driver.switch_to.default_content()
-        if _has_jftw(driver):
-            where = "top"
-            break
-        try:
-            frames = driver.find_elements(By.TAG_NAME, "iframe")
-        except Exception:
-            frames = []
-        for i, frame in enumerate(frames):
-            try:
-                driver.switch_to.frame(frame)
-                if _has_jftw(driver):
-                    where = f"iframe[{i}]"
-                    break
-            except Exception:
-                pass
-            driver.switch_to.default_content()
-        if where != "not_found":
-            break
-        time.sleep(1)
+    feature_record = record["stage"] != "BaseGame"
+    if play is None:
+        return _empty_result(source_file, "TIMEOUT",
+                             ["No Spin response with a <TestData> echo was captured for this record"])
 
-    # Page.addScriptToEvaluateOnNewDocument was registered on the harness tab before LAUNCH GAME
-    # opened the game in a *new* tab — CDP registrations are per-target, so it may never have run
-    # here. Register it on this target too (covers any later reload), and install it right now if
-    # it's missing. A late install still catches every future console.log call made through the
-    # global console object, which is all the interceptor relies on.
-    try:
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
-    except Exception:
-        pass
-    try:
-        if not driver.execute_script("return !!window.__gvInstalled;"):
-            driver.execute_script(_INTERCEPTOR_JS)
-            log.warning("verifier_harness.interceptor_late_install", context=where)
-    except Exception:
-        pass
-    return where
+    issues: list[str] = []
+    by_path = {path: (batch, index) for path, batch, index in play.testdata_pregens}
+    expected = (record["batch"], record["index"])
+    nested = [seed for path, seed in by_path.items() if "/" in path]
+    if feature_record:
+        # A feature stage is consumed as part of the play its trigger started, so its seed is echoed
+        # nested inside that Spin — it is not the seed at path "Spin".
+        actual = expected if expected in by_path.values() else None
+    else:
+        actual = by_path.get("Spin") or play.pregen
 
+    seed_ok = actual == expected
+    if not seed_ok:
+        issues.append(f"batch/index mismatch: expected={expected}, actual={actual}")
 
-def _wait_for_spin_ready(driver, timeout_sec: int) -> bool:
-    """Dismiss the intro/feature-splash and wait for the spin button to be ready.
+    bonus_ok = True
+    if record["isBonus"] and not feature_record:
+        want = (record["bonusBatch"], record["bonusIndex"])
+        bonus_ok = want in nested
+        if not bonus_ok:
+            issues.append(f"feature seed mismatch: expected={want}, actual={nested or None}")
 
-    CONFIRMED on a live run: this game's splash is canvas-rendered, not real DOM — a raw
-    synthetic MouseEvent dispatched via document.elementFromPoint(x,y).dispatchEvent(...) (the
-    same technique _dismiss_feature_splash uses) never progressed
-    window.jftwTools.gameState.getActiveGameState() past 'IntroStart' even after 24s of polling.
-    window.jftwTools.common.touch(x, y) — the game's own debug/test API (see
-    jftw-game-client-sdk-automation-axiom's `window.jftwTools` usage) — IS recognized as a real
-    touch and reliably advanced the state to 'Idle' with isSpinButtonReady() true within one 2s
-    poll cycle on that same run.
+    stage_ok = feature_record or not play.testdata_stage or play.testdata_stage == record["stage"]
+    if not stage_ok:
+        issues.append(f"stage mismatch: expected={record['stage']!r}, actual={play.testdata_stage!r}")
 
-    jftwTools is re-checked on every poll (it can attach after this starts), and a trusted CDP
-    click (_trusted_click) backs up the jftw touch on alternate polls in case a game build's
-    touch() ignores the coordinates we pass. Without jftwTools there is no readiness signal, so
-    the fallback makes a few trusted clicks and proceeds optimistically — a trusted click, unlike
-    the old synthetic MouseEvent, does actually reach a canvas splash.
-    """
-    deadline = time.time() + timeout_sec
-    attempt = 0
-    while time.time() < deadline:
-        has_jftw = _has_jftw(driver)
-        if has_jftw:
-            try:
-                if driver.execute_script("return window.jftwTools.gameState.isSpinButtonReady();"):
-                    return True
-            except Exception:
-                pass
-        elif attempt >= 3:
-            _close_debug_panel_if_open(driver)
-            return True
-        attempt += 1
-        if has_jftw:
-            try:
-                # {x, y} object form matches the colleague's automation suite's own usage
-                # (src/js/client/misc.js's touch()).
-                driver.execute_script(
-                    "const w = window.innerWidth, h = window.innerHeight;"
-                    "window.jftwTools.common.touch({x: Math.round(w*0.5), y: Math.round(h*0.6)});"
-                )
-            except Exception:
-                pass
-        if not has_jftw or attempt % 2 == 0:
-            _trusted_click(driver, 0.5, 0.6)
-        time.sleep(2)
-    try:
-        state = driver.execute_script(
-            "try { return window.jftwTools.gameState.getActiveGameState(); } catch (e) { return null; }")
-    except Exception:
-        state = None
-    log.warning("verifier_harness.spin_not_ready", timeout_sec=timeout_sec, game_state=state)
-    return False
+    passed = seed_ok and bonus_ok
+    verdict = "PASSED" if (passed and stage_ok) else ("SEED_MISMATCH" if not passed else "STAGE_MISMATCH")
+    if play.is_error:
+        passed, verdict = False, "SEED_REJECTED"
+        issues.append(f"Server rejected seed: {play.error}")
 
-
-_RESPONSE_COUNT_JS = "return window.__gvResponses ? window.__gvResponses.length : 0;"
-
-
-def _is_spin_ready(driver) -> bool:
-    try:
-        return bool(driver.execute_script(
-            "return !!(window.jftwTools && window.jftwTools.gameState.isSpinButtonReady());"))
-    except Exception:
-        return False
-
-
-def _nudge(driver) -> None:
-    """One "press anywhere to continue" tap — a feature intro / total-win summary screen blocks
-    the round until it's dismissed. jftw touch when available, trusted CDP click otherwise."""
-    try:
-        if driver.execute_script(
-            "if (!(window.jftwTools && window.jftwTools.common)) return false;"
-            "window.jftwTools.common.touch({x: Math.round(innerWidth*0.5), y: Math.round(innerHeight*0.6)});"
-            "return true;"
-        ):
-            return
-    except Exception:
-        pass
-    _trusted_click(driver, 0.5, 0.6)
-
-
-def _has_pregen(resp: dict | None, batch: int, index: int) -> bool:
-    """True if any {batch, index} pair anywhere under gameResponse.testData equals (batch, index).
-    A feature round's response may not carry its seed at testData.spin.preGen like a base spin's
-    does (unconfirmed — no free-spin response has been inspected yet), so search the whole subtree."""
-    stack = [(((resp or {}).get("gameResponse") or {}).get("testData"))]
-    while stack:
-        v = stack.pop()
-        if isinstance(v, dict):
-            if v.get("batch") == batch and v.get("index") == index:
-                return True
-            stack.extend(v.values())
-        elif isinstance(v, list):
-            stack.extend(v)
-    return False
-
-
-def _await_feature_response(driver, start_idx: int, rec: dict, timeout_sec: int) -> tuple[int, dict] | None:
-    """Wait for a game-driven (no click) round — FreeSpin/Bonus/... — to produce the response for
-    `rec`, starting at __gvResponses[start_idx].
-
-    A feature stage's spins are auto-played by the game after the triggering BaseGame spin, so
-    nothing must be clicked for them; the old loop clicked Spin anyway and only counted responses
-    arriving *after* that click, by which point the free spins had already played out (they were
-    captured, just never looked at) — a correct FreeSpin record came back TIMEOUT. Returns the
-    first response from start_idx whose preGen matches rec; if none matches once the round has
-    settled (spin button ready, no new responses for a few seconds), the first new response so the
-    report shows what actually came back. Taps through intro/summary screens while stalled.
-    """
-    deadline = time.time() + timeout_sec
-    last_count, last_change = -1, time.time()
-    while time.time() < deadline:
-        try:
-            n = int(driver.execute_script(_RESPONSE_COUNT_JS))
-            new = driver.execute_script(f"return window.__gvResponses.slice({start_idx});") if n > start_idx else []
-        except Exception:
-            n, new = last_count, []
-        for i, resp in enumerate(new or []):
-            if _has_pregen(resp, rec["batch"], rec["index"]):
-                return start_idx + i, resp
-        if n != last_count:
-            last_count, last_change = n, time.time()
-        stalled = time.time() - last_change
-        ready = _is_spin_ready(driver)
-        if ready and stalled >= 4:
-            # Round over. Either it produced responses that just don't match, or the feature was
-            # never triggered at all (rec gets compared against nothing → caller reports it).
-            return (start_idx, new[0]) if new else None
-        if not ready and stalled >= 3:
-            _nudge(driver)
-            time.sleep(1.5)
-        time.sleep(0.5)
-    return (start_idx, new[0]) if new else None
-
-
-def _apply_time_scale(driver, scale: int = 2000) -> None:
-    """Speed up the game engine's own animation clock via window.jftwTools.gameEngine.timeScale.
-
-    Ported from the colleague's automation suite (src/js/util.js's timeScale(), called once by
-    states.js's waitUntilGameLoad right after the splash is dismissed). Without this, a big-win
-    result plays its full win-celebration animation before the spin button re-enables — on a live
-    run of this tool, that showed up as alternating spins TIMING OUT right after a big win (the
-    button was genuinely just not ready yet, not broken). Compressing the animation clock 2000x
-    makes celebrations resolve in a fraction of a second instead, which is what the colleague's
-    suite relies on for exactly this reason. Best-effort: swallows errors so a game build without
-    this debug hook (or without jftwTools at all) just runs at normal speed instead of failing.
-    """
-    try:
-        driver.execute_script(f"window.jftwTools.gameEngine.timeScale({scale});")
-    except Exception:
-        pass
-
-
-def _click_spin_via_jftw(driver) -> bool:
-    """Press Spin via window.jftwTools.button.touch('jftw-spinButton').
-
-    CONFIRMED on a live run: this triggered a real spin and produced a captured console.log
-    response — the component id came from window.jftwTools.common.getComponentsId()'s
-    `keypad`/`legacy` groups (NOT the 'uiSpinButton' id mentioned in an unrelated Spine-atlas
-    console warning, which turned out to be a red herring). Returns False (rather than raising)
-    when jftwTools isn't available, so the caller can fall back to
-    _click_spin_by_selector's CSS-selector guessing.
-
-    The isEnabledVisually check + short pauses before/after the touch mirror the colleague's
-    automation suite's touchSpinButton() (src/js/client/keypad.js) — their comment there notes
-    the pauses exist "to ensure the button state/action is updated/processed"; harmless to keep
-    even though our own isSpinButtonReady() poll (see _wait_for_spin_ready) already gates this.
-    """
-    try:
-        if not driver.execute_script("return !!(window.jftwTools && window.jftwTools.button);"):
-            return False
-        driver.execute_script("window.jftwTools.button.isEnabledVisually('jftw-spinButton');")
-        time.sleep(0.3)
-        driver.execute_script("window.jftwTools.button.touch('jftw-spinButton');")
-        time.sleep(0.3)
-        return True
-    except Exception:
-        return False
-
-
-def _click_button_by_text(driver, text: str, timeout: int = 20) -> bool:
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.by import By
-    upper_text = text.upper()
-    xpath = (
-        "//*[self::button or self::a][contains("
-        "translate(normalize-space(.), 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), "
-        f"'{upper_text}')]"
-    )
-    try:
-        btn = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xpath)))
-        btn.click()
-        return True
-    except Exception:
-        return False
+    return {
+        "passed": passed, "verdict": verdict,
+        "actualBatch": actual[0] if actual else None,
+        "actualIndex": actual[1] if actual else None,
+        "actualStage": play.testdata_stage or play.stage or "N/A",
+        "actualWin": play.win or 0, "actualWager": play.wager or 0,
+        "actualPregens": [list(seed) for seed in by_path.values()],
+        "transNumber": play.trans_number,
+        "issues": issues, "screenshot_b64": None, "source_file": source_file,
+    }
 
 
 class TestdataVerifierHarnessTool(ToolPlugin):
@@ -407,12 +152,12 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         return ToolInfo(
             name="testdata_verifier_harness",
             description=(
-                "Browser-driven TestData verification via the QA-only Titan Harness launcher "
-                "page instead of the real production game URL — no Okta, no MFA, no borrowed "
-                "Chrome profile. Uploads testdata directly to Axiom over HTTP (like "
-                "testdata_verifier_api), then drives a fresh Chrome session through the harness "
-                "form to reach an authenticated game session. Keeps screenshot capability "
-                "(unlike testdata_verifier_api) since it stays browser-driven."
+                "Browser-driven TestData verification with no interactive Okta/MFA prompt. Accepts "
+                "either the QA-only Titan Harness launcher page (/harness/ in the path) or the "
+                "game's own launch URL (which carries the account in its query string) — the URL "
+                "decides which. Uploads testdata directly to Axiom over HTTP (x-api-key), then "
+                "drives a real Chrome via Playwright to play every .testdata record and check the "
+                "seed the server actually consumed. Keeps screenshots, unlike testdata_verifier_api."
             ),
             inputSchema=ToolInputSchema(properties=[
                 ToolParameter(name="testdata_file", type="string", required=False,
@@ -420,47 +165,53 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                 ToolParameter(name="testdata_files", type="array", required=False,
                               description="List of absolute paths to .testdata XML files. All files in one "
                                           "run must share the same <Key loginName>/<moduleID> — a single "
-                                          "harness session only logs into one account/module at a time."),
+                                          "session only logs into one account/module at a time."),
                 ToolParameter(name="harness_url", type="string", required=True,
-                              description="Full Titan Harness launcher page URL for this exact game version, "
-                                          "e.g. https://mobile-app1-gtp537.installprogram.eu/htmlGames/"
-                                          "4.54.0/harness/apexDragonPowerComboV94 — open it once in a normal "
-                                          "browser to confirm the gameId/frameworkVersion slug."),
+                              description="Launch URL for this game version. Either the Titan Harness "
+                                          "launcher page (…/htmlGames/4.54.0/harness/<gameId>) or the "
+                                          "game's own /launch/<module>/… URL including the username / "
+                                          "password / moduleId query params. A URL containing /harness/ is "
+                                          "driven through the harness form; anything else is opened as-is."),
                 ToolParameter(name="axiom_api_key", type="string", required=True,
                               description="Long-lived Axiom API Key ('x-api-key' header) — authenticates "
-                                          "both the testdata upload and, indirectly, nothing else here; "
-                                          "unrelated to the harness login itself."),
-                ToolParameter(name="product_id", type="string", required=True,
-                              description="Harness form's Product Id field. Fixed per game-module version, "
-                                          "not derivable from the testdata file — confirmed 5001 for "
-                                          "moduleId 105170 on gtp537."),
-                ToolParameter(name="client_id", type="string", required=True,
-                              description="Harness form's Client Id field. Fixed per game-module version — "
-                                          "confirmed 40300 for moduleId 105170 on gtp537."),
+                                          "the testdata upload. Unrelated to the game login itself."),
+                ToolParameter(name="env", type="string", default="",
+                              description="Platform environment slug for the Axiom upload host "
+                                          "(e.g. 'gtp603'). Derived from the URL's host when that host is "
+                                          "<service>-<env>.installprogram.eu; pass it explicitly when the "
+                                          "client runs locally (http://localhost:5241/…), where the URL "
+                                          "carries no env even though the game is remote."),
+                ToolParameter(name="product_id", type="string", required=False,
+                              description="Harness form's Product Id field (harness URLs only). Fixed per "
+                                          "game-module version, not derivable from the testdata file — "
+                                          "confirmed 5001 for moduleId 105170 on gtp537."),
+                ToolParameter(name="client_id", type="string", required=False,
+                              description="Harness form's Client Id field (harness URLs only). Fixed per "
+                                          "game-module version — confirmed 40300 for moduleId 105170 on gtp537."),
                 ToolParameter(name="brand", type="string", default="IslandParadise",
-                              description="Harness form's Brand field."),
+                              description="Harness form's Brand field (harness URLs only)."),
                 ToolParameter(name="harness_password", type="string", default=HARNESS_DEFAULT_PASSWORD,
-                              description="Harness form's Password field. A single shared value for every "
-                                          "QA test account on this platform, not a per-account secret — the "
-                                          "page itself pre-fills this same value by default."),
+                              description="Harness form's Password field (harness URLs only). A single "
+                                          "shared value for every QA test account on this platform, not a "
+                                          "per-account secret — the page itself pre-fills this same value."),
                 ToolParameter(name="spin_delay_sec", type="number", default=3.0,
-                              description="Seconds to wait between spins for the game to settle."),
+                              description="Accepted for backward compatibility and no longer used: the "
+                                          "session waits for each play to actually finish (state polling) "
+                                          "instead of sleeping a fixed delay after the click."),
                 ToolParameter(name="output_report", type="string", default="",
                               description="Optional absolute HTML report output path. Defaults to <work_dir>/report.html."),
                 ToolParameter(name="screenshot_on_bonus", type="boolean", default=True,
-                              description="Take screenshot for bonus-trigger spins."),
+                              description="Take a screenshot for bonus-trigger spins."),
                 ToolParameter(name="screenshot_on_fail", type="boolean", default=True,
-                              description="Take screenshot for failed spins."),
+                              description="Take a screenshot for failed spins."),
                 ToolParameter(name="harness_load_timeout_sec", type="number", default=60,
-                              description="Seconds to wait for the harness page (and, after clicking Launch, "
-                                          "the game) to finish loading. No human MFA step is involved here, "
-                                          "so this can be far shorter than testdata_verifier's "
-                                          "admin_login_timeout_sec — 60s just covers normal page/network "
-                                          "latency."),
+                              description="Seconds to wait for the launch page, the game frame, and the "
+                                          "game's own window.jftwTools to come up. No human MFA step is "
+                                          "involved, so this stays short."),
             ]),
-            permissions=["filesystem:write", "selenium", "network:outbound"],
+            permissions=["filesystem:write", "browser:automation", "network:outbound"],
             timeout_seconds=1800,
-            version="1.0.0",
+            version="2.0.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -468,10 +219,9 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         return await asyncio.to_thread(self._run_verification_sync, params, ctx)
 
     def _run_verification_sync(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
         from server.infra import cancellation
 
+        # ── Resolve + parse every testdata file, and enforce they share one identity ──
         testdata_files_list: list[Path] = []
         if params.get("testdata_files"):
             for fp in params["testdata_files"]:
@@ -487,16 +237,12 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         else:
             return ToolResult(success=False, error="No testdata_file or testdata_files provided")
 
-        harness_url: str = params["harness_url"]
+        game_url: str = params["harness_url"]
         axiom_api_key: str = params["axiom_api_key"]
-        product_id: str = str(params["product_id"])
-        client_id: str = str(params["client_id"])
-        brand: str = params.get("brand") or "IslandParadise"
         harness_password: str = params.get("harness_password") or HARNESS_DEFAULT_PASSWORD
-        spin_delay: float = float(params.get("spin_delay_sec", 3.0))
         screenshot_bonus: bool = bool(params.get("screenshot_on_bonus", True))
         screenshot_fail: bool = bool(params.get("screenshot_on_fail", True))
-        harness_load_timeout: int = int(params.get("harness_load_timeout_sec", 60))
+        load_timeout: float = float(params.get("harness_load_timeout_sec", 60))
 
         output = (
             Path(params["output_report"])
@@ -505,7 +251,6 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         )
         output.parent.mkdir(parents=True, exist_ok=True)
 
-        # ── Parse ALL testdata files, and enforce they share one identity ────
         all_records_by_file: dict[str, list[dict]] = {}
         keys_seen: set[tuple[str, str]] = set()
         for tf in testdata_files_list:
@@ -524,27 +269,56 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                 success=False,
                 error="testdata_files_have_different_identities:" + "; ".join(
                     f"loginName={ln!r},moduleID={mid!r}" for ln, mid in keys_seen
-                ) + " — a single harness session only logs into one account/module; run these as separate batches.",
+                ) + " — a single session only logs into one account/module; run these as separate batches.",
             )
         login_name, module_id = next(iter(keys_seen))
         if not login_name or not module_id:
             return ToolResult(success=False, error="testdata_key_missing_loginName_or_moduleID")
 
-        env = _derive_env(harness_url)
-        if not env:
-            return ToolResult(success=False, error=f"could_not_derive_env_from_harness_url:{harness_url}")
-        axiomcore_host = _axiomcore_host(env)
+        spec = LaunchSpec(
+            url=game_url, username=login_name, module_id=module_id, password=harness_password,
+            product_id=str(params.get("product_id") or ""), client_id=str(params.get("client_id") or ""),
+            brand=params.get("brand") or "IslandParadise",
+        )
+        # A direct URL logs in with whatever account it carries, and the game silently serves that
+        # account's queued seed rather than the uploaded one when the two disagree — so catch the
+        # mismatch here instead of reporting PASS/FAIL against data the game never used.
+        if spec.mode == "direct":
+            url_identity = _extract_url_identity(game_url)
+            if url_identity["username"] or url_identity["moduleId"]:
+                mismatches = _check_key_matches_url(
+                    {"loginName": login_name, "moduleID": module_id}, url_identity)
+                if mismatches:
+                    return ToolResult(success=False,
+                                      error="testdata_key_does_not_match_launch_url:" + "; ".join(mismatches))
+        elif not (spec.product_id and spec.client_id):
+            # Only the harness form needs these, so they cannot be universally required parameters —
+            # but an empty value would be typed into the form and submitted, failing later with a
+            # confusing "no game" instead of saying what is actually missing.
+            return ToolResult(
+                success=False,
+                error="harness_form_fields_missing:product_id and client_id are required for a "
+                      "/harness/ URL — they are fixed per game-module version and not derivable from "
+                      "the testdata file.",
+            )
 
-        log.info("verifier_harness.start", login_name=login_name, module_id=module_id,
-                  files=len(testdata_files_list))
+        # ── Env first: the upload host is built from it, and that happens before the browser ──
+        try:
+            env = require_env_before_launch(params.get("env"), game_url)
+        except ValueError as e:
+            return ToolResult(success=False, error=str(e))
+        upload_host = axiomcore_host(env)
 
-        # ── Upload every testdata file over HTTP first (no Okta, no browser needed) ──
+        log.info("verifier_harness.start", login_name=login_name, module_id=module_id, env=env,
+                 mode=spec.mode, files=len(testdata_files_list))
+
+        # ── Upload every testdata file over HTTP (no Okta, no browser needed) ──
         with httpx.Client(timeout=30.0) as client:
             for tf in testdata_files_list:
                 try:
                     with open(tf, "rb") as fh:
                         upload_resp = client.post(
-                            f"https://{axiomcore_host}/Upload/TestDataFile",
+                            f"https://{upload_host}/Upload/TestDataFile",
                             headers={"x-api-key": axiom_api_key},
                             files={"testDataFormFile": (tf.name, fh, "application/octet-stream")},
                         )
@@ -557,262 +331,99 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                     )
                 log.info("verifier_harness.uploaded", file=tf.name)
 
-        # ── Chrome setup. No borrowed profile needed — the harness login has no session to
-        # persist across runs (it's a fresh form submission every time), unlike Okta SSO. ──
-        chrome_options = Options()
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-        chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-
-        harness_host = urlparse(harness_url).hostname or ""
-        if any(kw in harness_host.lower() for kw in ["installprogram.eu", "staging", "internal", "test", "dev"]):
-            chrome_options.add_argument("--ignore-certificate-errors")
-
-        driver = webdriver.Chrome(options=chrome_options)
-        cancellation.register(ctx.execution_id, lambda: _force_kill_driver(driver))
-        driver.maximize_window()
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _INTERCEPTOR_JS})
-
         screenshots_dir = Path(ctx.work_dir) / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
         all_results: list[dict] = []
         all_records_flat: list[dict] = []
         artifacts: list[str] = []
+        records_flat = [
+            (Path(fp).name, rec) for fp, recs in all_records_by_file.items() for rec in recs
+        ]
+        max_consecutive_network_errors, max_consecutive_seed_rejections = 3, 2
+        consecutive_network_errors = consecutive_seed_rejections = 0
+        environment_aborted = False
+        cancel_event = threading.Event()
+        cancellation.register(ctx.execution_id, cancel_event.set)
 
         try:
-            # ── Navigate to the harness launcher page and fill the form ──
-            log.info("verifier_harness.navigate", url=harness_url)
-            driver.get(harness_url)
+            with open_session(spec, headless=True, config=SessionConfig(), log=log.info,
+                              cancel_event=cancel_event, enter_timeout_sec=load_timeout) as gs:
+                restored = gs.finish_restored_play(screenshots_dir)
+                if restored is not None:
+                    # An unfinished play the page restored on load: played out first so the first
+                    # .testdata record is not attributed to it.
+                    log.info("verifier_harness.restored_play", responses=len(restored.responses),
+                             error=restored.error.code if restored.error else None)
 
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.webdriver.common.by import By
-            try:
-                WebDriverWait(driver, harness_load_timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input"))
-                )
-            except Exception:
-                return ToolResult(
-                    success=False,
-                    error=f"harness_page_did_not_load:{harness_url} (no <input> found within "
-                          f"{harness_load_timeout}s)",
-                )
+                last_spin: PlayResponse | None = None
+                for file_name, rec in records_flat:
+                    if cancel_event.is_set() or environment_aborted:
+                        stopped = cancel_event.is_set()
+                        all_results.append(_empty_result(
+                            file_name, "CANCELLED" if stopped else "NETWORK_ERROR",
+                            ["Stopped by the user" if stopped
+                             else "Verification aborted: environment unavailable"]))
+                        all_records_flat.append(rec)
+                        continue
 
-            fields = [
-                (["username"], login_name),
-                (["password"], harness_password),
-                (["productid", "product_id", "productId"], product_id),
-                (["moduleid", "module_id", "moduleId"], module_id),
-                (["clientid", "client_id", "clientId"], client_id),
-                (["brand"], brand),
-            ]
-            missing_fields: list[str] = []
-            for candidates, value in fields:
-                if not _fill_labeled_field(driver, candidates, value):
-                    missing_fields.append(candidates[0])
-            if missing_fields:
-                return ToolResult(
-                    success=False,
-                    error=f"harness_form_fields_not_found:{missing_fields} — the harness page's DOM "
-                          f"selectors need a quick look (see this tool's module docstring); "
-                          f"open harness_url manually and check these fields' formcontrolname/name/id.",
-                )
+                    log.info("verifier_harness.record", spin=rec["spinIndex"], stage=rec["stage"],
+                             batch=rec["batch"], index=rec["index"])
+                    if rec["stage"] != "BaseGame":
+                        # The game auto-plays this round after the spin that triggered it, so
+                        # clicking Spin for it would be wrong — judge it against that Spin's echo.
+                        result = _compare_play(rec, last_spin, file_name)
+                    else:
+                        play_result = gs.play(label=f"{file_name}:spin{rec['spinIndex']}")
+                        if play_result.error is not None:
+                            result = _error_result(play_result.error, file_name)
+                        else:
+                            last_spin = _spin_of(play_result)
+                            result = _compare_play(rec, last_spin, file_name)
 
-            prior_handles = set(driver.window_handles)
-            if not _click_button_by_text(driver, "LAUNCH GAME", timeout=harness_load_timeout):
-                return ToolResult(success=False, error="harness_launch_game_button_not_found_or_not_clickable")
-
-            # CONFIRMED on a live run: this harness page's "LAUNCH GAME" button opens the game in
-            # a new tab/window and closes its own — without switching, every subsequent driver
-            # call (execute_script, get_screenshot_as_png, ...) raised NoSuchWindowException
-            # ("target window already closed") because `driver` was still bound to the now-dead
-            # original handle. Poll window_handles for whichever handle is new (or, if the
-            # original tab closed and only one handle remains, whichever handle isn't the one we
-            # started with) and switch to that. If neither ever happens (the harness navigated in
-            # place, same single handle throughout), switching to the sole remaining handle is a
-            # harmless no-op.
-            deadline = time.time() + harness_load_timeout
-            new_handle = None
-            while time.time() < deadline:
-                try:
-                    current_handles = driver.window_handles
-                except Exception:
-                    break
-                diff = [h for h in current_handles if h not in prior_handles]
-                if diff:
-                    new_handle = diff[0]
-                    break
-                if len(current_handles) == 1 and current_handles[0] not in prior_handles:
-                    new_handle = current_handles[0]
-                    break
-                time.sleep(0.5)
-            try:
-                driver.switch_to.window(new_handle or driver.window_handles[0])
-            except Exception as e:
-                return ToolResult(success=False, error=f"harness_no_window_remained_after_launch:{e}")
-
-            game_context = _enter_game_context(driver, timeout_sec=harness_load_timeout)
-            log.info("verifier_harness.launched", login_name=login_name, module_id=module_id,
-                     game_context=game_context)
-
-            if not _wait_for_spin_ready(driver, timeout_sec=60):
-                log.warning("verifier_harness.spin_not_ready_after_wait")
-                try:
-                    ss_path = screenshots_dir / "after_launch_not_ready.png"
-                    ss_path.write_bytes(driver.get_screenshot_as_png())
-                    artifacts.append(str(ss_path.resolve()))
-                except Exception:
-                    pass
-
-            _apply_time_scale(driver)
-
-            driver.execute_script("window.__gvResponses = []; window.__gvSpinCount = 0;")
-
-            # ── Auto-spin & verify each record ──
-            all_records_this_run = [
-                (Path(fp).name, rec) for fp, recs in all_records_by_file.items() for rec in recs
-            ]
-            consecutive_network_errors = 0
-            consecutive_seed_rejections = 0
-            max_consecutive_network_errors = 3
-            max_consecutive_seed_rejections = 2
-            environment_aborted = False
-            consumed = 0  # __gvResponses entries already matched to (or skipped past) a record
-
-            for file_name, rec in all_records_this_run:
-                if environment_aborted:
-                    all_results.append({
-                        "passed": False, "verdict": "NETWORK_ERROR",
-                        "actualBatch": None, "actualIndex": None,
-                        "actualStage": "N/A", "actualWin": 0, "actualWager": 0,
-                        "issues": ["Verification aborted: environment unavailable"],
-                        "screenshot_b64": None, "source_file": file_name,
-                    })
-                    all_records_flat.append(rec)
-                    continue
-
-                log.info("verifier_harness.spin", spin=rec["spinIndex"], batch=rec["batch"], index=rec["index"])
-
-                # A big-win result commonly triggers a win-celebration overlay that leaves the
-                # spin button not-ready for a few seconds — touching jftw-spinButton while it's
-                # still disabled silently no-ops (confirmed on a live run: alternating spins
-                # after a big win came back TIMEOUT with zero errors raised anywhere). Waiting
-                # for isSpinButtonReady() before *every* spin, not just once after launch, is
-                # what actually needs to happen here.
-                # Only a BaseGame record is a player-initiated spin. Any other stage (FreeSpin,
-                # Bonus, ...) is a round the game auto-plays after the BaseGame spin that
-                # triggered it — clicking Spin for it is wrong, and its response has usually
-                # already been captured by the time we get here.
-                actual = None
-                if rec["stage"] == "BaseGame":
-                    _wait_for_spin_ready(driver, timeout_sec=60)
-                    # Skip whatever the previous round left behind (e.g. the rest of a free-spin
-                    # feature's responses) — this record's response is the first one after the click.
-                    consumed = driver.execute_script(_RESPONSE_COUNT_JS)
-                    if not _click_spin_via_jftw(driver):
-                        _click_spin_by_selector(driver)
-                    time.sleep(spin_delay)
-                    for _ in range(30):
-                        if driver.execute_script(_RESPONSE_COUNT_JS) > consumed:
-                            actual = driver.execute_script(f"return window.__gvResponses[{consumed}];")
-                            consumed += 1
-                            break
-                        time.sleep(0.5)
-                else:
-                    found = _await_feature_response(driver, consumed, rec, timeout_sec=180)
-                    if found:
-                        idx, actual = found
-                        consumed = idx + 1
-
-                if actual is None:
-                    result = {
-                        "passed": False, "verdict": "TIMEOUT",
-                        "actualBatch": None, "actualIndex": None,
-                        "actualStage": "N/A", "actualWin": 0, "actualWager": 0,
-                        "issues": ["No game response captured within timeout"],
-                        "screenshot_b64": None, "source_file": file_name,
-                    }
-                    # A TIMEOUT means _click_spin never produced a captured response at all —
-                    # screenshotting here (unlike the pass/fail branch below, which only fires
-                    # once a response *was* captured) is the only way to see what the page
-                    # actually looked like when the click didn't register, while debugging this
-                    # still-new tool's spin-button selectors against the harness-launched game.
-                    try:
-                        png_bytes = driver.get_screenshot_as_png()
-                        import base64
-                        result["screenshot_b64"] = base64.b64encode(png_bytes).decode("utf-8")
-                        ss_path = screenshots_dir / f"{file_name}_spin{rec['spinIndex']}_timeout.png"
-                        ss_path.write_bytes(png_bytes)
-                        artifacts.append(str(ss_path.resolve()))
-                    except Exception:
-                        pass
-                    consecutive_network_errors += 1
-                    consecutive_seed_rejections = 0
-                else:
-                    result = _compare_record(rec, actual)
-                    result["screenshot_b64"] = None
-                    result["source_file"] = file_name
-                    if result["verdict"] == "SEED_MISMATCH" and _has_pregen(actual, rec["batch"], rec["index"]):
-                        # The seed is in this response, just not at testData.spin.preGen where
-                        # _compare_record looks (a feature round may nest it elsewhere).
-                        result["actualBatch"], result["actualIndex"] = rec["batch"], rec["index"]
-                        result["issues"] = [i for i in result["issues"] if not i.startswith(("batch", "index"))]
-                        result["passed"] = True
-                        result["verdict"] = "PASSED" if not result["issues"] else "STAGE_MISMATCH"
-
-                    gd = actual.get("gameResponse", {})
-                    error_msg = gd.get("error", "") or gd.get("errorMessage", "")
-                    if error_msg and ("invalid" in error_msg.lower() or "reject" in error_msg.lower()):
-                        result["verdict"] = "SEED_REJECTED"
-                        result["passed"] = False
-                        result["issues"].append(f"Server rejected seed: {error_msg}")
+                    if result["verdict"] == "TIMEOUT" or result["verdict"] == "PAGE_RELOADED":
+                        consecutive_network_errors += 1
+                        consecutive_seed_rejections = 0
+                    elif result["verdict"] == "SEED_REJECTED":
                         consecutive_seed_rejections += 1
                         consecutive_network_errors = 0
                     else:
-                        consecutive_seed_rejections = 0
-                        # A response *was* captured, so the environment is reachable whether or not
-                        # it matched — only consecutive TIMEOUTs should count toward the abort.
                         consecutive_network_errors = 0
+                        consecutive_seed_rejections = 0
 
                     need_screenshot = (rec["isBonus"] and screenshot_bonus) or (
                         not result["passed"] and screenshot_fail)
                     if need_screenshot:
-                        try:
-                            png_bytes = driver.get_screenshot_as_png()
-                            import base64
-                            result["screenshot_b64"] = base64.b64encode(png_bytes).decode("utf-8")
-                            ss_path = screenshots_dir / f"{file_name}_spin{rec['spinIndex']}_{'pass' if result['passed'] else 'fail'}.png"
-                            ss_path.write_bytes(png_bytes)
-                            artifacts.append(str(ss_path.resolve()))
-                        except Exception:
-                            pass
+                        shot = gs.screenshot(
+                            screenshots_dir
+                            / f"{file_name}_spin{rec['spinIndex']}_{'pass' if result['passed'] else 'fail'}.png")
+                        if shot:
+                            artifacts.append(str(Path(shot).resolve()))
+                            result["screenshot_b64"] = base64.b64encode(
+                                Path(shot).read_bytes()).decode("utf-8")
 
-                if consecutive_network_errors >= max_consecutive_network_errors:
-                    environment_aborted = True
-                    result["issues"].append(
-                        f"Environment UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts")
-                elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
-                    environment_aborted = True
-                    result["issues"].append(
-                        f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected")
+                    if consecutive_network_errors >= max_consecutive_network_errors:
+                        environment_aborted = True
+                        result["issues"].append(
+                            f"Environment UNAVAILABLE after {max_consecutive_network_errors} consecutive timeouts")
+                    elif consecutive_seed_rejections >= max_consecutive_seed_rejections:
+                        environment_aborted = True
+                        result["issues"].append(
+                            f"Verification paused: {max_consecutive_seed_rejections} consecutive seeds rejected")
 
-                all_results.append(result)
-                all_records_flat.append(rec)
+                    all_results.append(result)
+                    all_records_flat.append(rec)
 
-            # ── Generate report (same format as the other two tools) ──
+            # ── Report, in the same format the other testdata tools produce ──
             passed_count = sum(1 for r in all_results if r["passed"])
             total = len(all_results)
             is_multi = len(testdata_files_list) > 1
             report_label = (
-                f"{len(testdata_files_list)} files batch verification (harness login: {login_name})"
+                f"{len(testdata_files_list)} files batch verification ({spec.mode} login: {login_name})"
                 if is_multi else testdata_files_list[0].name
             )
             report_path = _generate_html_report(
-                all_records_flat, all_results, harness_url, report_label, output, multi_file=is_multi,
+                all_records_flat, all_results, game_url, report_label, output, multi_file=is_multi,
             )
             artifacts.append(str(output.resolve()))
 
@@ -832,6 +443,8 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                     "report_html": report_path,
                     "report_url": report_url,
                     "files_processed": len(testdata_files_list),
+                    "mode": spec.mode,
+                    "env": env,
                     "cases": [
                         {"spinIndex": rec["spinIndex"], "stage": rec["stage"],
                          "expectedBatch": rec["batch"], "expectedIndex": rec["index"],
@@ -842,11 +455,9 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                 execution_ms=0, artifacts=artifacts,
             )
 
+        except SessionError as e:
+            return ToolResult(success=False, error=f"session_error:{e.code}:{e.message}")
         except Exception as e:
             return ToolResult(success=False, error=f"verification_error:{type(e).__name__}:{e}")
         finally:
             cancellation.unregister(ctx.execution_id)
-            try:
-                driver.quit()
-            except Exception:
-                pass

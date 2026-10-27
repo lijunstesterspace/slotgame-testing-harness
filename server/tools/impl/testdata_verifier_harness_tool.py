@@ -63,6 +63,11 @@ from server.tools.impl.testdata_verify_common import (
     _parse_testdata,
 )
 
+# The session's own defaults, read so the schema below cannot drift from them. A tool param only
+# exists where a live run has shown a reason to change the value; everything else in SessionConfig
+# stays whatever the session layer decided.
+_SESSION_DEFAULTS = SessionConfig()
+
 
 # ── result builders: every case yields the same dict the report renderer expects ──────────────
 
@@ -196,10 +201,6 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                                           "per-account secret — the page itself pre-fills this same value. "
                                           "The HARNESS_TESTER_PASSWORD environment variable overrides the "
                                           "default."),
-                ToolParameter(name="spin_delay_sec", type="number", default=3.0,
-                              description="Accepted for backward compatibility and no longer used: the "
-                                          "session waits for each play to actually finish (state polling) "
-                                          "instead of sleeping a fixed delay after the click."),
                 ToolParameter(name="output_report", type="string", default="",
                               description="Optional absolute HTML report output path. Defaults to <work_dir>/report.html."),
                 ToolParameter(name="screenshot_on_bonus", type="boolean", default=True,
@@ -210,6 +211,16 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                               description="Seconds to wait for the launch page, the game frame, and the "
                                           "game's own window.jftwTools to come up. No human MFA step is "
                                           "involved, so this stays short."),
+                ToolParameter(name="time_scale", type="number", default=_SESSION_DEFAULTS.time_scale,
+                              description="Game engine animation-clock speed in percent, applied via "
+                                          "window.jftwTools (SessionConfig.time_scale; 100 = normal). Higher "
+                                          "values make big-win celebrations resolve faster, which is what "
+                                          "keeps the next spin from waiting on an animation."),
+                ToolParameter(name="play_timeout_sec", type="number",
+                              default=_SESSION_DEFAULTS.play_timeout_sec,
+                              description="How long one play may take, spin to idle, before it is reported "
+                                          "as a TIMEOUT (SessionConfig.play_timeout_sec). Long bonus chains "
+                                          "are slow, so raise this on a loaded environment."),
             ]),
             permissions=["filesystem:write", "browser:automation", "network:outbound"],
             timeout_seconds=1800,
@@ -245,6 +256,12 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         screenshot_bonus: bool = bool(params.get("screenshot_on_bonus", True))
         screenshot_fail: bool = bool(params.get("screenshot_on_fail", True))
         load_timeout: float = float(params.get("harness_load_timeout_sec", 60))
+        # Only these two are caller-tunable; the rest of SessionConfig stays at the session layer's
+        # own defaults (see _SESSION_DEFAULTS).
+        session_config = SessionConfig(
+            time_scale=int(params.get("time_scale", _SESSION_DEFAULTS.time_scale)),
+            play_timeout_sec=float(params.get("play_timeout_sec", _SESSION_DEFAULTS.play_timeout_sec)),
+        )
 
         output = (
             Path(params["output_report"])
@@ -349,7 +366,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
         cancellation.register(ctx.execution_id, cancel_event.set)
 
         try:
-            with open_session(spec, headless=True, config=SessionConfig(), log=log.info,
+            with open_session(spec, headless=True, config=session_config, log=log.info,
                               cancel_event=cancel_event, enter_timeout_sec=load_timeout) as gs:
                 restored = gs.finish_restored_play(screenshots_dir)
                 if restored is not None:

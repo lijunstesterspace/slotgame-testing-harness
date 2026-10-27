@@ -161,7 +161,6 @@ export async function runRealGameVerification(
   const toolName = method === "api" ? "testdata_verifier_api" : "testdata_verifier_harness";
   const toolParams: Record<string, unknown> = {
     testdata_files: testdataFiles,
-    spin_delay_sec: spinDelayMs / 1000,
   };
   if (method === "api") {
     if (!config.oktaAccessToken) {
@@ -173,6 +172,9 @@ export async function runRealGameVerification(
     toolParams.target_url = config.targetUrl;
     toolParams.okta_access_token = config.oktaAccessToken;
     toolParams.axiom_api_key = config.axiomApiKey;
+    // Only the api tool spaces its own spins; the harness session waits for each play to finish
+    // through state polling, so it has no spin_delay_sec param and must not be sent one.
+    toolParams.spin_delay_sec = spinDelayMs / 1000;
   } else if (method === "harness") {
     if (!config.harnessUrl) {
       throw new Error("Harness verification needs the Titan Harness launcher page URL — paste one in before running.");

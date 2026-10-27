@@ -89,7 +89,6 @@ export const PIPELINES: PipelineDef[] = [
             axiom_api_key: extraParams.axiomApiKey ?? "",
             product_id: extraParams.harnessProductId ?? "",
             client_id: extraParams.harnessClientId ?? "",
-            spin_delay_sec: extraParams.spinDelaySec ?? 3,
           }),
         },
       ],

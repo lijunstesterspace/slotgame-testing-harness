@@ -11,6 +11,7 @@ from typing import Any
 import openpyxl
 from bs4 import BeautifulSoup
 
+from server.tools.impl.html_to_text_converter_tool import pick_baseline
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter,
     ToolResult, HarnessContext,
@@ -145,7 +146,7 @@ class DiffComparatorTool(ToolPlugin):
                 ),
                 ToolParameter(
                     name="baseline_file", type="string", default="",
-                    description="Baseline TXT file path (defaults to alphabetically first)",
+                    description="Baseline TXT file path (defaults to the English file: en, then en-*, else alphabetically first)",
                 ),
                 ToolParameter(
                     name="generate_png", type="boolean", default=True,
@@ -170,8 +171,7 @@ class DiffComparatorTool(ToolPlugin):
 
         # Determine the baseline file
         if not baseline_file:
-            sorted_files = sorted(txt_files, key=lambda f: f["subdir_name"])
-            baseline_file = sorted_files[0]["txt_path"]
+            baseline_file = pick_baseline(txt_files)["txt_path"]
 
         baseline_name = Path(baseline_file).stem
 

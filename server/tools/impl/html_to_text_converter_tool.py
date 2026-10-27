@@ -1,5 +1,6 @@
 """Plugin: html_to_text_converter — batch-convert HTML help files to plain text"""
 from __future__ import annotations
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,20 @@ def _build_converter() -> html2text.HTML2Text:
     h.bypass_tables = True
     h.mark_code = False
     return h
+
+
+def pick_baseline(entries: list[dict]) -> dict:
+    """Baseline = the English master help file, since every translation is checked against it:
+    exact "en" first, then a name carrying an "en" token ("en-gb", "en_us", "help_en"),
+    and only if there is no English file at all the alphabetically first one."""
+    ordered = sorted(entries, key=lambda e: e["subdir_name"].lower())
+    for e in ordered:
+        if e["subdir_name"].lower() == "en":
+            return e
+    for e in ordered:
+        if "en" in re.split(r"[-_. ]+", e["subdir_name"].lower()):
+            return e
+    return ordered[0]
 
 
 def _post_process(txt: str) -> str:
@@ -107,8 +122,7 @@ class HtmlToTextConverterTool(ToolPlugin):
                 error="no_html_files_found: No subdirectories with index.html were found",
             )
 
-        # Baseline file = first in alphabetical order
-        baseline_file = converted_files[0]["txt_path"]
+        baseline_file = pick_baseline(converted_files)["txt_path"]
 
         return ToolResult(
             success=True,

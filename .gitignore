@@ -197,6 +197,10 @@ server/.venv/
 venv/
 .venv/
 
+# Local verification runs (game_session smoke output: plays.json, screenshots, trace.zip).
+# A single smoke run is hundreds of MB of Playwright traces — never commit these.
+out/
+
 # EXE packaging output
 server/static/
 build/

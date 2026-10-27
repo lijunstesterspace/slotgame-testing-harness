@@ -13,6 +13,7 @@ Headless avoids that entirely; headed runs get the anti-throttling flags below.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,26 @@ from server.game_session.capture import PlayCapture
 from server.game_session.env import is_local_url
 from server.game_session.session import LaunchFailed
 
-TITAN_DEFAULT_PASSWORD = "test1234$"
+# One shared value for every QA test account on this platform, not a per-account secret — the
+# harness page pre-fills the same value itself. Overridable so a differently-provisioned
+# environment does not need a code change.
+TITAN_DEFAULT_PASSWORD = os.getenv("HARNESS_TESTER_PASSWORD", "test1234$")
+
+# The LAUNCH GAME control and the form's fields, in the order the harness page wants them, each with
+# the attribute strategies to try. The page's DOM is internal/VPN-only and was never inspectable
+# ahead of time, so several common Angular-Material-style attributes are tried per field. This is
+# the one definition of the form's shape: the Playwright launcher below and portugal_plugin_fetcher's
+# Selenium driver both read it, so the two cannot drift on what to fill.
+TITAN_LAUNCH_BUTTON = "LAUNCH GAME"
+
+TITAN_FIELDS: list[tuple[str, list[str]]] = [
+    ("username", ["username"]),
+    ("password", ["password"]),
+    ("product_id", ["productid", "product_id", "productId"]),
+    ("module_id", ["moduleid", "module_id", "moduleId"]),
+    ("client_id", ["clientid", "client_id", "clientId"]),
+    ("brand", ["brand"]),
+]
 
 CHROME_ARGS = [
     "--disable-backgrounding-occluded-windows",
@@ -97,16 +117,6 @@ def open_browser(headless: bool = True, trace_path: Path | None = None,
     return Browser(playwright=pw, browser=browser, context=context, trace_path=trace_path)
 
 
-_TITAN_FIELDS = [
-    ("username", ["username"]),
-    ("password", ["password"]),
-    ("product_id", ["productid", "product_id", "productId"]),
-    ("module_id", ["moduleid", "module_id", "moduleId"]),
-    ("client_id", ["clientid", "client_id", "clientId"]),
-    ("brand", ["brand"]),
-]
-
-
 def _fill_titan_field(page, candidates: list[str], value: str) -> bool:
     for name in candidates:
         for sel in (f"input[formcontrolname='{name}' i]", f"input[name='{name}' i]",
@@ -151,17 +161,17 @@ def launch(browser: Browser, spec: LaunchSpec, capture: PlayCapture, timeout_sec
     values = {"username": spec.username, "password": spec.password or TITAN_DEFAULT_PASSWORD,
               "product_id": spec.product_id, "module_id": spec.module_id,
               "client_id": spec.client_id, "brand": spec.brand or "IslandParadise"}
-    missing = [cands[0] for key, cands in _TITAN_FIELDS if not _fill_titan_field(form, cands, values[key])]
+    missing = [cands[0] for key, cands in TITAN_FIELDS if not _fill_titan_field(form, cands, values[key])]
     if missing:
         raise LaunchFailed("TITAN_FORM_FIELDS_NOT_FOUND",
                            f"{missing} — check the harness page's DOM (open {page_url} manually and "
                            f"look at these fields' formcontrolname/name/id)")
-    button = form.get_by_role("button", name="LAUNCH GAME")
+    button = form.get_by_role("button", name=TITAN_LAUNCH_BUTTON)
     if not button.count():
-        button = form.get_by_text("LAUNCH GAME", exact=False)
+        button = form.get_by_text(TITAN_LAUNCH_BUTTON, exact=False)
     if not button.count():
         raise LaunchFailed("LAUNCH_GAME_BUTTON_NOT_FOUND",
-                           f"no LAUNCH GAME control on {page_url}")
+                           f"no {TITAN_LAUNCH_BUTTON} control on {page_url}")
     # CONFIRMED on the Selenium tool's live run: LAUNCH GAME opens the game in a new tab and closes
     # its own. expect_page() catches that tab; if the harness navigates in place instead, keep `form`.
     try:

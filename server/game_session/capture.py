@@ -16,8 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from server.game_session import protocol
-from server.game_session.protocol import PlayResponse
+from server.game_session.protocol import PlayResponse, parse
 
 PLAY_URL = re.compile(r"/casino/play/.*/play(?:$|\?)")
 PLATFORM_URL = re.compile(r"/casino/(?:play|user)/")
@@ -76,7 +75,7 @@ class PlayCapture:
         play = None
         if body:
             try:
-                play = protocol.parse(body)
+                play = parse(body)
             except Exception as e:
                 parse_error = f"{type(e).__name__}:{e}"
         item = Captured(seq=self._next_seq, t=time.time(), url=url.split("?")[0], status=response.status,

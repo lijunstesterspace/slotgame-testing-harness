@@ -505,10 +505,9 @@ def _click_spin_by_selector(driver) -> None:
 
 # ---------------------------------------------------------------------------
 # Selenium page-driving helpers (currently used by portugal_plugin_fetcher).
+# The harness form's shape (field list, launch button) and the shared QA password live in
+# server.game_session.launcher, which is the one definition both browser stacks read.
 # ---------------------------------------------------------------------------
-HARNESS_DEFAULT_PASSWORD = "test1234$"
-
-
 def _fill_labeled_field(driver, candidates: list[str], value: str) -> bool:
     """Fill a text input matched by any of `candidates` (formcontrolname/name/id/placeholder,
     case-insensitive). The harness page's exact DOM wasn't inspectable ahead of time (internal,

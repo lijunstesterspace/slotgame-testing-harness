@@ -35,11 +35,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+from server.game_session.launcher import (
+    TITAN_DEFAULT_PASSWORD, TITAN_FIELDS, TITAN_LAUNCH_BUTTON,
+)
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
 from server.tools.impl.testdata_verify_common import (
-    HARNESS_DEFAULT_PASSWORD,
     _INTERCEPTOR_JS, _force_kill_driver, _click_spin_by_selector,
     _fill_labeled_field, _click_button_by_text,
     _wait_for_spin_ready, _apply_time_scale, _click_spin_via_jftw,
@@ -237,7 +239,7 @@ class PortugalPluginFetcherTool(ToolPlugin):
         client_id = str(params.get("client_id") or q.get("clientid") or "")
         product_id = str(params.get("product_id") or q.get("productid") or "")
         brand = str(params.get("brand") or q.get("brand") or "IslandParadise")
-        password = str(params.get("harness_password") or q.get("password") or HARNESS_DEFAULT_PASSWORD)
+        password = str(params.get("harness_password") or q.get("password") or TITAN_DEFAULT_PASSWORD)
         spin_count = max(0, int(params.get("spin_count") or 0))
         timeout = int(params.get("load_timeout_sec") or 60)
         is_harness_form = "/harness/" in urlparse(game_url).path
@@ -283,14 +285,14 @@ class PortugalPluginFetcherTool(ToolPlugin):
                     WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input")))
                 except Exception:
                     return fail(f"harness_page_did_not_load:{game_url}")
-                for cands, val in [(["username"], login_name), (["password"], password),
-                                   (["productid", "product_id", "productId"], product_id),
-                                   (["moduleid", "module_id", "moduleId"], module_id),
-                                   (["clientid", "client_id", "clientId"], client_id), (["brand"], brand)]:
-                    if not _fill_labeled_field(driver, cands, val):
+                form_values = {"username": login_name, "password": password,
+                               "product_id": product_id, "module_id": module_id,
+                               "client_id": client_id, "brand": brand}
+                for key, cands in TITAN_FIELDS:
+                    if not _fill_labeled_field(driver, cands, form_values[key]):
                         return fail(f"harness_form_field_not_found:{cands[0]}")
                 prior = set(driver.window_handles)
-                if not _click_button_by_text(driver, "LAUNCH GAME", timeout=timeout):
+                if not _click_button_by_text(driver, TITAN_LAUNCH_BUTTON, timeout=timeout):
                     return fail("harness_launch_game_button_not_found")
                 if not self._switch_to_new_window(driver, prior, timeout):
                     return fail("game_window_not_found_after_launch")

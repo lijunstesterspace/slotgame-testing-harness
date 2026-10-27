@@ -50,12 +50,12 @@ from server.game_session import (
     LaunchSpec, PlayResponse, PlayResult, SessionConfig, SessionError, open_session,
 )
 from server.game_session.env import axiomcore_host, require_env_before_launch
+from server.game_session.launcher import TITAN_DEFAULT_PASSWORD
 from server.infra.logger import log
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
 from server.tools.impl.testdata_verify_common import (
-    HARNESS_DEFAULT_PASSWORD,
     _check_key_matches_url,
     _extract_testdata_key,
     _extract_url_identity,
@@ -190,10 +190,12 @@ class TestdataVerifierHarnessTool(ToolPlugin):
                                           "game-module version — confirmed 40300 for moduleId 105170 on gtp537."),
                 ToolParameter(name="brand", type="string", default="IslandParadise",
                               description="Harness form's Brand field (harness URLs only)."),
-                ToolParameter(name="harness_password", type="string", default=HARNESS_DEFAULT_PASSWORD,
+                ToolParameter(name="harness_password", type="string", default=TITAN_DEFAULT_PASSWORD,
                               description="Harness form's Password field (harness URLs only). A single "
                                           "shared value for every QA test account on this platform, not a "
-                                          "per-account secret — the page itself pre-fills this same value."),
+                                          "per-account secret — the page itself pre-fills this same value. "
+                                          "The HARNESS_TESTER_PASSWORD environment variable overrides the "
+                                          "default."),
                 ToolParameter(name="spin_delay_sec", type="number", default=3.0,
                               description="Accepted for backward compatibility and no longer used: the "
                                           "session waits for each play to actually finish (state polling) "
@@ -239,7 +241,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
 
         game_url: str = params["harness_url"]
         axiom_api_key: str = params["axiom_api_key"]
-        harness_password: str = params.get("harness_password") or HARNESS_DEFAULT_PASSWORD
+        harness_password: str = params.get("harness_password") or TITAN_DEFAULT_PASSWORD
         screenshot_bonus: bool = bool(params.get("screenshot_on_bonus", True))
         screenshot_fail: bool = bool(params.get("screenshot_on_fail", True))
         load_timeout: float = float(params.get("harness_load_timeout_sec", 60))

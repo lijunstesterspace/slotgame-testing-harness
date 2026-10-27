@@ -314,11 +314,16 @@ class GameSession:
 
     def finish_restored_play(self, shots_dir: Path | None = None) -> PlayResult | None:
         """If the page restored an unfinished play (or is mid-feature) on load, play it out first so
-        the first .testdata record is not attributed to it. Returns None when the game was already idle."""
+        the first .testdata record is not attributed to it. Returns None when the game was already idle.
+
+        The response window starts here, like play()'s does, so what this reports is the play-out and
+        nothing else. The Refresh that restored the play arrived before this call, so it is not part
+        of this result — waiting for a play to actually finish, not for evidence of why it existed.
+        """
         st = self.status()
         if self.is_idle(st) and not st.get("restore"):
             return None
-        started, first_seq = time.time(), 0
+        started, first_seq = time.time(), self.capture.next_seq
         result = PlayResult(responses=[], states=[], started_at=started, ended_at=started, touches=0, restored=True)
         try:
             result.states, result.touches = self.wait_until_idle()

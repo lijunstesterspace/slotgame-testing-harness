@@ -322,6 +322,7 @@ export const VerificationReportModal: React.FC<VerificationReportModalProps> = (
                               res.status === 'SEED_REJECTED' ? 'bg-rose-950/80 border-rose-700 text-rose-300' :
                               res.status === 'SEED_MISMATCH' ? 'bg-orange-950/80 border-orange-700 text-orange-300' :
                               res.status === 'STAGE_MISMATCH' ? 'bg-orange-950/80 border-orange-700 text-orange-300' :
+                              res.status === 'SEED_NOT_ECHOED' ? 'bg-amber-950/80 border-amber-700 text-amber-300' :
                               res.status === 'PAYOUT_MISMATCH' ? 'bg-amber-950/80 border-amber-700 text-amber-300' :
                               'bg-rose-950/80 border-rose-700 text-rose-300'
                             }`}>

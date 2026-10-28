@@ -1,0 +1,8 @@
+<Test>
+<Key moduleID="105169" loginName="" />
+    <Slot>
+        <Spin stage="BaseGame">
+            <PreGen batch="1465" index="1"/>            
+        </Spin>        
+    </Slot>    
+</Test>

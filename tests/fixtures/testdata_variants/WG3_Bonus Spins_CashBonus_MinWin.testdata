@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Test>
+  <Key moduleID="104115" loginName="" />
+  <Slot>
+    <Spin stage="BaseGame" comment="TestMode">
+      <PreGen batch="2659" index="44" />
+    </Spin>
+	<Spin stage="FreeSpin">
+	 <PreGen batch="0" index="0" />
+    </Spin>
+  </Slot>
+</Test>

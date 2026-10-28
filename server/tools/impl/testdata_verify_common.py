@@ -1,5 +1,6 @@
 """Shared, browser-independent helpers for the TestData verifier tools: .testdata parsing,
-expected-vs-actual comparison, URL/Key identity checks, and the standalone HTML report.
+judging a record against the server's <TestData> echo, URL/Key identity checks, and the
+standalone HTML report.
 
 These used to live in testdata_verifier_tool.py, the original Selenium verifier (real game URL +
 borrowed Chrome profile + interactive Okta, testdata uploaded by clicking through the admin
@@ -34,11 +35,10 @@ def _extract_url_identity(game_url: str) -> dict:
 def _extract_testdata_key(filepath: Path) -> dict:
     """Read just the <Key moduleID=".." loginName=".."/> identity out of a .testdata file,
     without parsing the (possibly invalid, at this point still-unvalidated) spin records."""
-    tree = ET.parse(str(filepath))
-    key_elem = tree.getroot().find("Key")
+    key_elem = _find_key(_load_testdata_root(filepath))
     return {
-        "moduleID": key_elem.get("moduleID", "") if key_elem is not None else "",
-        "loginName": key_elem.get("loginName", "") if key_elem is not None else "",
+        "moduleID": (_attr(key_elem, "moduleID") or "") if key_elem is not None else "",
+        "loginName": (_attr(key_elem, "loginName") or "") if key_elem is not None else "",
     }
 
 
@@ -68,9 +68,10 @@ def _check_key_matches_url(testdata_key: dict, url_identity: dict) -> list[str]:
     return issues
 
 
-# <Key ...> with or without a loginName attribute; attribute values never contain '>'.
-_KEY_TAG = re.compile(r"<Key\b[^>]*?/?>")
-_LOGIN_ATTR = re.compile(r"""\bloginName\s*=\s*("[^"]*"|'[^']*')""")
+# <Key ...> with or without a loginName attribute; attribute values never contain '>'. Case-insensitive,
+# like the parser, so a <key loginname=..> file is injected into rather than rejected.
+_KEY_TAG = re.compile(r"<Key\b[^>]*?/?>", re.IGNORECASE)
+_LOGIN_ATTR = re.compile(r"""\bloginName\s*=\s*("[^"]*"|'[^']*')""", re.IGNORECASE)
 
 
 def set_login_name(xml: str, login: str) -> str:
@@ -123,130 +124,256 @@ def url_with_username(url: str, username: str) -> str:
     return parsed._replace(query=urlencode(query)).geturl()
 
 
-def _parse_testdata(filepath: Path) -> list[dict]:
-    """Parse .testdata XML and return a list of expected spin records.
+class TestdataFormatError(ValueError):
+    """A .testdata file the parser cannot turn into seed records. The message names the file's
+    problem (which <Spin>, which attribute) so the tester can fix the file, not the harness."""
 
-    Expected XML structure:
+
+def _local_tag(el: ET.Element) -> str:
+    """The element's tag without any {namespace}, lower-cased: tags are matched case-insensitively."""
+    return el.tag.rsplit("}", 1)[-1].lower()
+
+
+def _attr(el: ET.Element, name: str) -> str | None:
+    """An attribute looked up case-insensitively (batch / Batch / BATCH), stripped."""
+    name = name.lower()
+    for k, v in el.attrib.items():
+        if k.rsplit("}", 1)[-1].lower() == name:
+            return v.strip()
+    return None
+
+
+def _load_testdata_root(filepath: Path) -> ET.Element:
+    """Parse a .testdata file, tolerating what hand-edited files vary in: a UTF-8 BOM and blank
+    lines or spaces before the <?xml?> declaration (which a strict XML parser rejects)."""
+    raw = filepath.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        return ET.fromstring(raw.lstrip())
+    except ET.ParseError as e:
+        raise TestdataFormatError(f"not well-formed XML: {e}") from None
+
+
+def _find_key(root: ET.Element) -> ET.Element | None:
+    return next((el for el in root.iter() if _local_tag(el) == "key"), None)
+
+
+def _spin_elements(root: ET.Element) -> list[ET.Element]:
+    """Every record-level <Spin>, in document order, wherever it sits: under <Test><Slot> in most
+    games, directly under <Test> in others (TGPF / WG3 BigWins). A <Spin> is never searched for
+    further <Spin>s — what is inside it belongs to that record."""
+    found: list[ET.Element] = []
+
+    def walk(el: ET.Element) -> None:
+        for child in el:
+            if _local_tag(child) == "spin":
+                found.append(child)
+            else:
+                walk(child)
+
+    walk(root)
+    return found
+
+
+def _int_attr(el: ET.Element, name: str, where: str) -> int:
+    value = _attr(el, name)
+    if value is None or value == "":
+        raise TestdataFormatError(f"{where}: <PreGen> has no {name} attribute")
+    try:
+        return int(value)
+    except ValueError:
+        raise TestdataFormatError(f"{where}: <PreGen {name}={value!r}> is not an integer") from None
+
+
+def _spin_pregens(spin: ET.Element, where: str) -> list[dict]:
+    """Every <PreGen> of one record, in document order, with the path of its parent elements as
+    written in the file: "Spin" for the record's own seed, "Spin/Feature" for a nested feature seed.
+    The server's <TestData> echo is walked the same way (protocol._testdata_echo), so the two lists
+    line up path for path."""
+    pregens: list[dict] = []
+
+    def walk(el: ET.Element, path: str) -> None:
+        for child in el:
+            if _local_tag(child) == "pregen":
+                pregens.append({"path": path,
+                                "batch": _int_attr(child, "batch", where),
+                                "index": _int_attr(child, "index", where)})
+            else:
+                walk(child, f"{path}/{child.tag.rsplit('}', 1)[-1]}")
+
+    walk(spin, "Spin")
+    return pregens
+
+
+def is_base_stage(stage: str | None) -> bool:
+    """A record the player spins for. Any other stage (FreeSpin, Bonus, ...) is a feature round the
+    game plays by itself after the spin that triggered it."""
+    return (stage or "BaseGame").strip().lower() == "basegame"
+
+
+def _parse_testdata(filepath: Path) -> list[dict]:
+    """Parse a .testdata file into one record per <Spin>.
+
+    The layouts seen across games (samples collected 2026-10-28) differ only in where the records sit
+    and what sits beside the seed, and all of them carry the seed as <PreGen batch index>:
+
         <Test>
           <Key moduleID="..." loginName="..." />
-          <Slot>
-            <Spin stage="BaseGame">
-              <PreGen batch="58" index="3" />
-              <PreGen batch="2" index="67933" />   ← optional bonus
+          <Slot>                                   ← optional: some games put <Spin> right under <Test>
+            <Spin stage="BaseGame" comment="..">
+              <Meter .. /> <Token .. /> <Random .. />   ← controls, echoed but not seeds
+              <PreGen batch="620" index="0" />           ← the record's own seed (path "Spin")
+              <Feature><PreGen batch="3809" index="38"/></Feature>   ← nested feature seed
             </Spin>
-            ...
+            <Spin stage="FreeSpin">                ← or the feature seed as its own record
+              <PreGen batch="11" index="10" />
+            </Spin>
           </Slot>
         </Test>
-    """
-    tree = ET.parse(str(filepath))
-    root = tree.getroot()
 
-    # Extract moduleID and loginName from <Key>
-    key_elem = root.find("Key")
-    module_id = key_elem.get("moduleID", "") if key_elem is not None else ""
-    login_name = key_elem.get("loginName", "") if key_elem is not None else ""
+    Tags and attribute names are matched case-insensitively and namespaces are ignored. Every
+    <Spin> must have its own <PreGen> with integer batch and index; a file that does not (the
+    retired reel-seed format, <B_G seed="35,4|.."/>, or a typo) raises TestdataFormatError naming
+    the record, instead of yielding no records.
+
+    Each record keeps every PreGen in `pregens` ([{path, batch, index}]); `batch`/`index` are its
+    own seed and `bonusBatch`/`bonusIndex` the first nested one, for the report and the UI.
+    """
+    root = _load_testdata_root(filepath)
+    spins = _spin_elements(root)
+    if not spins:
+        raise TestdataFormatError("no <Spin> record under <Test> or <Test><Slot>")
 
     records: list[dict] = []
-    slot = root.find("Slot")
-    if slot is None:
-        return records
-
-    spin_index = 0
-    for spin_elem in slot.findall("Spin"):
-        stage = spin_elem.get("stage", "BaseGame")
-        pregens = spin_elem.findall(".//PreGen")
-
-        # Group PreGens: first is base, rest are bonus (if any)
-        base_pre = None
-        bonus_pres: list[dict] = []
-        for pg in pregens:
-            b = pg.get("batch")
-            idx = pg.get("index")
-            if b is not None and idx is not None:
-                entry = {"batch": int(b), "index": int(idx)}
-                if base_pre is None:
-                    base_pre = entry
-                else:
-                    bonus_pres.append(entry)
-
-        if base_pre is None:
-            continue
-
-        spin_index += 1
-        record = {
-            "spinIndex": spin_index,
+    for n, spin in enumerate(spins, start=1):
+        stage = _attr(spin, "stage") or "BaseGame"
+        where = f"Spin #{n} (stage={stage})"
+        pregens = _spin_pregens(spin, where)
+        own = [p for p in pregens if p["path"] == "Spin"]
+        if not own:
+            if any(_attr(el, "seed") is not None for el in spin.iter()):
+                raise TestdataFormatError(
+                    f"{where}: reel-seed record (<.. seed=\"..\"/>) with no <PreGen> — this testdata "
+                    "format is retired; every record needs <PreGen batch=\"..\" index=\"..\"/>")
+            raise TestdataFormatError(f"{where}: no <PreGen batch=\"..\" index=\"..\"/> directly inside <Spin>")
+        nested = [p for p in pregens if p["path"] != "Spin"]
+        records.append({
+            "spinIndex": n,
             "stage": stage,
-            "batch": base_pre["batch"],
-            "index": base_pre["index"],
-            "isBonus": len(bonus_pres) > 0,
-            "bonusBatch": bonus_pres[0]["batch"] if bonus_pres else None,
-            "bonusIndex": bonus_pres[0]["index"] if bonus_pres else None,
-        }
-        records.append(record)
-
+            "comment": _attr(spin, "comment") or "",
+            "pregens": pregens,
+            "batch": own[0]["batch"],
+            "index": own[0]["index"],
+            "isBonus": bool(nested),
+            "bonusBatch": nested[0]["batch"] if nested else None,
+            "bonusIndex": nested[0]["index"] if nested else None,
+        })
     return records
 
 
-def _compare_record(expected: dict, actual: dict) -> dict:
-    """Compare expected testdata record with actual game response.
+# ── Judging a record against the server's <TestData> echo ────────────────────────────────────
+#
+# The Spin response that consumed a record echoes that whole <Spin> under <TestData> (confirmed live,
+# docs/p0-testdata-verification-findings.md), so every PreGen of the record — its own and the nested
+# feature ones — is checked against the echo by path. `play` below is a game_session PlayResponse.
 
-    Returns a dict with pass/fail details and fine-grained verdict.
-    Verdict types (per skill-verification-protocol):
-      PASSED | SEED_MISMATCH | STAGE_MISMATCH | PAYOUT_MISMATCH | SEED_REJECTED
-    """
-    issues: list[str] = []
-
-    # Extract actual values from game response
-    gd = actual.get("gameResponse", {})
-    td = gd.get("testData", {})
-    spin_td = td.get("spin", {})
-    pre_gen = spin_td.get("preGen", {})
-    financials = gd.get("financials", {})
-    slot_info = gd.get("slot", {})
-
-    actual_batch = pre_gen.get("batch")
-    actual_index = pre_gen.get("index")
-    actual_stage = slot_info.get("stage", "")
-    actual_win = financials.get("win", 0)
-    actual_wager = financials.get("wager", 0)
-
-    # Compare batch
-    batch_ok = actual_batch == expected["batch"]
-    if not batch_ok:
-        issues.append(f"batch mismatch: expected={expected['batch']}, actual={actual_batch}")
-
-    # Compare index
-    index_ok = actual_index == expected["index"]
-    if not index_ok:
-        issues.append(f"index mismatch: expected={expected['index']}, actual={actual_index}")
-
-    # Compare stage
-    stage_ok = actual_stage == expected["stage"]
-    if not stage_ok:
-        issues.append(f"stage mismatch: expected={expected['stage']}, actual={actual_stage}")
-
-    passed = batch_ok and index_ok
-
-    # Determine fine-grained verdict
-    if passed and stage_ok:
-        verdict = "PASSED"
-    elif not batch_ok or not index_ok:
-        verdict = "SEED_MISMATCH"
-    elif not stage_ok:
-        verdict = "STAGE_MISMATCH"
-    else:
-        verdict = "PASSED"
-
+def _empty_result(source_file: str, verdict: str, issues: list[str]) -> dict:
     return {
-        "passed": passed,
-        "verdict": verdict,
-        "actualBatch": actual_batch,
-        "actualIndex": actual_index,
-        "actualStage": actual_stage,
-        "actualWin": actual_win,
-        "actualWager": actual_wager,
-        "issues": issues,
+        "passed": False, "verdict": verdict,
+        "actualBatch": None, "actualIndex": None, "actualStage": "N/A",
+        "actualWin": 0, "actualWager": 0,
+        "issues": issues, "screenshot_b64": None, "source_file": source_file,
     }
+
+
+def _seed_issues(record: dict, echoed: list[tuple[str, int, int]]) -> list[str]:
+    """What differs between a record's PreGens and an echo's [(path, batch, index)]. Paths compare
+    case-insensitively (the JSON echo capitalises them), and the order within a path does not matter."""
+    want = sorted((p["path"].lower(), p["batch"], p["index"]) for p in record["pregens"])
+    got = sorted((path.lower(), b, i) for path, b, i in echoed)
+    issues: list[str] = []
+    own_exp = [(b, i) for p, b, i in want if p == "spin"]
+    own_act = [(b, i) for p, b, i in got if p == "spin"]
+    if own_exp != own_act:
+        issues.append(f"batch/index mismatch: expected={own_exp}, actual={own_act or None}")
+    feat_exp = [f"{p}:({b}, {i})" for p, b, i in want if p != "spin"]
+    feat_act = [f"{p}:({b}, {i})" for p, b, i in got if p != "spin"]
+    if feat_exp != feat_act:
+        issues.append(f"feature seed mismatch: expected={feat_exp or None}, actual={feat_act or None}")
+    return issues
+
+
+def _play_result(play, passed: bool, verdict: str, issues: list[str], source_file: str,
+                 echoed: list[tuple[str, int, int]]) -> dict:
+    own = next(((b, i) for p, b, i in echoed if p.lower() == "spin"), play.pregen)
+    return {
+        "passed": passed, "verdict": verdict,
+        "actualBatch": own[0] if own else None,
+        "actualIndex": own[1] if own else None,
+        "actualStage": play.testdata_stage or play.stage or "N/A",
+        "actualWin": play.win or 0, "actualWager": play.wager or 0,
+        "actualPregens": [[p, b, i] for p, b, i in echoed],
+        "transNumber": play.trans_number,
+        "issues": issues, "screenshot_b64": None, "source_file": source_file,
+    }
+
+
+def compare_spin(record: dict, play, source_file: str) -> dict:
+    """Judge a BaseGame record against the Spin response that consumed it."""
+    if play is None:
+        return _empty_result(source_file, "TIMEOUT",
+                             ["No Spin response with a <TestData> echo was captured for this record"])
+    echoed = list(play.testdata_pregens) or ([("Spin", *play.pregen)] if play.pregen else [])
+    if play.is_error:
+        return _play_result(play, False, "SEED_REJECTED", [f"Server rejected seed: {play.error}"],
+                            source_file, echoed)
+    if not echoed:
+        return _play_result(play, False, "SEED_MISMATCH", [
+            "The Spin response carried no <TestData> echo — the server did not play a testdata record "
+            "(check the <Key> loginName/moduleID and that the upload reached this account)"],
+            source_file, echoed)
+
+    issues = _seed_issues(record, echoed)
+    verdict = "SEED_MISMATCH" if issues else "PASSED"
+    if play.testdata_stage and play.testdata_stage.lower() != record["stage"].lower():
+        issues.append(f"stage mismatch: expected={record['stage']!r}, actual={play.testdata_stage!r}")
+        verdict = "SEED_MISMATCH" if verdict != "PASSED" else "STAGE_MISMATCH"
+    return _play_result(play, verdict == "PASSED", verdict, issues, source_file, echoed)
+
+
+def compare_feature(record: dict, plays: list, source_file: str) -> dict:
+    """Judge a feature-stage record (<Spin stage="FreeSpin">, ...) written as its own <Spin>.
+
+    The game plays it by itself after the BaseGame spin that triggered it, so it is judged against
+    the responses of that play (`plays`, in order). Its seed is looked for in any <TestData> echo
+    of the play: one whose echoed stage is this record's stage first, else anywhere in an echo.
+
+    UNVERIFIED against a live run: which response echoes such a record — the triggering Spin only
+    echoes its own <Spin> on the one game confirmed so far. When no echo carries the seed the record
+    is reported SEED_NOT_ECHOED (not PASSED), saying whether the feature stage was played at all.
+    """
+    if not plays:
+        return _empty_result(source_file, "TIMEOUT",
+                             ["No triggering BaseGame play was captured before this feature record"])
+    stage = record["stage"].lower()
+    for play in plays:
+        if play.testdata_pregens and (play.testdata_stage or "").lower() == stage:
+            issues = _seed_issues(record, play.testdata_pregens)
+            return _play_result(play, not issues, "SEED_MISMATCH" if issues else "PASSED", issues,
+                                source_file, play.testdata_pregens)
+    want = (record["batch"], record["index"])
+    for play in plays:
+        if any((b, i) == want for _, b, i in play.testdata_pregens):
+            return _play_result(play, True, "PASSED", [], source_file, play.testdata_pregens)
+
+    entered = any((p.stage or "").lower() == stage or p.verb.lower() == stage for p in plays)
+    result = _play_result(plays[0], False, "SEED_NOT_ECHOED", [
+        f"Feature seed {want} not found in any <TestData> echo of the triggering play; the "
+        f"{record['stage']} stage was {'played' if entered else 'NOT played'} — the seed itself "
+        "could not be confirmed"], source_file, [])
+    result["actualStage"] = record["stage"] if entered else (plays[0].stage or "N/A")
+    return result
 
 
 def _generate_html_report(
@@ -340,7 +467,7 @@ def _generate_html_report(
                     <span class="detail-label">Win Amount</span>
                     <span class="detail-value">{res['actualWin']}</span>
                 </div>
-                {f'<div class="detail-row"><span class="detail-label">Bonus Seed</span><span class="detail-value">batch={rec["bonusBatch"]}, index={rec["bonusIndex"]}</span></div>' if rec['isBonus'] else ''}
+                {''.join(f'<div class="detail-row"><span class="detail-label">Feature Seed ({p["path"]})</span><span class="detail-value">batch={p["batch"]}, index={p["index"]}</span></div>' for p in rec.get("pregens", []) if p["path"] != "Spin")}
             </div>
             {issues_html}
             {screenshot_html}

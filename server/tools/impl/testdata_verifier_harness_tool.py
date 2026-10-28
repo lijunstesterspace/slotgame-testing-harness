@@ -15,7 +15,8 @@ makes the *play* the unit of verification instead of the base round, which remov
 failure modes this tool used to be built around:
   - a feature round (FreeSpin/Bonus/...) is auto-played by the game after the spin that triggered
     it, so Spin is never clicked for it; the nested <Feature><PreGen/></Feature> seed is read from
-    the triggering Spin's <TestData> echo;
+    the triggering Spin's <TestData> echo, and a feature round written as its own
+    <Spin stage="FreeSpin"> record is looked for in the echoes of that play (compare_feature);
   - blocking intro/outro/summary screens are advanced by touching repeatedly until the game state
     actually changes, instead of one touch plus a fixed sleep;
   - responses are read at the network layer with a monotonic seq, so "this play's responses" is a
@@ -55,7 +56,7 @@ from typing import Any
 import httpx
 
 from server.game_session import (
-    LaunchSpec, PlayResponse, PlayResult, SessionConfig, SessionError, open_session,
+    LaunchSpec, PlayResponse, SessionConfig, SessionError, open_session,
 )
 from server.game_session.env import axiomcore_host, require_env_before_launch
 from server.game_session.launcher import TITAN_DEFAULT_PASSWORD
@@ -65,10 +66,14 @@ from server.tools.base import (
 )
 from server.tools.impl.testdata_verify_common import (
     _check_key_matches_url,
+    _empty_result,
     _extract_testdata_key,
     _extract_url_identity,
     _generate_html_report,
     _parse_testdata,
+    compare_feature,
+    compare_spin,
+    is_base_stage,
     keyword_accounts,
     testdata_bytes_with_login,
     url_with_username,
@@ -81,15 +86,6 @@ _SESSION_DEFAULTS = SessionConfig()
 
 
 # ── result builders: every case yields the same dict the report renderer expects ──────────────
-
-def _empty_result(source_file: str, verdict: str, issues: list[str]) -> dict:
-    return {
-        "passed": False, "verdict": verdict,
-        "actualBatch": None, "actualIndex": None, "actualStage": "N/A",
-        "actualWin": 0, "actualWager": 0,
-        "issues": issues, "screenshot_b64": None, "source_file": source_file,
-    }
-
 
 def _error_result(error: SessionError, source_file: str) -> dict:
     """A play that never produced a response. The session's error code says why."""
@@ -121,70 +117,6 @@ def _not_run_reason(*, stopped: bool, abort_reason: str | None,
         "seed queue has drifted")
 
 
-def _spin_of(result: PlayResult) -> PlayResponse | None:
-    """The player-initiated Spin response of a play. Only it carries the <TestData> echo."""
-    for captured in result.responses:
-        if captured.play is not None and captured.play.verb == "Spin":
-            return captured.play
-    return None
-
-
-def _compare_play(record: dict, play: PlayResponse | None, source_file: str) -> dict:
-    """Judge one .testdata record against the Spin response that consumed it.
-
-    The expected seeds are read back out of that response's <TestData> echo, which repeats the whole
-    record the server consumed: the base seed at path "Spin" and a nested feature seed at
-    "Spin/Feature". Both are therefore verifiable from the one response (confirmed live).
-    """
-    feature_record = record["stage"] != "BaseGame"
-    if play is None:
-        return _empty_result(source_file, "TIMEOUT",
-                             ["No Spin response with a <TestData> echo was captured for this record"])
-
-    issues: list[str] = []
-    by_path = {path: (batch, index) for path, batch, index in play.testdata_pregens}
-    expected = (record["batch"], record["index"])
-    nested = [seed for path, seed in by_path.items() if "/" in path]
-    if feature_record:
-        # A feature stage is consumed as part of the play its trigger started, so its seed is echoed
-        # nested inside that Spin — it is not the seed at path "Spin".
-        actual = expected if expected in by_path.values() else None
-    else:
-        actual = by_path.get("Spin") or play.pregen
-
-    seed_ok = actual == expected
-    if not seed_ok:
-        issues.append(f"batch/index mismatch: expected={expected}, actual={actual}")
-
-    bonus_ok = True
-    if record["isBonus"] and not feature_record:
-        want = (record["bonusBatch"], record["bonusIndex"])
-        bonus_ok = want in nested
-        if not bonus_ok:
-            issues.append(f"feature seed mismatch: expected={want}, actual={nested or None}")
-
-    stage_ok = feature_record or not play.testdata_stage or play.testdata_stage == record["stage"]
-    if not stage_ok:
-        issues.append(f"stage mismatch: expected={record['stage']!r}, actual={play.testdata_stage!r}")
-
-    passed = seed_ok and bonus_ok
-    verdict = "PASSED" if (passed and stage_ok) else ("SEED_MISMATCH" if not passed else "STAGE_MISMATCH")
-    if play.is_error:
-        passed, verdict = False, "SEED_REJECTED"
-        issues.append(f"Server rejected seed: {play.error}")
-
-    return {
-        "passed": passed, "verdict": verdict,
-        "actualBatch": actual[0] if actual else None,
-        "actualIndex": actual[1] if actual else None,
-        "actualStage": play.testdata_stage or play.stage or "N/A",
-        "actualWin": play.win or 0, "actualWager": play.wager or 0,
-        "actualPregens": [list(seed) for seed in by_path.values()],
-        "transNumber": play.trans_number,
-        "issues": issues, "screenshot_b64": None, "source_file": source_file,
-    }
-
-
 def _upload_testdata(client: httpx.Client, upload_host: str, axiom_api_key: str,
                      name: str, content: bytes) -> str | None:
     """POST one .testdata file to Axiom. Returns an error string, or None on success."""
@@ -202,18 +134,20 @@ def _upload_testdata(client: httpx.Client, upload_host: str, axiom_api_key: str,
 
 
 def _play_record(gs, rec: dict, file_name: str,
-                 last_spin: PlayResponse | None) -> tuple[dict, PlayResponse | None]:
-    """Verify one .testdata record. Returns its result and the Spin response the next feature
-    record (if any) is judged against."""
-    if rec["stage"] != "BaseGame":
+                 last_play: list[PlayResponse]) -> tuple[dict, list[PlayResponse]]:
+    """Verify one .testdata record. Returns its result and the responses of the play the next
+    feature record (if any) is judged against."""
+    if not is_base_stage(rec["stage"]):
         # The game auto-plays this round after the spin that triggered it, so clicking Spin for it
-        # would be wrong — judge it against that Spin's echo.
-        return _compare_play(rec, last_spin, file_name), last_spin
+        # would be wrong — judge it against that play's responses.
+        return compare_feature(rec, last_play, file_name), last_play
     play_result = gs.play(label=f"{file_name}:spin{rec['spinIndex']}")
     if play_result.error is not None:
-        return _error_result(play_result.error, file_name), last_spin
-    spin = _spin_of(play_result)
-    return _compare_play(rec, spin, file_name), spin
+        return _error_result(play_result.error, file_name), []
+    plays = [c.play for c in play_result.responses if c.play is not None]
+    # Only the player-initiated Spin response carries the <TestData> echo.
+    spin = next((p for p in plays if p.verb == "Spin"), None)
+    return compare_spin(rec, spin, file_name), plays
 
 
 def _attach_screenshot(gs, rec: dict, result: dict, file_name: str, screenshots_dir: Path,
@@ -266,7 +200,7 @@ class _Run:
         return self.cancel_event.is_set() or self.environment_down
 
     def play(self, gs, items: list[tuple[str, dict]]) -> None:
-        last_spin: PlayResponse | None = None
+        last_play: list[PlayResponse] = []
         network_errors = seed_rejections = 0
         abort_reason: str | None = None
         for i, (file_name, rec) in enumerate(items):
@@ -276,7 +210,7 @@ class _Run:
 
             log.info(f"{self.log_prefix}.record", file=file_name, spin=rec["spinIndex"], stage=rec["stage"],
                      batch=rec["batch"], index=rec["index"])
-            result, last_spin = _play_record(gs, rec, file_name, last_spin)
+            result, last_play = _play_record(gs, rec, file_name, last_play)
 
             if result["verdict"] in ("TIMEOUT", "PAGE_RELOADED"):
                 network_errors, seed_rejections = network_errors + 1, 0
@@ -420,7 +354,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             ]),
             permissions=["filesystem:write", "browser:automation", "network:outbound"],
             timeout_seconds=1800,
-            version="2.1.0",
+            version="2.2.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:

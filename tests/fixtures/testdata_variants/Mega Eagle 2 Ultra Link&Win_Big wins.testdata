@@ -1,0 +1,21 @@
+<Test>
+<Key moduleID="104938" loginName="" />
+<Slot>
+<Spin stage="BaseGame">
+<Meter state="0" token="0" />
+<PreGen batch="5" index="0" />
+</Spin>
+<Spin stage="BaseGame">
+<Meter state="0" token="0" />
+<PreGen batch="6" index="0" />
+</Spin>
+<Spin stage="BaseGame">
+<Meter state="0" token="0" />
+<PreGen batch="26" index="210" />
+</Spin>
+<Spin stage="BaseGame">
+<Meter state="0" token="0" />
+<PreGen batch="26" index="1245" />
+</Spin>
+</Slot>
+</Test>

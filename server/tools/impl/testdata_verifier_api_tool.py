@@ -38,7 +38,6 @@ Known limitations vs. the Selenium-based testdata_verifier:
 from __future__ import annotations
 import asyncio
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, parse_qs
@@ -48,9 +47,12 @@ import httpx
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
+from server.game_session.protocol import PlayResponse, parse as parse_play
 from server.tools.impl.testdata_verify_common import (
     _parse_testdata,
-    _compare_record,
+    compare_feature,
+    compare_spin,
+    is_base_stage,
     _generate_html_report,
     _extract_url_identity,
     _extract_testdata_key,
@@ -88,31 +90,6 @@ def _api5_host(env: str) -> str:
 
 def _axiomcore_host(env: str) -> str:
     return f"axiomcore-app1-{env}.installprogram.eu"
-
-
-def _xml_result_to_game_response(xml_str: str) -> dict:
-    """Convert the raw <Pkt><Response>...</Response></Pkt> XML the /play endpoint returns into
-    the {"gameResponse": {...}} shape _compare_record() already expects. That shape originally
-    came from the game's own console.log output in the Selenium-based tool's interceptor —
-    reusing it here means _compare_record() needs zero changes to work with either tool."""
-    root = ET.fromstring(xml_str)
-    financial = root.find(".//Financial")
-    slot = root.find(".//Slot")
-    pregen = root.find(".//TestData/Spin/PreGen")
-    return {
-        "gameResponse": {
-            "testData": {"spin": {"preGen": {
-                "batch": int(pregen.get("batch")) if pregen is not None and pregen.get("batch") else None,
-                "index": int(pregen.get("index")) if pregen is not None and pregen.get("index") else None,
-            }}},
-            "financials": {
-                "win": float(financial.get("win", 0)) if financial is not None else 0.0,
-                "wager": float(financial.get("wager", 0)) if financial is not None else 0.0,
-            },
-            "slot": {"stage": slot.get("stage", "") if slot is not None else ""},
-            "error": "",
-        }
-    }
 
 
 def _failed_result(verdict: str, issue: str, source_file: str) -> dict:
@@ -165,7 +142,7 @@ class TestdataVerifierApiTool(ToolPlugin):
             ]),
             permissions=["filesystem:write", "network:outbound"],
             timeout_seconds=1800,
-            version="1.0.0",
+            version="1.1.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -317,7 +294,16 @@ class TestdataVerifierApiTool(ToolPlugin):
                         error=f"testdata_upload_failed:{file_label}:HTTP{upload_resp.status_code}:{upload_resp.text[:500]}",
                     )
 
+                last_play: list[PlayResponse] = []
                 for rec_idx, rec in enumerate(records):
+                    if not is_base_stage(rec["stage"]):
+                        # A feature round is played by the game after the spin that triggered it;
+                        # sending another Spin for it would consume the next record's seed.
+                        result = compare_feature(rec, last_play, testdata_file.name)
+                        all_results.append(result)
+                        all_records_flat.append(rec)
+                        continue
+                    last_play = []
                     refresh_err = await _refresh_if_needed()
                     if refresh_err:
                         # Token refresh failing mid-run is fatal — every subsequent /play call
@@ -362,9 +348,7 @@ class TestdataVerifierApiTool(ToolPlugin):
                         continue
 
                     try:
-                        play_data = play_resp.json()
-                        result_xml = play_data["packet"]["payload"]
-                        actual = _xml_result_to_game_response(result_xml)
+                        spin = parse_play(play_resp.text)
                     except Exception as e:
                         all_results.append(_failed_result(
                             "TIMEOUT", f"could not parse play response: {e}", testdata_file.name,
@@ -372,9 +356,8 @@ class TestdataVerifierApiTool(ToolPlugin):
                         all_records_flat.append(rec)
                         continue
 
-                    result = _compare_record(rec, actual)
-                    result["screenshot_b64"] = None  # no rendered page exists in this mode
-                    result["source_file"] = testdata_file.name
+                    last_play = [spin]
+                    result = compare_spin(rec, spin, testdata_file.name)  # no screenshot in this mode
                     all_results.append(result)
                     all_records_flat.append(rec)
 

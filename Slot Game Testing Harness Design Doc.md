@@ -2,6 +2,16 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
+> **Synced with code at**: `d5fc203` (2026-10-28). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+
+> **Revision note (2026-10-28, incremental code-aligned revision)**
+>
+> Re-checked against `main` at commit `d5fc203` (2 commits after `5e95502`). Main changes:
+>
+> - TestData Verification now has **three** methods: `harness` (default), `api`, and the new **`local`** ("Local link (all files)") backed by the new `testdata_verifier_local` Plugin, which uploads and plays each .testdata file in turn through a locally served game launch URL, so one account can verify a whole folder; it shares the `_Run` helper with `testdata_verifier_harness`;
+> - The Harness and Local link methods accept an **account keyword + count**: files in name order are verified as `keyword1`, `keyword2`, ... (Axiom's "Bulk Create Multiple Accounts" naming), each in its own session; an account that cannot log in fails only its own file (`LOGIN_FAILED`);
+> - The Plugin count stays at **15** (the Layer 4 table, 10.2 addendum, 12.3 cancellation and directory structure were updated); `harness.cmd` now calls `npm` rather than `npm.cmd`.
+
 > **Revision note (2026-10-27, incremental code-aligned revision)**
 >
 > Re-checked against `main` at commit `5e95502` (23 commits after the previous baseline `6c03e2a`), same "code is the source of truth" principle. Main changes:
@@ -125,7 +135,7 @@ Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all sub
 | Scenario | Plugins |
 |---|---|
 | TestData Generation | `testdata_parser` (parses pasted sheet text), `testdata_generator` (writes .testdata XML), `zip_packager` (ZIP + manifest) |
-| TestData Verification | `testdata_verifier_harness` (default; real browser via Playwright through `server/game_session/`, entered through the Titan Harness launcher or a direct game launch URL), `testdata_verifier_api` (direct game HTTP APIs, no browser), `log_diagnoser` (rule-based failure attribution) |
+| TestData Verification | `testdata_verifier_harness` (default; real browser via Playwright through `server/game_session/`, entered through the Titan Harness launcher or a direct game launch URL), `testdata_verifier_api` (direct game HTTP APIs, no browser), `testdata_verifier_local` (Playwright on a locally served game launch URL; uploads and plays one file at a time, so one account covers a whole folder), `log_diagnoser` (rule-based failure attribution) |
 | EasyHelp Checking | `html_to_text_converter`, `diff_comparator` (with keyword highlighting and Excel output), `helpfile_report` (deterministic `helpfile_report.html` / `.json`, no AI), `helpfile_analyzer` (optional; calls local Ollama server-side to analyze that report) |
 | Portugal Plugin | `portugal_plugin_symbol_map`, `portugal_plugin_fetcher` (Selenium → Game History → PlayCheck to fetch the outcome), `portugal_plugin_parser`, `portugal_plugin_reporter` (TXT/JSON/HTML reports) |
 
@@ -187,7 +197,7 @@ The Workbench is a "header + three columns + bottom status bar" layout:
 
 > **Login note**: Harness itself has **no login** — open it and use it. `require_user()` in `server/infra/security.py` always returns the fixed local user `LOCAL_USER`, with no password or session check; the earlier `auth_router.py` account system has been deleted. Harness login and the real game/admin environment's login are two unconnected systems, so the early assumption that "logging into Harness spares you from logging into the game environment" did not hold, and the login was removed.
 >
-> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** opens a real browser with Playwright (`server/game_session/`) and logs in either through the QA-only Titan Harness launcher form (shared QA test password by default, overridable via the `harness_password` param; no Okta/MFA) or through a direct game launch URL that carries the account in its query string, with testdata uploaded directly via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) has been removed; its shared helpers live on in `testdata_verify_common.py` and its Selenium page drivers in `selenium_page_drivers.py` (still used by `portugal_plugin_fetcher`), and its old history reports still reopen (the frontend still recognizes the `testdata_verifier` tool name in stored executions).
+> Logging into the game environment is now handled by the verification method itself (see the addendum under Module Three in 10.2): the default **Harness method** opens a real browser with Playwright (`server/game_session/`) and logs in either through the QA-only Titan Harness launcher form (shared QA test password by default, overridable via the `harness_password` param; no Okta/MFA) or through a direct game launch URL that carries the account in its query string, with testdata uploaded directly via an Axiom API Key; the **Local link method** opens a locally served game launch URL that logs itself in from its query string (no launcher form), again uploading via an Axiom API Key; the **API method** needs the tester to paste an Okta access_token and an Axiom API Key; the earlier **Selenium method** (borrowing the tester's own logged-in Chrome profile + interactive Okta) has been removed; its shared helpers live on in `testdata_verify_common.py` and its Selenium page drivers in `selenium_page_drivers.py` (still used by `portugal_plugin_fetcher`), and its old history reports still reopen (the frontend still recognizes the `testdata_verifier` tool name in stored executions).
 
 ### 4.2 Visual & Interaction Spec
 
@@ -285,11 +295,12 @@ slotgame-testing-harness/
 │   ├── api/                   # tools_router / executions_router / records_router
 │   ├── services/execution_queue.py  # serial execution queue
 │   ├── infra/                 # storage (SQLite) / security / cancellation / process_runner / logger
-│   ├── game_session/          # Playwright game-session layer used by testdata_verifier_harness
+│   ├── game_session/          # Playwright game-session layer used by testdata_verifier_harness / _local
 │   │                          #   (launcher / session / protocol / capture / env, plus a smoke script)
 │   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (15 Plugins, plus shared helpers:
 │                              #   testdata_verify_common.py, selenium_page_drivers.py, symbol_profiles.py)
-├── tests/                     # pytest: game_session protocol (with recorded fixtures) and account assignment
+├── tests/                     # pytest: game_session protocol (with recorded fixtures), account assignment,
+│                              #   and the local-link verifier
 ├── docs/                      # supplementary design notes and plans
 ├── build.py / slot_harness.spec / harness.cmd   # PyInstaller + pywebview desktop packaging
 ├── generate_testdata.py       # standalone CLI script
@@ -519,7 +530,7 @@ Execution engine (code-controlled, no AI involvement):
 
 - Step states: `pending / running / retrying / success / failed` (the type also has `skipped`, currently unused); pipeline states: `running / completed / failed / aborted` (the type also has `idle / paused`, currently unused);
 - `EngineCallbacks` (onStepChange / onStepComplete / onStepFail / onStatusChange / onLog) mirror progress into the task list and the execution console;
-- **Stop**: the frontend AbortController stops further steps; for a browser-driven Plugin still running on the backend (`portugal_plugin_fetcher`, `testdata_verifier_harness`), the frontend also calls `POST /api/executions/{id}/cancel`, and the backend cancellation registry runs the Plugin's registered callback — `portugal_plugin_fetcher` force-closes its Selenium WebDriver, `testdata_verifier_harness` sets a cancel event that its Playwright session stops on.
+- **Stop**: the frontend AbortController stops further steps; for a browser-driven Plugin still running on the backend (`portugal_plugin_fetcher`, `testdata_verifier_harness`, `testdata_verifier_local`), the frontend also calls `POST /api/executions/{id}/cancel`, and the backend cancellation registry runs the Plugin's registered callback — `portugal_plugin_fetcher` force-closes its Selenium WebDriver, `testdata_verifier_harness` / `testdata_verifier_local` set a cancel event that its Playwright session stops on.
 
 **Where the AI sits in a pipeline run** (orchestrated by App.tsx, always outside the engine):
 
@@ -531,7 +542,7 @@ Execution engine (code-controlled, no AI involvement):
 This scenario **does not go through ExecutionEngine**; `game-verify-pipeline` is declared but never invoked. The actual path (`App.tsx` → `runRealGameVerification` in `utils/verificationEngine.ts`):
 
 1. The user uploads .testdata files or a folder via "+" (persisted by the backend's `/api/tools/upload-testdata`), then picks files and a verification method and enters credentials in the test-plan preview panel;
-2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness` (Playwright via `server/game_session/`), for which the frontend requires a URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`. The Plugin itself picks its mode from the URL: a `/harness/` launcher URL fills the Titan Harness form, any other URL is treated as the game's own launch URL carrying the account in its query string; on the backend Product Id / Client Id are only needed for launcher URLs (see Chapter 13). One session logs into a single account/module, so `assign_testdata_accounts.py` can give each file its own account before a folder is verified; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots;
+2. **One** Plugin is chosen by method: `harness` (default) → `testdata_verifier_harness` (Playwright via `server/game_session/`), for which the frontend requires a URL, an Axiom API Key, Product Id and Client Id (Brand optional), with Username / Module Id derived from the testdata file's `<Key>`. The Plugin itself picks its mode from the URL: a `/harness/` launcher URL fills the Titan Harness form, any other URL is treated as the game's own launch URL carrying the account in its query string; on the backend Product Id / Client Id are only needed for launcher URLs (see Chapter 13). One session logs into a single account/module, so `assign_testdata_accounts.py` can give each file its own account before a folder is verified; `local` ("Local link (all files)") → `testdata_verifier_local`, needing only the local game launch URL and an Axiom API Key (env optional — read from the game's own traffic when omitted): each file is uploaded with its `<Key loginName>` rewritten in the uploaded copy and played before the next upload, so one account verifies the whole folder; a file for another moduleID is reported `MODULE_MISMATCH` and skipped; `api` → `testdata_verifier_api`, needing an Okta access_token and an Axiom API Key, no screenshots. For `harness` and `local`, an optional **account keyword + count** maps files in name order to `keyword1`, `keyword2`, ... (Axiom's bulk-create names), each in its own session; an account that cannot log in fails only its own file (`LOGIN_FAILED`);
 3. `POST /api/tools/execute-async` runs it in the background; the frontend receives per-case progress live over SSE (`/api/executions/stream/{id}`), then reads the execution detail and builds the verification report;
 4. If any case failed, `runAIDiagnosis()` is called: the LLM outputs a diagnosis following the JSON template in the prompt; if the call throws, it falls back to calling the `log_diagnoser` Plugin for rule-based diagnosis;
 5. The report is shown in VerificationReportModal (which also has the frontend rule-based per-case diagnosis `logVisionDiagnoser.ts`) and can be reopened from the History page.
@@ -902,7 +913,7 @@ function selectModel(task: TestTask): "local" | "cloud" {
 - `ToolResult`: `success / content / error / execution_ms / artifacts`;
 - `HarnessContext`: `execution_id / user_id / user_role / session_token / work_dir`; each call's working directory is `server/data/runs/{execution_id}/{tool_name}/`;
 - `SerialExecutionQueue`: runs **serially** under a per-user asyncio lock so multiple browser sessions (Selenium or Playwright) don't collide (the interface leaves room to swap in a parallel queue);
-- `cancellation`: browser-driven Plugins register a cancel callback, which the cancel endpoint invokes — `portugal_plugin_fetcher` registers a WebDriver force-close, `testdata_verifier_harness` registers a cancel event its Playwright session checks.
+- `cancellation`: browser-driven Plugins register a cancel callback, which the cancel endpoint invokes — `portugal_plugin_fetcher` registers a WebDriver force-close, `testdata_verifier_harness` and `testdata_verifier_local` register a cancel event their Playwright session checks.
 
 ### 12.4 Data Storage
 
@@ -919,11 +930,11 @@ Artifact directories: `server/data/runs/` (per-execution working directories; `c
 
 ## 13. Code Status & Known Discrepancies (new)
 
-The following inconsistencies — within the code, or between the code and the plan — were found during the revisions. The document describes the code as it is; whether to change the code is a separate decision. Status as of 2026-10-27 (commit `5e95502`).
+The following inconsistencies — within the code, or between the code and the plan — were found during the revisions. The document describes the code as it is; whether to change the code is a separate decision. Status as of 2026-10-28 (commit `d5fc203`).
 
 | # | Current state | Impact | Status |
 |---|---|---|---|
-| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step covers only the Harness method (not the API method) | Pipeline declaration and actual execution disagree | Open |
+| 1 | `game-verify-pipeline` is declared, but TestData Verification actually runs through `verificationEngine.ts`, and that Pipeline's verify step covers only the Harness method (not the API or Local link method) | Pipeline declaration and actual execution disagree | Open |
 | 2 | `PipelineStepDef.dependsOn` is not checked by the execution engine; the `skipped` / `paused` / `idle` states are unused (the newer `optional` flag, by contrast, is honored) | Declarative metadata only | Open |
 | 3 | `agents/ui_log_diagnoser_agent.md` is referenced by no scenario; the `log_diagnosis` scenario and `log-diagnose-pipeline` it mentions no longer exist | Orphaned file | Open |
 | 4 | Agent data in `AgentPage.tsx` is hardcoded, and its "Planner Agent" still claims to "drive the conversation loop and tool orchestration" (and lists only three scenarios); the Skill display data in `PluginPage.tsx` is hardcoded too | Display may drift from actual responsibilities/files | Open |

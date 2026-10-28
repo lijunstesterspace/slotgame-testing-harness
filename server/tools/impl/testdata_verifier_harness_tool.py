@@ -420,7 +420,7 @@ class TestdataVerifierHarnessTool(ToolPlugin):
             ]),
             permissions=["filesystem:write", "browser:automation", "network:outbound"],
             timeout_seconds=1800,
-            version="2.0.0",
+            version="2.1.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:

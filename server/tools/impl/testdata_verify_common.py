@@ -12,10 +12,11 @@ does portugal_plugin_fetcher. The Selenium page-driving helpers those tools used
 selenium_page_drivers.py now, so importing this module does not pull Selenium in.
 """
 from __future__ import annotations
+import re
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlencode, urlparse, parse_qs, parse_qsl
 
 
 def _extract_url_identity(game_url: str) -> dict:
@@ -65,6 +66,61 @@ def _check_key_matches_url(testdata_key: dict, url_identity: dict) -> list[str]:
             f"!= URL moduleId={url_identity['moduleId']!r}"
         )
     return issues
+
+
+# <Key ...> with or without a loginName attribute; attribute values never contain '>'.
+_KEY_TAG = re.compile(r"<Key\b[^>]*?/?>")
+_LOGIN_ATTR = re.compile(r"""\bloginName\s*=\s*("[^"]*"|'[^']*')""")
+
+
+def set_login_name(xml: str, login: str) -> str:
+    """Return the .testdata text with <Key loginName> set to `login`; everything else unchanged.
+
+    Text in, text out (not an XML round-trip), so line endings, attribute order and comments stay
+    byte-identical — the uploaded file differs from the original only in that one attribute."""
+    m = _KEY_TAG.search(xml)
+    if not m:
+        raise ValueError("no <Key> element")
+    tag = m.group(0)
+    if _LOGIN_ATTR.search(tag):
+        new_tag = _LOGIN_ATTR.sub(f'loginName="{login}"', tag, count=1)
+    else:
+        end = len(tag) - (2 if tag.endswith("/>") else 1)
+        new_tag = f'{tag[:end].rstrip()} loginName="{login}" {tag[end:]}'
+    return xml[:m.start()] + new_tag + xml[m.end():]
+
+
+def testdata_bytes_with_login(path: Path, login: str) -> bytes:
+    """The bytes to upload for `path`: the file with its <Key loginName> set to `login`, BOM kept."""
+    raw = path.read_bytes()
+    bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+    return bom + set_login_name(raw[len(bom):].decode("utf-8"), login).encode("utf-8")
+
+
+def keyword_accounts(keyword: str, count: int, n_files: int) -> list[str]:
+    """The accounts Axiom's "Bulk Create Multiple Accounts" made from `keyword`, one per file in order.
+
+    Axiom appends 1..count to the keyword with no zero padding (automate1, automate2, ...), so the
+    names are rebuilt the same way here rather than looked up. The tester creates them in Axiom with
+    the same keyword and count; a run that needs more accounts than that fails before anything is
+    uploaded, saying how many are missing.
+    """
+    keyword = (keyword or "").strip()
+    if not keyword or any(c.isspace() for c in keyword):
+        raise ValueError(f"account_keyword_invalid:{keyword!r} — one word, the Username typed into Axiom")
+    if count < n_files:
+        raise ValueError(
+            f"account_count_too_small: {n_files} testdata file(s) but only {count} account(s) "
+            f"({keyword}1..{keyword}{count}) — create {n_files - count} more in Axiom with the same keyword")
+    return [f"{keyword}{n}" for n in range(1, n_files + 1)]
+
+
+def url_with_username(url: str, username: str) -> str:
+    """A direct launch URL that logs in as `username` instead; every other query param is kept."""
+    parsed = urlparse(url)
+    query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != "username"]
+    query.append(("username", username))
+    return parsed._replace(query=urlencode(query)).geturl()
 
 
 def _parse_testdata(filepath: Path) -> list[dict]:
@@ -200,8 +256,12 @@ def _generate_html_report(
     testdata_file: str,
     output_path: Path,
     multi_file: bool = False,
+    file_accounts: dict[str, str] | None = None,
 ) -> str:
-    """Generate an HTML verification report with data comparison + screenshots."""
+    """Generate an HTML verification report with data comparison + screenshots.
+
+    `file_accounts` (file name -> loginName it was played as) is shown on each file's header when
+    the files were spread over several accounts."""
     total = len(results)
     passed = sum(1 for r in results if r["passed"])
     failed = total - passed
@@ -232,9 +292,11 @@ def _generate_html_report(
         if multi_file and src_file != current_file:
             current_file = src_file
             fs = file_summaries.get(src_file, {})
+            account = (file_accounts or {}).get(src_file)
+            account_html = f" &nbsp;→&nbsp; login {account}" if account else ""
             case_rows += f"""
         <div class="file-separator">
-            <span class="file-separator-title">📄 {src_file}</span>
+            <span class="file-separator-title">📄 {src_file}{account_html}</span>
             <span class="file-separator-stats">{fs.get('passed', 0)}/{fs.get('total', 0)} passed</span>
         </div>"""
 

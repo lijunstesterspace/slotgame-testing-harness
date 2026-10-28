@@ -160,6 +160,7 @@ hidden_imports = [
     "server.tools.impl.testdata_parser_tool",
     "server.tools.impl.testdata_verifier_api_tool",
     "server.tools.impl.testdata_verifier_harness_tool",
+    "server.tools.impl.testdata_verifier_local_tool",
     "server.tools.impl.testdata_verify_common",
     "server.tools.impl.zip_packager_tool",
 ]

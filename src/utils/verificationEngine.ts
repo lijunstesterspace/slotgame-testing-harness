@@ -91,7 +91,8 @@ export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse):
       // "testdata_verifier" is the removed Selenium tool — kept so its old runs still reopen.
       tc.tool_name === "testdata_verifier" ||
       tc.tool_name === "testdata_verifier_api" ||
-      tc.tool_name === "testdata_verifier_harness"
+      tc.tool_name === "testdata_verifier_harness" ||
+      tc.tool_name === "testdata_verifier_local"
     );
 
   let targetUrl = "";
@@ -100,6 +101,7 @@ export function buildReportFromExecutionDetail(detail: ExecutionDetailResponse):
     // testdata_verifier_harness has no target_url — harness_url is the closest analog.
     if (params && typeof params.target_url === "string") targetUrl = params.target_url;
     else if (params && typeof params.harness_url === "string") targetUrl = params.harness_url;
+    else if (params && typeof params.game_url === "string") targetUrl = params.game_url;
   } catch {}
 
   const { totalSummary, allParsedCases, reportUrl } = parseVerifierResultSnippet(lastCall);
@@ -158,7 +160,10 @@ export async function runRealGameVerification(
   // docstring — so everything below this point (waiting, parsing, report building) is identical
   // regardless of which one actually ran.
   const method = config.verificationMethod ?? "harness";
-  const toolName = method === "api" ? "testdata_verifier_api" : "testdata_verifier_harness";
+  const toolName =
+    method === "api" ? "testdata_verifier_api"
+    : method === "local" ? "testdata_verifier_local"
+    : "testdata_verifier_harness";
   const toolParams: Record<string, unknown> = {
     testdata_files: testdataFiles,
   };
@@ -190,6 +195,20 @@ export async function runRealGameVerification(
     toolParams.product_id = config.harnessProductId;
     toolParams.client_id = config.harnessClientId;
     if (config.harnessBrand) toolParams.brand = config.harnessBrand;
+  } else if (method === "local") {
+    if (!config.localGameUrl) {
+      throw new Error("Local-link verification needs the local game URL — paste one in before running.");
+    }
+    if (!config.axiomApiKey) {
+      throw new Error("Local-link verification needs an Axiom API Key — paste one in before running.");
+    }
+    toolParams.game_url = config.localGameUrl;
+    toolParams.axiom_api_key = config.axiomApiKey;
+    if (config.localEnv) toolParams.env = config.localEnv;
+  }
+  if (method !== "api" && config.accountKeyword) {
+    toolParams.account_keyword = config.accountKeyword;
+    toolParams.account_count = config.accountCount ?? 0;
   }
   const prepared = await harnessClient.executeToolAsync(toolName, toolParams);
   const eid = prepared.execution_id;

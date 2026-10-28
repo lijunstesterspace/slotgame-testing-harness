@@ -3,6 +3,7 @@ from server.tools.impl.testdata_generator_tool import TestdataGeneratorTool
 from server.tools.impl.zip_packager_tool import ZipPackagerTool
 from server.tools.impl.testdata_verifier_api_tool import TestdataVerifierApiTool
 from server.tools.impl.testdata_verifier_harness_tool import TestdataVerifierHarnessTool
+from server.tools.impl.testdata_verifier_local_tool import TestdataVerifierLocalTool
 from server.tools.impl.log_diagnoser_tool import LogDiagnoserTool
 from server.tools.impl.html_to_text_converter_tool import HtmlToTextConverterTool
 from server.tools.impl.diff_comparator_tool import DiffComparatorTool
@@ -19,6 +20,7 @@ BUILTIN_TOOLS: list = [
     ZipPackagerTool(),
     TestdataVerifierApiTool(),
     TestdataVerifierHarnessTool(),
+    TestdataVerifierLocalTool(),
     LogDiagnoserTool(),
     HtmlToTextConverterTool(),
     DiffComparatorTool(),
@@ -32,7 +34,7 @@ BUILTIN_TOOLS: list = [
 __all__ = [
     "BUILTIN_TOOLS",
     "TestdataParserTool", "TestdataGeneratorTool", "ZipPackagerTool",
-    "TestdataVerifierApiTool", "TestdataVerifierHarnessTool",
+    "TestdataVerifierApiTool", "TestdataVerifierHarnessTool", "TestdataVerifierLocalTool",
     "LogDiagnoserTool", "HtmlToTextConverterTool", "DiffComparatorTool", "HelpfileReportTool", "HelpfileAnalyzerTool",
     "PortugalPluginParserTool", "PortugalPluginReporterTool", "PortugalPluginFetcherTool",
     "PortugalPluginSymbolMapTool",

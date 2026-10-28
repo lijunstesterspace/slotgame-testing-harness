@@ -65,8 +65,10 @@ export interface VerificationConfig {
   /** "harness" (default): drive a real Chrome via testdata_verifier_harness through the QA-only
    * Titan Harness launcher page — no Okta/MFA, keeps screenshots. "api": skip the browser
    * entirely and hit the game's own session/play APIs directly via testdata_verifier_api — needs
-   * oktaAccessToken. See each tool's module docstring for the confirmed mechanism. */
-  verificationMethod?: "api" | "harness";
+   * oktaAccessToken. "local": drive a real Chrome via testdata_verifier_local through a local game
+   * link (http://localhost:<port>/launch/mgs/...) — uploads and plays the files one at a time as the
+   * link's own account. See each tool's module docstring for the confirmed mechanism. */
+  verificationMethod?: "api" | "harness" | "local";
   /** Okta JWT access_token (~2h validity), required when verificationMethod is "api". Bootstraps
    * the *game* session (api5-rhel1) — unrelated to axiomApiKey below. */
   oktaAccessToken?: string;
@@ -86,6 +88,18 @@ export interface VerificationConfig {
   /** Harness form's Brand field, optional when verificationMethod is "harness" — defaults to
    * "IslandParadise" server-side if left blank. */
   harnessBrand?: string;
+  /** Local game launch URL (carries username / password / moduleId), required when
+   * verificationMethod is "local". */
+  localGameUrl?: string;
+  /** Platform env slug (e.g. "gtp603") for the "local" method's upload host — optional, the
+   * backend reads it from the game's own traffic when blank. */
+  localEnv?: string;
+  /** "harness" / "local" only: the Username keyword used in Axiom's "Bulk Create Multiple Accounts"
+   * (e.g. "automate" -> automate1, automate2, ...). When set, files in name order each get the next
+   * account and are verified logged in as it. */
+  accountKeyword?: string;
+  /** Number of accounts created in Axiom with accountKeyword — must be at least the file count. */
+  accountCount?: number;
 }
 
 export interface TestdataFileInfo {

@@ -39,7 +39,7 @@ export const SCENARIOS: TestScenario[] = [
     agentFile: "testdata_verifier_agent.md",
     skills: ["skill-verification-protocol.md"],
     pipelineId: "game-verify-pipeline",
-    requiredPlugins: ["testdata_verifier_api", "testdata_verifier_harness", "log_diagnoser"],
+    requiredPlugins: ["testdata_verifier_api", "testdata_verifier_harness", "testdata_verifier_local", "log_diagnoser"],
     icon: "shield",
   },
   {

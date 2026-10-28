@@ -151,7 +151,7 @@ const Workbench: React.FC = () => {
   // Okta/MFA). Harness is the default: keeps screenshots unlike Direct API (see
   // testdata_verifier_harness_tool.py). The original Selenium method (real game URL + Okta/MFA +
   // borrowed Chrome profile) has been removed.
-  const [verificationMethod, setVerificationMethod] = useState<"api" | "harness">("harness");
+  const [verificationMethod, setVerificationMethod] = useState<"api" | "harness" | "local">("harness");
   const [oktaAccessToken, setOktaAccessToken] = useState<string>("");
   // Long-lived Axiom API Key (x-api-key) — authenticates the testdata upload call, used by both
   // "api" (alongside oktaAccessToken for the game-session/play calls) and "harness" (alongside
@@ -166,6 +166,16 @@ const Workbench: React.FC = () => {
   const [harnessProductId, setHarnessProductId] = useState<string>("");
   const [harnessClientId, setHarnessClientId] = useState<string>("");
   const [harnessBrand, setHarnessBrand] = useState<string>("");
+  // "local" method only — see testdata_verifier_local_tool.py's module docstring. The link carries
+  // the account itself; every selected file is uploaded with its loginName set to the link's
+  // username and played before the next one. Env is optional (read from the game's traffic).
+  const [localGameUrl, setLocalGameUrl] = useState<string>("");
+  const [localEnv, setLocalEnv] = useState<string>("");
+  // "harness" / "local": one account per file, named the way Axiom's "Bulk Create Multiple
+  // Accounts" names them (keyword + 1..N). The tester creates them in Axiom with the same keyword
+  // and count; blank keyword = the old single-account behaviour.
+  const [accountKeyword, setAccountKeyword] = useState<string>("");
+  const [accountCount, setAccountCount] = useState<string>("");
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
   // easyhelp_checking's "Add file(s)" alternative: loose HTML files with no folder structure —
   // each gets a synthetic subdir derived from its filename (see uploadFilesAsFolder).
@@ -353,6 +363,25 @@ const Workbench: React.FC = () => {
         setError("Harness method needs the harness form's Product Id and Client Id — fill both in below.");
         return;
       }
+      if (verificationMethod === 'local' && !localGameUrl.trim()) {
+        setError("Local link method needs the local game URL — paste one in below.");
+        return;
+      }
+      if (verificationMethod === 'local' && !axiomApiKey.trim()) {
+        setError("Local link method needs an Axiom API Key — paste one in below.");
+        return;
+      }
+      if (verificationMethod !== 'api' && accountKeyword.trim()) {
+        if (/\s/.test(accountKeyword.trim())) {
+          setError("Account keyword must be one word — the Username typed into Axiom's Create User Account.");
+          return;
+        }
+        const count = Number(accountCount);
+        if (!Number.isInteger(count) || count < selectedTestdataFiles.length) {
+          setError(`${selectedTestdataFiles.length} file(s) selected — the number of accounts created in Axiom must be at least that.`);
+          return;
+        }
+      }
       setShowPreview(false);
 
       // Pass all selected files to verification engine
@@ -372,11 +401,15 @@ const Workbench: React.FC = () => {
         testdataFilePaths: selectedTestdataFiles.map(f => f.path),
         verificationMethod,
         oktaAccessToken: verificationMethod === 'api' ? oktaAccessToken.trim() : undefined,
-        axiomApiKey: verificationMethod === 'api' || verificationMethod === 'harness' ? axiomApiKey.trim() : undefined,
+        axiomApiKey: axiomApiKey.trim() || undefined,
         harnessUrl: verificationMethod === 'harness' ? harnessUrl.trim() : undefined,
         harnessProductId: verificationMethod === 'harness' ? harnessProductId.trim() : undefined,
         harnessClientId: verificationMethod === 'harness' ? harnessClientId.trim() : undefined,
         harnessBrand: verificationMethod === 'harness' && harnessBrand.trim() ? harnessBrand.trim() : undefined,
+        localGameUrl: verificationMethod === 'local' ? localGameUrl.trim() : undefined,
+        localEnv: verificationMethod === 'local' && localEnv.trim() ? localEnv.trim() : undefined,
+        accountKeyword: verificationMethod !== 'api' && accountKeyword.trim() ? accountKeyword.trim() : undefined,
+        accountCount: verificationMethod !== 'api' && accountKeyword.trim() ? Number(accountCount) : undefined,
       });
       return;
     }
@@ -1286,6 +1319,21 @@ const Workbench: React.FC = () => {
                     >
                       Harness (browser, no Okta)
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVerificationMethod('local');
+                        // This method is for checking a whole folder in one go.
+                        setSelectedTestdataFiles([...testdataFiles]);
+                      }}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                        verificationMethod === 'local'
+                          ? 'bg-violet-950/40 border-violet-500/50 text-violet-200'
+                          : 'bg-slate-950/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      Local link (all files)
+                    </button>
                   </div>
                   {verificationMethod === 'api' && (
                     <div className="space-y-2">
@@ -1348,8 +1396,68 @@ const Workbench: React.FC = () => {
                         className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 font-mono"
                       />
                       <div className="text-[9px] text-slate-500">
-                        Username &amp; Module Id come from the selected testdata file's own &lt;Key&gt; — no need to enter them here.
+                        Module Id comes from the selected testdata file's own &lt;Key&gt;, and so does Username unless an account keyword is set below.
                         Product Id / Client Id are fixed per game version; open the harness page once manually if unsure.
+                      </div>
+                    </div>
+                  )}
+                  {verificationMethod === 'local' && (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={localGameUrl}
+                        onChange={(e) => setLocalGameUrl(e.target.value)}
+                        placeholder="Local game URL (e.g. http://localhost:5240/launch/mgs/luckyJourneyPowerCombo?moduleId=102554&clientId=40302&productId=5001&username=...&password=...)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50 font-mono"
+                      />
+                      <input
+                        type="text"
+                        value={axiomApiKey}
+                        onChange={(e) => setAxiomApiKey(e.target.value)}
+                        placeholder="Paste Axiom API Key here (Axiom's ApiKeys page — long-lived, rarely needs updating)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50 font-mono"
+                      />
+                      <input
+                        type="text"
+                        value={localEnv}
+                        onChange={(e) => setLocalEnv(e.target.value)}
+                        placeholder="Env (optional, e.g. gtp603 — detected from the game's traffic when blank)"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50 font-mono"
+                      />
+                      <div className="text-[9px] text-slate-500">
+                        Files are uploaded and played one at a time as the link's username (each file's &lt;Key loginName&gt; is
+                        replaced in the uploaded copy). Files whose moduleID differs from the link's moduleId are reported, not played.
+                      </div>
+                    </div>
+                  )}
+                  {(verificationMethod === 'harness' || verificationMethod === 'local') && (
+                    <div className="mt-2 space-y-2">
+                      <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                        Accounts (optional)
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={accountKeyword}
+                          onChange={(e) => setAccountKeyword(e.target.value)}
+                          placeholder="Account keyword (e.g. automate)"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50 font-mono"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          value={accountCount}
+                          onChange={(e) => setAccountCount(e.target.value)}
+                          placeholder={`Number of accounts (≥ ${selectedTestdataFiles.length || 1})`}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/50 font-mono"
+                        />
+                      </div>
+                      <div className="text-[9px] text-slate-500">
+                        {accountKeyword.trim()
+                          ? `Files in name order are verified as ${accountKeyword.trim()}1, ${accountKeyword.trim()}2, … — create them first in Axiom (Create User Account → Username "${accountKeyword.trim()}", Bulk Create Multiple Accounts, same number).`
+                          : verificationMethod === 'local'
+                          ? "Blank: every file is verified as the link's own username."
+                          : "Blank: every file must already share one <Key> loginName."}
                       </div>
                     </div>
                   )}

@@ -23,6 +23,7 @@ const VERIFICATION_INTENTS = new Set([
   "async_tool:testdata_verifier",
   "async_tool:testdata_verifier_api",
   "async_tool:testdata_verifier_harness",
+  "async_tool:testdata_verifier_local",
 ]);
 
 const STATUS_META: Record<ExecutionRow["status"], { icon: React.ReactNode; cls: string; label: string }> = {

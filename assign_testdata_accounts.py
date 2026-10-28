@@ -14,31 +14,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
-# <Key ...> with or without a loginName attribute; attribute values never contain '>'.
-_KEY_TAG = re.compile(r"<Key\b[^>]*?/?>")
-_LOGIN_ATTR = re.compile(r"""\bloginName\s*=\s*("[^"]*"|'[^']*')""")
+# set_login_name lives with the verifier tools, which rewrite <Key loginName> the same way before
+# uploading to a local game link; imported here so this script's callers are unaffected.
+from server.tools.impl.testdata_verify_common import _KEY_TAG, _LOGIN_ATTR, set_login_name
+
+__all__ = ["account_name", "assign_accounts", "set_login_name"]
 
 
 def account_name(prefix: str, n: int, width: int = 2) -> str:
     return f"{prefix}{n:0{width}d}"
-
-
-def set_login_name(xml: str, login: str) -> str:
-    """Return the .testdata text with <Key loginName> set to `login`; everything else unchanged."""
-    m = _KEY_TAG.search(xml)
-    if not m:
-        raise ValueError("no <Key> element")
-    tag = m.group(0)
-    if _LOGIN_ATTR.search(tag):
-        new_tag = _LOGIN_ATTR.sub(f'loginName="{login}"', tag, count=1)
-    else:
-        end = len(tag) - (2 if tag.endswith("/>") else 1)
-        new_tag = f'{tag[:end].rstrip()} loginName="{login}" {tag[end:]}'
-    return xml[:m.start()] + new_tag + xml[m.end():]
 
 
 def assign_accounts(folder: Path, out: Path, prefix: str = "automate", start: int = 1, width: int = 2) -> list[dict]:

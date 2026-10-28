@@ -294,7 +294,9 @@ slotgame-testing-harness/
 ├── build.py / slot_harness.spec / harness.cmd   # PyInstaller + pywebview desktop packaging
 ├── generate_testdata.py       # standalone CLI script
 └── assign_testdata_accounts.py  # CLI: rewrite each .testdata <Key loginName> to its own test account
-                                 #   (automate01, automate02, ...) so a whole folder can be verified together
+                                 #   (automate01, automate02, ...) so a whole folder can be verified together.
+                                 #   The UI's "Account keyword" (Harness / Local link) does the same per run,
+                                 #   with Axiom's bulk-create names (automate1, automate2, ...)
 ```
 
 > The original design-intent layout from project kick-off (`agents/agent-sheet-reader.md`, `plugins/google_sheet_reader.py`, `workflows/slot-test-pipeline.yaml`, `harness/scheduler.py`, etc.) did not land as drawn: the orchestration kernel is TypeScript in `src/harness/`, Plugins are Python in `server/tools/impl/`, and pipelines are declared in TypeScript in `pipelineRegistry.ts` (YAML pipeline configuration is a planned capability). The four-layer decoupling philosophy is unchanged.
@@ -439,7 +441,7 @@ The 4 registered scenarios:
 | id | label | pipelineId | requiredPlugins |
 |---|---|---|---|
 | `testdata_generation` | TestData Generation | `testdata-gen-pipeline` | testdata_parser, testdata_generator, zip_packager |
-| `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier_api, testdata_verifier_harness, log_diagnoser |
+| `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier_api, testdata_verifier_harness, testdata_verifier_local, log_diagnoser |
 | `easyhelp_checking` | EasyHelp Checking | `helpfile-conversion-pipeline` | html_to_text_converter, diff_comparator, helpfile_report, helpfile_analyzer |
 | `portugal_plugin` | Portugal Plugin Verification | `portugal-plugin-verify-pipeline` | portugal_plugin_symbol_map, portugal_plugin_fetcher, portugal_plugin_parser, portugal_plugin_reporter |
 
@@ -932,4 +934,4 @@ The following inconsistencies — within the code, or between the code and the p
 | 9 | Test-plan preview checkboxes don't affect execution, except Portugal's "Save Imported Mapping"; TestDataPreview's "Regenerate" just resets to mock records | Interactions are weaker than the UI implies | Open |
 | 10 | Supporting docs are out of date: `plugins/README.md` lists the nonexistent `game_verifier_tool.py`; `workflows/README.md` says pipelines are hardcoded in `plannerAgent.ts`; `skill-generator-plugin-contract.md` still has a `game_verifier` "with Selenium" contract; `skill-verification-protocol.md` and the root `README.md` still describe Selenium-based verification, while `testdata_verifier_harness` now uses Playwright | Supporting docs are out of date | Open (scope grew) |
 | 11 | `pipelineRegistry.ts` header comment says steps within a stage "can run in parallel" (the engine runs them serially), and a comment on the helpfile pipeline says it "was missing from this registry until now" | Stale code comments | Open |
-| 12 | `testdata_verifier_harness` accepts a direct game launch URL, where Product Id / Client Id are not needed (both are optional on the backend), but `verificationEngine.ts` always requires both and its error text asks for a "Titan Harness launcher page URL" | The direct-URL mode is harder to use from the UI than the Plugin allows | Open |
+| 12 | `testdata_verifier_harness` accepts a direct game launch URL, where Product Id / Client Id are not needed (both are optional on the backend), but `verificationEngine.ts` always requires both and its error text asks for a "Titan Harness launcher page URL" | The direct-URL mode is harder to use from the UI than the Plugin allows | Addressed for local links: the "Local link (all files)" method runs `testdata_verifier_local`, which takes the direct URL alone (no Product Id / Client Id, env optional) and uploads + plays each file in turn as the link's account |

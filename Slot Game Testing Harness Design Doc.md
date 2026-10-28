@@ -2,7 +2,13 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
-> **Synced with code at**: `d5fc203` (2026-10-28). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+> **Synced with code at**: `55d49a7` (2026-10-28). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+
+> **Revision note (2026-10-28, .testdata format variants — synced with `55d49a7`)**
+>
+> - The shared .testdata parser (`testdata_verify_common._parse_testdata`) now accepts the layouts different games use: `<Spin>` under `<Test><Slot>` or directly under `<Test>`, controls (`Meter` / `Token` / `Random`) beside the seed, nested `<Feature><PreGen>` seeds, and feature rounds written as their own `<Spin stage="FreeSpin">`; tags and attribute names match case-insensitively, a BOM or blank lines before `<?xml?>` are tolerated, and every `<PreGen>` is kept with its path. A file it cannot use fails with a `TestdataFormatError` naming the record (including the retired reel-seed format `<B_G seed=".."/>`) instead of "contains no spins";
+> - All three verifiers judge a record against the server's `<TestData>` echo with the shared `compare_spin` / `compare_feature`: every PreGen by path, own seed and feature seeds; a feature-stage record is never spun for (the API method used to send a Spin for it) and is reported `SEED_NOT_ECHOED` when no response of the triggering play echoes its seed (the report modal shows it as its own status);
+> - Plugin versions: `testdata_verifier_harness` 2.2.0, `testdata_verifier_local` 1.2.0, `testdata_verifier_api` 1.1.0; new test file `tests/test_testdata_parsing.py` with real sample files in `tests/fixtures/testdata_variants/`; Chapter 13 gains item 13.
 
 > **Revision note (2026-10-28, incremental code-aligned revision)**
 >
@@ -300,7 +306,8 @@ slotgame-testing-harness/
 │   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (15 Plugins, plus shared helpers:
 │                              #   testdata_verify_common.py, selenium_page_drivers.py, symbol_profiles.py)
 ├── tests/                     # pytest: game_session protocol (with recorded fixtures), account assignment,
-│                              #   and the local-link verifier
+│                              #   the local-link verifier, and .testdata parsing/judging across games
+│                              #   (real sample files in fixtures/testdata_variants/)
 ├── docs/                      # supplementary design notes and plans
 ├── build.py / slot_harness.spec / harness.cmd   # PyInstaller + pywebview desktop packaging
 ├── generate_testdata.py       # standalone CLI script
@@ -546,6 +553,12 @@ This scenario **does not go through ExecutionEngine**; `game-verify-pipeline` is
 3. `POST /api/tools/execute-async` runs it in the background; the frontend receives per-case progress live over SSE (`/api/executions/stream/{id}`), then reads the execution detail and builds the verification report;
 4. If any case failed, `runAIDiagnosis()` is called: the LLM outputs a diagnosis following the JSON template in the prompt; if the call throws, it falls back to calling the `log_diagnoser` Plugin for rule-based diagnosis;
 5. The report is shown in VerificationReportModal (which also has the frontend rule-based per-case diagnosis `logVisionDiagnoser.ts`) and can be reopened from the History page.
+
+**.testdata parsing, injection and judging** (shared by all three methods, `testdata_verify_common.py`):
+
+- *Parsing*: every record-level `<Spin>` is found wherever it sits (`<Test><Slot><Spin>` in most games, `<Test><Spin>` in others) and becomes one record holding its `stage`, `comment` and every `<PreGen batch index>` with its path — `Spin` for the record's own seed, `Spin/Feature` for a nested feature seed. Controls such as `<Meter>` / `<Token>` / `<Random>` are left to the server. Tags and attribute names match case-insensitively and namespaces are ignored. Every `<Spin>` must carry its own integer `batch` / `index`; otherwise the run stops before anything is uploaded with `testdata_parse_error:<file>:Spin #n ...` (the retired reel-seed format `<Display name="B_G"/><B_G seed=".."/>` is named as such).
+- *Injection*: the file is uploaded as-is except for `<Key loginName>`, which is rewritten in the uploaded copy when the method assigns an account; the parsed records are never serialized back to XML.
+- *Judging*: the Spin response that consumed a record echoes that `<Spin>` under `<TestData>`, so `compare_spin` checks every PreGen against the echo by path (`SEED_MISMATCH` names the own or the feature seed that differs; no echo at all means no testdata record was played). A record whose stage is not BaseGame (e.g. `<Spin stage="FreeSpin">`) is not spun for; `compare_feature` looks for its seed in the echoes of the play its trigger started and reports `SEED_NOT_ECHOED` when none carries it (see Chapter 13, item 13).
 
 ### 10.3 Full Example of Adding a New Test Scenario: Translation File Verification (an architectural-extensibility example, not a currently implemented scenario)
 
@@ -930,7 +943,7 @@ Artifact directories: `server/data/runs/` (per-execution working directories; `c
 
 ## 13. Code Status & Known Discrepancies (new)
 
-The following inconsistencies — within the code, or between the code and the plan — were found during the revisions. The document describes the code as it is; whether to change the code is a separate decision. Status as of 2026-10-28 (commit `d5fc203`).
+The following inconsistencies — within the code, or between the code and the plan — were found during the revisions. The document describes the code as it is; whether to change the code is a separate decision. Status as of 2026-10-28 (commit `55d49a7`).
 
 | # | Current state | Impact | Status |
 |---|---|---|---|
@@ -946,3 +959,4 @@ The following inconsistencies — within the code, or between the code and the p
 | 10 | Supporting docs are out of date: `plugins/README.md` lists the nonexistent `game_verifier_tool.py`; `workflows/README.md` says pipelines are hardcoded in `plannerAgent.ts`; `skill-generator-plugin-contract.md` still has a `game_verifier` "with Selenium" contract; `skill-verification-protocol.md` and the root `README.md` still describe Selenium-based verification, while `testdata_verifier_harness` now uses Playwright | Supporting docs are out of date | Open (scope grew) |
 | 11 | `pipelineRegistry.ts` header comment says steps within a stage "can run in parallel" (the engine runs them serially), and a comment on the helpfile pipeline says it "was missing from this registry until now" | Stale code comments | Open |
 | 12 | `testdata_verifier_harness` accepts a direct game launch URL, where Product Id / Client Id are not needed (both are optional on the backend), but `verificationEngine.ts` always requires both and its error text asks for a "Titan Harness launcher page URL" | The direct-URL mode is harder to use from the UI than the Plugin allows | Addressed for local links: the "Local link (all files)" method runs `testdata_verifier_local`, which takes the direct URL alone (no Product Id / Client Id, env optional) and uploads + plays each file in turn as the link's account |
+| 13 | A feature round written as its own `<Spin stage="FreeSpin">` record (TGPF, WG3) is judged against the `<TestData>` echoes of the play its BaseGame trigger started; which response (if any) echoes such a record has not been confirmed on a live run — the one game confirmed so far only echoes the triggering `<Spin>` itself | Such records may be reported `SEED_NOT_ECHOED` (failed, with whether the feature stage was played) even when the game used the seed | Open — confirm on a live run |

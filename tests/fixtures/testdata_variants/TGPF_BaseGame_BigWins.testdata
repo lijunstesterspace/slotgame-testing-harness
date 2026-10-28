@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Test>
+    <Key moduleID="104811" loginName="" />
+    
+    <Spin stage="BaseGame" comment="Bigwin">
+        <Token SpinCount="5" />
+        <Random fsTrigger="100000000" />
+        <PreGen batch="1189" index="13" />
+    </Spin>
+    
+    <Spin stage="BaseGame" comment="Megawin">
+        <Token SpinCount="6" />
+        <Random fsTrigger="100000000" />
+        <PreGen batch="1875" index="17" />
+    </Spin>
+    
+    <Spin stage="BaseGame" comment="Epicwin">
+        <Token SpinCount="7" />
+        <Random fsTrigger="100000000" />
+        <PreGen batch="296" index="0" />
+    </Spin>
+    
+    <Spin stage="BaseGame" comment="Justforthewin">
+        <Token SpinCount="8" />
+        <Random fsTrigger="100000000" />
+        <PreGen batch="60" index="0" />
+    </Spin>
+</Test>

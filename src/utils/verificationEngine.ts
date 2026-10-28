@@ -482,7 +482,7 @@ function deriveStatus(c: any, passed: boolean): VerificationStatus {
   if (c.verdict) {
     const v = String(c.verdict).toUpperCase();
     const validStatuses: VerificationStatus[] = [
-      "SEED_MISMATCH", "STAGE_MISMATCH", "PAYOUT_MISMATCH",
+      "SEED_MISMATCH", "STAGE_MISMATCH", "SEED_NOT_ECHOED", "PAYOUT_MISMATCH",
       "SEED_REJECTED", "TIMEOUT", "NETWORK_ERROR",
     ];
     if (validStatuses.includes(v as VerificationStatus)) {

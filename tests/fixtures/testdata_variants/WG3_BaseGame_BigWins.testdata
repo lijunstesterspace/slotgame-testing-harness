@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Test>
+<Key moduleID="104115" loginName="" />
+    <Spin stage="BaseGame" comment="BigWin19">
+        <PreGen batch="197" index="129" />
+    </Spin>
+    <Spin stage="BaseGame" comment="MegaWin59.9">
+        <PreGen batch="89" index="1204" />
+    </Spin>
+    <Spin stage="BaseGame" comment="EpicWin68">
+        <PreGen batch="89" index="1714" />
+    </Spin>
+    <Spin stage="BaseGame" comment="JFTWWin112.2">
+        <PreGen batch="90" index="45" />
+    </Spin>
+	</Test>

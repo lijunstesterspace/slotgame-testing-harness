@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+   <Test>
+  <Key moduleID="104811" loginName="" />
+  <Slot>
+    <Spin stage="BaseGame">
+      <PreGen batch="706" index="0" />
+      <Random fsTrigger="1" />
+    </Spin>
+    <Spin stage="FreeSpin">
+      <PreGen batch="11" index="10" />
+    </Spin>
+  </Slot>
+</Test>

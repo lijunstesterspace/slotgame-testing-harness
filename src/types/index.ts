@@ -113,6 +113,7 @@ export type VerificationStatus =
   | 'PASSED'
   | 'SEED_MISMATCH'
   | 'STAGE_MISMATCH'
+  | 'SEED_NOT_ECHOED'
   | 'PAYOUT_MISMATCH'
   | 'SEED_REJECTED'
   | 'TIMEOUT'

@@ -135,7 +135,7 @@ class TestdataVerifierLocalTool(ToolPlugin):
             ]),
             permissions=["filesystem:write", "browser:automation", "network:outbound"],
             timeout_seconds=3600,
-            version="1.1.0",
+            version="1.2.0",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:

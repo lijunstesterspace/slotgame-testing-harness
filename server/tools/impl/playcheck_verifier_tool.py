@@ -37,7 +37,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from server.game_session import LaunchSpec, SessionConfig, open_session
-from server.game_session.launcher import TITAN_DEFAULT_PASSWORD
+from server.game_session.launcher import TITAN_DEFAULT_PASSWORD, launch_chromium
 from server.game_session.protocol import PlayResponse
 from server.infra.logger import log
 from server.tools.base import (
@@ -262,7 +262,7 @@ class PlaycheckVerifierTool(ToolPlugin):
                               description="Game engine animation speed percent."),
             ]),
             timeout_seconds=300,
-            version="0.2.1",
+            version="0.2.2",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -366,7 +366,7 @@ class PlaycheckVerifierTool(ToolPlugin):
         # Open a fresh browser with the saved storage state (same Axiom cookies).
         from playwright.sync_api import sync_playwright  # local import: keeps the async tool signature
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=bool(params.get("headless")))
+            browser = launch_chromium(pw, headless=bool(params.get("headless")))
             context = browser.new_context(storage_state=str(out_dir / "storage_state.json")
                                           if (out_dir / "storage_state.json").exists() else None)
             page = context.new_page()

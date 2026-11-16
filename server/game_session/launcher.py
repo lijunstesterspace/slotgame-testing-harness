@@ -99,6 +99,27 @@ class Browser:
                 pass
 
 
+# Installed browsers first: the packaged exe ships Playwright's driver but no browser, and the
+# PyInstaller Playwright hook points PLAYWRIGHT_BROWSERS_PATH inside the _MEI temp dir, where
+# Playwright's own Chromium never exists. Edge is preinstalled on every Windows machine.
+BROWSER_CHANNELS = ("chrome", "msedge", None)   # None = Playwright's bundled Chromium (dev venv)
+
+
+def launch_chromium(pw: Any, headless: bool = True, args: list[str] | None = None) -> Any:
+    """Launch the first available of installed Chrome, installed Edge, Playwright's Chromium."""
+    errors = []
+    for channel in BROWSER_CHANNELS:
+        kwargs: dict[str, Any] = {"headless": headless, "args": CHROME_ARGS if args is None else args}
+        if channel:
+            kwargs["channel"] = channel
+        try:
+            return pw.chromium.launch(**kwargs)
+        except Exception as e:
+            errors.append(f"{channel or 'chromium'}: {str(e).splitlines()[0] if str(e) else type(e).__name__}")
+    raise RuntimeError("no_browser_available: install Google Chrome or Microsoft Edge ("
+                       + "; ".join(errors) + ")")
+
+
 def open_browser(headless: bool = True, trace_path: Path | None = None,
                  viewport: tuple[int, int] = (1280, 720)) -> Browser:
     """Installed Chrome (channel="chrome"), so the packaged exe does not need to bundle a browser."""
@@ -106,9 +127,10 @@ def open_browser(headless: bool = True, trace_path: Path | None = None,
 
     pw = sync_playwright().start()
     try:
-        browser = pw.chromium.launch(channel="chrome", headless=headless, args=CHROME_ARGS)
+        browser = launch_chromium(pw, headless=headless)
     except Exception:
-        browser = pw.chromium.launch(headless=headless, args=CHROME_ARGS)  # bundled Chromium, if installed
+        pw.stop()
+        raise
     context = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]},
                                   ignore_https_errors=True)
     if trace_path:

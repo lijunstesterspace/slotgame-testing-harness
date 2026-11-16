@@ -64,6 +64,17 @@ export const SCENARIOS: TestScenario[] = [
     requiredPlugins: ["portugal_plugin_symbol_map", "portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
     icon: "globe",
   },
+  {
+    id: "playcheck_verification",
+    label: "PlayCheck Verification",
+    description: "Launch the game, apply cheats, spin, then open PlayCheck in the same browser and compare the reel results + financials against PlayCheck's GameDetail page",
+    keywords: ["playcheck verification", "playcheck verify", "reel comparison", "game history", "play check verification", "compare playcheck", "playcheck 验证", "转轮对比", "游戏历史"],
+    agentFile: "",
+    skills: [],
+    pipelineId: "playcheck-verify-pipeline",
+    requiredPlugins: ["playcheck_verifier"],
+    icon: "search",
+  },
 ];
 
 // ── Agent content map (scenarioId → raw markdown) ─────────────────────

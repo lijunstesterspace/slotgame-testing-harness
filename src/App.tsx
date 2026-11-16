@@ -48,6 +48,12 @@ const STAGE1_TASKS: Record<string, TaskItem[]> = {
     { id: 't1-3', stage: 1, title: 'Parse Portugal Plugin Output', description: 'Split spins, map symbols and total the win amount', status: 'pending' },
     { id: 't1-4', stage: 1, title: 'Consistency Check & Report', description: 'Flag symbol/row/parameter mismatches and write TXT/JSON/HTML reports', status: 'pending' },
   ],
+  playcheck_verification: [
+    { id: 't1-1', stage: 1, title: 'Launch Game & Apply Cheats', description: 'Open the game URL and apply the requested cheat codes', status: 'pending' },
+    { id: 't1-2', stage: 1, title: 'Spin & Capture Reels', description: 'Spin and capture each transaction\'s reel symbols + financials', status: 'pending' },
+    { id: 't1-3', stage: 1, title: 'Open PlayCheck GameDetail', description: 'Navigate to the transaction\'s GameDetail page in PlayCheck', status: 'pending' },
+    { id: 't1-4', stage: 1, title: 'Compare Reels & Financials', description: 'Compare game-side reels + wagered/payout against PlayCheck', status: 'pending' },
+  ],
 };
 
 // ── Scenario-specific Test Plan Items ──────────────────────────────────
@@ -79,6 +85,13 @@ const SCENARIO_TEST_ITEMS: Record<string, Array<{ id: string; name: string; desc
     { id: "plan-3", name: "Total Win Calculation", description: "Sum all MG win amounts (identical to ppvACCR1.0)", selected: true },
     { id: "plan-4", name: "Consistency Checks", description: "Flag unmapped symbols, row width and R/MV/MT/MG count mismatches", selected: true },
     { id: "plan-5", name: "PlayCheck Payout Check", description: "Fetched mode: sum(MG)/100 = PAYOUT, first MV/100 = WAGERED, and = game win", selected: true },
+  ],
+  playcheck_verification: [
+    { id: "plan-1", name: "Cheat Application", description: "Apply the requested cheat codes before spinning (game-specific API)", selected: true },
+    { id: "plan-2", name: "Reel Symbol Capture", description: "Capture each spin's reel symbol grid from the game response", selected: true },
+    { id: "plan-3", name: "PlayCheck Reel Comparison", description: "Compare game-side reel symbols against PlayCheck's Reel Positions (requires symbol-map profile)", selected: true },
+    { id: "plan-4", name: "Financial Summary Check", description: "Verify Total Wagered / Total Payout match between game and PlayCheck", selected: true },
+    { id: "plan-5", name: "Bonus Spin Coverage", description: "For bonus spins: compare every Spin block in the transaction one by one", selected: true },
   ],
 };
 
@@ -601,6 +614,36 @@ const Workbench: React.FC = () => {
           extraParams.ollamaModel = selectedModel;
           extraParams.ollamaBaseUrl = plannerCfg.baseUrl;
         }
+      } else if (selectedScenarioId === "playcheck_verification") {
+        // The game URL is the first line / only URL in the intent; cheats are comma- or
+        // newline-separated tokens that aren't the URL.
+        const urlMatch = promptIntent.match(/https?:\/\/\S+/);
+        extraParams.gameUrl = urlMatch ? urlMatch[0] : sheetUrl.trim();
+        const cheats = promptIntent
+          .split(/[,\n]+/)
+          .map((s) => s.trim())
+          .filter((s) => s && !s.startsWith("http") &&
+            !/^(spin|module|trans|tolerance|divisor|headless|user|username|product|client|brand)\s*=/i.test(s));
+        extraParams.cheats = cheats;
+        // Optional key=value overrides from the intent text.
+        const spinMatch = promptIntent.match(/spin(s)?\s*=\s*(\d+)/i);
+        if (spinMatch) extraParams.spinCount = Number(spinMatch[2]);
+        const transMatch = promptIntent.match(/trans(action)?\s*=\s*(\d+)/i);
+        if (transMatch) extraParams.transNumber = Number(transMatch[2]);
+        const moduleMatch = promptIntent.match(/module(Id)?\s*=\s*(\d+)/i);
+        if (moduleMatch) extraParams.moduleId = moduleMatch[2];
+        // Titan Harness form fields — read only when the URL is a /harness/ page. Values given in the
+        // intent win; Product / Client Id fall back to the ones entered in the verification form.
+        const userMatch = promptIntent.match(/user(name)?\s*=\s*(\S+)/i);
+        extraParams.username = userMatch ? userMatch[2] : loginName;
+        const productMatch = promptIntent.match(/product(Id)?\s*=\s*(\S+)/i);
+        extraParams.harnessProductId = productMatch ? productMatch[2] : harnessProductId;
+        const clientMatch = promptIntent.match(/client(Id)?\s*=\s*(\S+)/i);
+        extraParams.harnessClientId = clientMatch ? clientMatch[2] : harnessClientId;
+        const brandMatch = promptIntent.match(/brand\s*=\s*(\S+)/i);
+        extraParams.harnessBrand = brandMatch ? brandMatch[2] : harnessBrand;
+        // Stop must be able to kill the backend's Chrome, same as game_verification / portugal_plugin.
+        verificationExecutionIdRef.current = executionId;
       }
 
       addLog({ type: "HARNESS_EVENT", content: `Running fixed pipeline "${pipeline.name}" (${pipeline.stages.length} stage(s))` });
@@ -692,6 +735,34 @@ const Workbench: React.FC = () => {
             `verdict ${portugalPlugin.verdict} (${portugalPlugin.finding_count} finding(s)). ` +
             `Report: ${harnessClient.artifactUrl(fileOf(portugalPlugin.html_url))} · Text: ${harnessClient.artifactUrl(fileOf(portugalPlugin.txt_url))}`,
           status: portugalPlugin.verdict === "CLEAN" ? "success" : portugalPlugin.verdict === "FAIL" ? "error" : "warning",
+        });
+      }
+
+      // playcheck_verification: surface the verdict, findings and report link.
+      const playcheckResult = stepResults.verify_playcheck as
+        | {
+            trans_number: number; verdict: string; findings: Array<{ check: string; ok: boolean | null; reason?: string }>;
+            game_financials: { wagered: number | null; won: number | null };
+            playcheck_financials: { wagered: number | null; payout: number | null };
+            game_spin_count: number; playcheck_spin_count: number; report_html: string; report_url: string | null;
+          }
+        | undefined;
+      if (playcheckResult) {
+        for (const f of playcheckResult.findings ?? []) {
+          addLog({
+            type: "HARNESS_EVENT",
+            content: `${f.ok === true ? "PASS" : f.ok === false ? "FAIL" : "SKIP"} ${f.check}${f.reason ? `: ${f.reason}` : ""}`,
+            status: f.ok === true ? "success" : f.ok === false ? "error" : "warning",
+          });
+        }
+        addLog({
+          type: "HARNESS_EVENT",
+          content:
+            `PlayCheck verification (trans ${playcheckResult.trans_number}): ` +
+            `verdict ${playcheckResult.verdict}. ` +
+            `Game spins ${playcheckResult.game_spin_count} vs PlayCheck spins ${playcheckResult.playcheck_spin_count}. ` +
+            `Report: ${playcheckResult.report_url ? `${harnessClient.base}${playcheckResult.report_url}` : playcheckResult.report_html}`,
+          status: playcheckResult.verdict === "PASS" ? "success" : playcheckResult.verdict === "FAIL" ? "error" : "warning",
         });
       }
 
@@ -1531,6 +1602,8 @@ const Workbench: React.FC = () => {
                     ? 'Paste sheet URL (optional) and describe your test task...\n\nExample:\nhttps://docs.google.com/spreadsheets/d/...\ngenerate testdata for base game'
                     : selectedScenarioId === 'portugal_plugin'
                     ? 'Paste the Portugal Plugin output string, OR a game URL to fetch it from PlayCheck...\n\nExample (paste):\n1:A;B;C#D;E;F#G;H;I#R#A#0,1,2#MV#10#MT#2#MG#5.0\n\nExample (fetch):\nhttps://mobile-app1-gtp537.installprogram.eu/htmlGames/4.60.0/harness/<game>\nusername=lijunt moduleId=105233 productId=5001 clientId=50300 spins=1\n\nSymbol mapping: attach the game\'s Output Guide (.md) with + the first time (or when it changes); later runs reuse it by moduleId.'
+                    : selectedScenarioId === 'playcheck_verification'
+                    ? 'Paste the game launch URL, then cheats (one per line or comma-separated)...\n\nExample (direct launch URL):\nhttps://mobile-app1-gtp601.installprogram.eu/htmlGames/4.60.1/launch/mgs/luckyJourneyPowerComboV94?...\ncheat1, cheat2\nspins=1\n\nExample (/harness/ URL — add the Titan form fields):\nhttps://mobile-app1-gtp537.installprogram.eu/htmlGames/4.60.0/harness/<game>\nmoduleId=105233 productId=5001 clientId=50300 username=lijunt brand=IslandParadise\ncheat1, cheat2\n\nA /harness/ URL needs username, productId and clientId (they are fixed per game-module version or the QA account); password defaults to the configured Titan password.\n\nThe tool launches the game, applies the cheats, spins, then opens PlayCheck in the same browser and compares the reel results + financials against PlayCheck\'s GameDetail page.'
                     : 'Describe your test task...'
                 }
                 value={sheetUrl ? `${sheetUrl}\n${promptIntent}` : promptIntent}

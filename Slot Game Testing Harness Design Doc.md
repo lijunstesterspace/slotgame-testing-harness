@@ -2,7 +2,17 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
-> **Synced with code at**: `55d49a7` (2026-10-28). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+> **Synced with code at**: `53ce0ac` (2026-10-28) plus the uncommitted PlayCheck Verification feature. Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+
+> **Revision note (2026-11-16, PlayCheck Verification — new Plugin / scenario / pipeline)**
+>
+> - New **PlayCheck Verification** scenario (`playcheck_verification`, `icon: "search"`) backed by the new `playcheck_verifier` Plugin and the single-stage `playcheck-verify-pipeline`: it launches the game, applies cheats, spins, then opens PlayCheck in the **same browser session** and compares each transaction's reel grid + financials against PlayCheck's GameDetail page;
+> - Plugin count **15 → 16** (2.2 Layer 4 table, 6 directory structure, 9.2) and scenario / pipeline counts **4 → 5** (10.2 Module One and Module Two, 11.2);
+> - `playcheck_verifier` now exposes the Titan Harness form fields (`username`, `harness_password`, `product_id`, `client_id`, `brand`) and refuses a `/harness/` URL when `username`, `product_id` or `client_id` is missing, instead of submitting an empty form and failing later with a confusing "no game";
+> - Result semantics: the tool returns `success=True` for a `FAIL` / `REVIEW` verdict — the verdict travels in `content.verdict` and the HTML report is linked through `content.report_url` — so a verification result finishes the pipeline as `completed` instead of `failed`, matching `portugal_plugin_reporter`;
+> - Reel comparison is strict: a PlayCheck cell with no icon mapping makes that spin inconclusive (`REVIEW`, never a silent pass), and a frame whose dimensions differ is a `FAIL` rather than a partial overlap compare;
+> - The XML `<Slot>` form of the reel data is now parsed too: each `<Stage>` element and its `<Spins><Spin symbols width height seed stickies>` children become `PlayResponse.stages`, mirroring the JSON `_parse_slot_stages`;
+> - Plugin version `playcheck_verifier` 0.1.0 → 0.2.0; new test file `tests/test_playcheck_verifier.py`.
 
 > **Revision note (2026-10-28, .testdata format variants — synced with `55d49a7`)**
 >
@@ -136,7 +146,7 @@ Dedicated skill manuals that fix rules and constrain AI behavior. `skills/` hold
 
 #### Layer 4: Plugin Local Tool Layer (execution layer)
 
-Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all subclassing `ToolPlugin` (MCP-compatible name / description / inputSchema), registered in `BUILTIN_TOOLS` in `server/tools/impl/__init__.py`, and loaded into `ToolRegistry` at backend startup. There are currently 15:
+Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all subclassing `ToolPlugin` (MCP-compatible name / description / inputSchema), registered in `BUILTIN_TOOLS` in `server/tools/impl/__init__.py`, and loaded into `ToolRegistry` at backend startup. There are currently 16:
 
 | Scenario | Plugins |
 |---|---|
@@ -144,6 +154,7 @@ Pure-code tools, implemented in Python as `server/tools/impl/*_tool.py`, all sub
 | TestData Verification | `testdata_verifier_harness` (default; real browser via Playwright through `server/game_session/`, entered through the Titan Harness launcher or a direct game launch URL), `testdata_verifier_api` (direct game HTTP APIs, no browser), `testdata_verifier_local` (Playwright on a locally served game launch URL; uploads and plays one file at a time, so one account covers a whole folder), `log_diagnoser` (rule-based failure attribution) |
 | EasyHelp Checking | `html_to_text_converter`, `diff_comparator` (with keyword highlighting and Excel output), `helpfile_report` (deterministic `helpfile_report.html` / `.json`, no AI), `helpfile_analyzer` (optional; calls local Ollama server-side to analyze that report) |
 | Portugal Plugin | `portugal_plugin_symbol_map`, `portugal_plugin_fetcher` (Selenium → Game History → PlayCheck to fetch the outcome), `portugal_plugin_parser`, `portugal_plugin_reporter` (TXT/JSON/HTML reports) |
+| PlayCheck Verification | `playcheck_verifier` (Playwright: launch → cheats → spin → open PlayCheck in the same session → compare reel grids + financials; PASS / FAIL / REVIEW report) |
 
 > Note: the originally planned "Google Sheet Reader Plugin (spreadsheet API connection, raw-data fetching)" is **not implemented**. TestData generation currently takes its data from sheet rows the user **pastes** into the input box, or a local text/CSV file attached via "+" (read in the browser and folded into the input box); a Google Sheet URL in the input box is only used for scenario/URL-type validation and is never fetched.
 
@@ -163,6 +174,7 @@ The actual fixed flow per scenario:
 | EasyHelp Checking | ExecutionEngine | `html_to_text_converter` → `diff_comparator` → `helpfile_report` → `helpfile_analyzer` (optional: a failure only warns, the stage-3 report is kept) |
 | Portugal Plugin Verification | ExecutionEngine | `portugal_plugin_symbol_map` → `portugal_plugin_fetcher` (pass-through in paste mode) → `portugal_plugin_parser` → `portugal_plugin_reporter` |
 | TestData Verification | `verificationEngine.ts` directly (**not** ExecutionEngine) | One selected verifier Plugin (async execution + live SSE progress) → AI diagnosis when there are failed cases (falls back to `log_diagnoser` on failure) |
+| PlayCheck Verification | ExecutionEngine | `playcheck_verifier` (single stage: launch → cheats → spin → open PlayCheck → compare reel grids + financials; `FAIL` / `REVIEW` are results, not pipeline failures) |
 
 Every process step, execution order, and exception fallback is code-hardened; the AI only takes on lightweight semantic work.
 
@@ -280,7 +292,7 @@ slotgame-testing-harness/
 ├── src/                       # Frontend: React + Vite + Tailwind
 │   ├── harness/               # Harness orchestration kernel (TypeScript)
 │   │   ├── intentRouter.ts        # scenario registry + keyword routing + scenario context assembly
-│   │   ├── pipelineRegistry.ts    # declarative definitions of the 4 pipelines
+│   │   ├── pipelineRegistry.ts    # declarative definitions of the 5 pipelines
 │   │   ├── executionEngine.ts     # execution engine (serial stages, retry, abort)
 │   │   ├── plannerAgent.ts        # narrowed semantic helper (clarify / summarizeStepResult)
 │   │   ├── plannerProvider.ts     # LLM Provider adapter
@@ -303,7 +315,7 @@ slotgame-testing-harness/
 │   ├── infra/                 # storage (SQLite) / security / cancellation / process_runner / logger
 │   ├── game_session/          # Playwright game-session layer used by testdata_verifier_harness / _local
 │   │                          #   (launcher / session / protocol / capture / env, plus a smoke script)
-│   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (15 Plugins, plus shared helpers:
+│   └── tools/                 # base.py (ToolPlugin / ToolRegistry) + impl/ (16 Plugins, plus shared helpers:
 │                              #   testdata_verify_common.py, selenium_page_drivers.py, symbol_profiles.py)
 ├── tests/                     # pytest: game_session protocol (with recorded fixtures), account assignment,
 │                              #   the local-link verifier, and .testdata parsing/judging across games
@@ -343,7 +355,7 @@ This system is a **vertical-domain AI agent orchestration cockpit that absorbs t
 
 ## 9. Future Extensibility Design (system iteration roadmap)
 
-This Slot Game Testing Harness architecture **supports horizontal extension, pluggable capabilities, and scenario iteration** — it is not limited to "TestData generation and verification". Having already grown from the original generation/verification flows to 4 scenarios including EasyHelp checking and Portugal Plugin verification is practical proof of that.
+This Slot Game Testing Harness architecture **supports horizontal extension, pluggable capabilities, and scenario iteration** — it is not limited to "TestData generation and verification". Having already grown from the original generation/verification flows to 5 scenarios including EasyHelp checking, Portugal Plugin verification and PlayCheck verification is practical proof of that.
 
 This chapter explains: **how to add plugins, Agent skills, test pipelines, and business modules**.
 
@@ -361,7 +373,7 @@ This chapter explains: **how to add plugins, Agent skills, test pipelines, and b
 
 ### 9.2 Plugin Expansion (the core expansion method)
 
-15 Plugins have landed so far (see 2.2). SLOT-specific plugin directions for the future:
+16 Plugins have landed so far (see 2.2). SLOT-specific plugin directions for the future:
 
 - **SLOT numeric-validation plugin**: multiplier validation, probability validation, compliance checks on random-value distributions;
 - **Level/storyline test plugin**: batch generation and validity verification of multi-scenario storyline data;
@@ -450,11 +462,11 @@ interface TestScenario {
   skills: string[];              // List of required Skill files
   pipelineId: string;            // Pipeline ID
   requiredPlugins: string[];     // List of Plugin dependencies
-  icon: "zap" | "shield" | "bug" | "file-text" | "globe";
+  icon: "zap" | "shield" | "bug" | "file-text" | "globe" | "search";
 }
 ```
 
-The 4 registered scenarios:
+The 5 registered scenarios:
 
 | id | label | pipelineId | requiredPlugins |
 |---|---|---|---|
@@ -462,6 +474,7 @@ The 4 registered scenarios:
 | `game_verification` | TestData Verification | `game-verify-pipeline` | testdata_verifier_api, testdata_verifier_harness, testdata_verifier_local, log_diagnoser |
 | `easyhelp_checking` | EasyHelp Checking | `helpfile-conversion-pipeline` | html_to_text_converter, diff_comparator, helpfile_report, helpfile_analyzer |
 | `portugal_plugin` | Portugal Plugin Verification | `portugal-plugin-verify-pipeline` | portugal_plugin_symbol_map, portugal_plugin_fetcher, portugal_plugin_parser, portugal_plugin_reporter |
+| `playcheck_verification` | PlayCheck Verification | `playcheck-verify-pipeline` | playcheck_verifier |
 
 **Routing strategy** (no AI dependency):
 
@@ -501,7 +514,7 @@ interface PipelineDef {
 }
 ```
 
-The 4 current pipelines (the `PIPELINES` array):
+The 5 current pipelines (the `PIPELINES` array):
 
 | Pipeline | Steps (plugin, retries) |
 |---|---|
@@ -509,6 +522,7 @@ The 4 current pipelines (the `PIPELINES` array):
 | `game-verify-pipeline` | verify (testdata_verifier_harness, no retry) → diagnose (log_diagnoser, no retry) — **declared but not currently invoked**, see the addendum under Module Three |
 | `helpfile-conversion-pipeline` | convert (html_to_text_converter, 1 retry) → compare (diff_comparator) → report (helpfile_report, deterministic HTML/JSON) → analyze (helpfile_analyzer, **optional**, reads the report's JSON) |
 | `portugal-plugin-verify-pipeline` | resolve_symbol_map → fetch_portugal_plugin → parse_portugal_plugin → report_portugal_plugin (no retries) |
+| `playcheck-verify-pipeline` | verify_playcheck (playcheck_verifier, no retry) — single stage; a `FAIL` / `REVIEW` verdict still completes the pipeline (the tool returns `success=True` and the verdict travels in `content.verdict`) |
 
 `buildParams` is the key to "the AI does not decide parameters": e.g. the generate step takes `stepResults.parse.records`, and the Portugal parse step uses the `symbol_map` resolved in stage 0 directly. A step without `buildParams` falls back to passing `extraParams` through unchanged.
 
@@ -749,6 +763,7 @@ Any work beyond these three categories (e.g. precise numeric computation, autono
 | TestData Verification | Runs the selected verifier Plugin, SSE progress, report aggregation, rule-based diagnosis fallback | Root-cause diagnosis of failed cases (JSON: summary / diagnoses / recommendations) |
 | EasyHelp Checking | HTML→TXT conversion, baseline diff, keyword counting and highlighting, Excel output, HTML/JSON report (`helpfile_report`) | Optional `helpfile_analyzer` analysis of that report (server-side Ollama); post-pipeline step summary |
 | Portugal Plugin | Symbol-map import/validation/self-test, PlayCheck fetch, parsing, totals and consistency checks, TXT/JSON/HTML reports | Clarifying question when input is missing; post-pipeline step summary |
+| PlayCheck Verification | Launches the game, applies cheats, spins, opens PlayCheck in the same session, compares reel grids + financials, and renders a deterministic HTML/JSON report; `FAIL` / `REVIEW` are results (the tool still returns `success=True`) | Clarifying question when required fields are missing; post-pipeline step summary |
 
 ### 11.3 Key Points of 7B-Model Prompt Design
 
@@ -960,3 +975,4 @@ The following inconsistencies — within the code, or between the code and the p
 | 11 | `pipelineRegistry.ts` header comment says steps within a stage "can run in parallel" (the engine runs them serially), and a comment on the helpfile pipeline says it "was missing from this registry until now" | Stale code comments | Open |
 | 12 | `testdata_verifier_harness` accepts a direct game launch URL, where Product Id / Client Id are not needed (both are optional on the backend), but `verificationEngine.ts` always requires both and its error text asks for a "Titan Harness launcher page URL" | The direct-URL mode is harder to use from the UI than the Plugin allows | Addressed for local links: the "Local link (all files)" method runs `testdata_verifier_local`, which takes the direct URL alone (no Product Id / Client Id, env optional) and uploads + plays each file in turn as the link's account |
 | 13 | A feature round written as its own `<Spin stage="FreeSpin">` record (TGPF, WG3) is judged against the `<TestData>` echoes of the play its BaseGame trigger started; which response (if any) echoes such a record has not been confirmed on a live run — the one game confirmed so far only echoes the triggering `<Spin>` itself | Such records may be reported `SEED_NOT_ECHOED` (failed, with whether the feature stage was played) even when the game used the seed | Open — confirm on a live run |
+| 14 | `playcheck_verifier` (new 2026-11-16): the cheat-application path (`setCheat` / URL hash) and the PlayCheck GameDetail DOM selector (`playcheck._PC_GAME_DETAIL_JS`) are best-effort heuristics, self-described as UNVERIFIED and not yet confirmed on a live run | When the selector misses, the reel grid comes back empty and is reported as a `no_grid` finding (`REVIEW`) — never a silent pass (the reel compare now also `FAIL`s on a dimension mismatch and `REVIEW`s on an unmapped icon) | Open — confirm on a live run |

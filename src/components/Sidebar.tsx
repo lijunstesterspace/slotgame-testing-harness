@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Puzzle, CheckCircle2, Loader2, Circle,
   ChevronDown, ChevronRight, Brain, Bot,
-  Zap, Shield, Bug, FileText, Globe, History,
+  Zap, Shield, Bug, FileText, Globe, History, Search,
 } from 'lucide-react';
 import { TaskItem } from '../types';
 import { SCENARIOS } from '../harness/intentRouter';
@@ -15,6 +15,7 @@ const SCENARIO_ICONS: Record<TestScenario['icon'], React.ReactNode> = {
   bug: <Bug className="w-3.5 h-3.5" />,
   'file-text': <FileText className="w-3.5 h-3.5" />,
   globe: <Globe className="w-3.5 h-3.5" />,
+  search: <Search className="w-3.5 h-3.5" />,
 };
 
 // ── Props ─────────────────────────────────────────────────────

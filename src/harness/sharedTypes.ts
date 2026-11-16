@@ -155,7 +155,7 @@ export interface TestScenario {
   skills: string[];
   pipelineId: string;
   requiredPlugins: string[];
-  icon: "zap" | "shield" | "bug" | "file-text" | "globe";
+  icon: "zap" | "shield" | "bug" | "file-text" | "globe" | "search";
 }
 
 /** Context visible to a step when building call params: pipeline start params + outputs of previous steps */

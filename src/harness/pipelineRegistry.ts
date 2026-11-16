@@ -307,6 +307,44 @@ export const PIPELINES: PipelineDef[] = [
       ],
     ],
   },
+
+  // ─── PlayCheck Verification Pipeline ───
+  // Single-stage pipeline: launch the game, apply cheats, spin, then open PlayCheck
+  // in the same browser context and compare reel results + financials.
+  {
+    id: "playcheck-verify-pipeline",
+    name: "PlayCheck Verification",
+    description: "Launch game → apply cheats → spin → compare reel results & financials against PlayCheck GameDetail",
+    stages: [
+      [
+        {
+          id: "verify_playcheck",
+          plugin: "playcheck_verifier",
+          label: "Run PlayCheck Verification",
+          description: "Spin the game and compare results against PlayCheck's GameDetail page",
+          dependsOn: [],
+          retryOnFail: false,
+          maxRetries: 0,
+          buildParams: ({ extraParams }) => ({
+            game_url: extraParams.gameUrl ?? "",
+            cheats: extraParams.cheats ?? [],
+            spin_count: extraParams.spinCount ?? 1,
+            trans_number: extraParams.transNumber ?? 0,
+            module_id: extraParams.moduleId ?? "",
+            // Titan Harness form fields — only read when game_url is a /harness/ URL.
+            username: extraParams.username ?? "",
+            product_id: extraParams.harnessProductId ?? "",
+            client_id: extraParams.harnessClientId ?? "",
+            brand: extraParams.harnessBrand ?? "IslandParadise",
+            tolerance: extraParams.tolerance ?? 0.005,
+            money_divisor: extraParams.moneyDivisor ?? 100,
+            headless: extraParams.headless ?? false,
+            time_scale: extraParams.timeScale ?? 400,
+          }),
+        },
+      ],
+    ],
+  },
 ];
 
 // ── Query Utility Functions ─────────────────────────────────────────────

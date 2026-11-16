@@ -18,6 +18,7 @@ SCENARIO_PLUGINS: dict[str, list[str]] = {
     "game_verification": ["testdata_verifier_api", "testdata_verifier_harness", "testdata_verifier_local", "log_diagnoser"],
     "easyhelp_checking": ["html_to_text_converter", "diff_comparator", "helpfile_report", "helpfile_analyzer"],
     "portugal_plugin": ["portugal_plugin_symbol_map", "portugal_plugin_fetcher", "portugal_plugin_parser", "portugal_plugin_reporter"],
+    "playcheck_verification": ["playcheck_verifier"],
 }
 
 

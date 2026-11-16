@@ -13,6 +13,7 @@ from server.tools.impl.portugal_plugin_parser_tool import PortugalPluginParserTo
 from server.tools.impl.portugal_plugin_reporter_tool import PortugalPluginReporterTool
 from server.tools.impl.portugal_plugin_fetcher_tool import PortugalPluginFetcherTool
 from server.tools.impl.portugal_plugin_symbol_map_tool import PortugalPluginSymbolMapTool
+from server.tools.impl.playcheck_verifier_tool import PlaycheckVerifierTool
 
 BUILTIN_TOOLS: list = [
     TestdataParserTool(),
@@ -30,6 +31,7 @@ BUILTIN_TOOLS: list = [
     PortugalPluginReporterTool(),
     PortugalPluginFetcherTool(),
     PortugalPluginSymbolMapTool(),
+    PlaycheckVerifierTool(),
 ]
 __all__ = [
     "BUILTIN_TOOLS",
@@ -38,4 +40,5 @@ __all__ = [
     "LogDiagnoserTool", "HtmlToTextConverterTool", "DiffComparatorTool", "HelpfileReportTool", "HelpfileAnalyzerTool",
     "PortugalPluginParserTool", "PortugalPluginReporterTool", "PortugalPluginFetcherTool",
     "PortugalPluginSymbolMapTool",
+    "PlaycheckVerifierTool",
 ]

@@ -2,7 +2,14 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
-> **Synced with code at**: `e0301ab` (2026-11-16, release 1.2.1). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+> **Synced with code at**: `4b02a9a` (2026-11-16, release 1.2.2). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+
+> **Revision note (2026-11-16, bug fix — app version 1.2.2)**
+>
+> Fix only; no Plugin, param, route or report format was added or removed.
+>
+> - `playcheck_verifier` (0.2.1 → 0.2.2): the PlayCheck stage (Stage B) launched Playwright's own Chromium (`pw.chromium.launch()` with no channel). The packaged exe ships Playwright's driver but no browser, and the PyInstaller Playwright hook points `PLAYWRIGHT_BROWSERS_PATH` inside the `_MEI` temp dir, so every packaged run failed with "Executable doesn't exist ... chrome.exe". Both browser launches now go through the new `server/game_session/launcher.launch_chromium`, which tries installed Chrome (`channel="chrome"`), then installed Edge (`channel="msedge"`, present on every Windows machine), then Playwright's Chromium (dev venv only), and fails with `no_browser_available` listing each attempt;
+> - New test file `tests/test_launch_chromium.py` (113 tests total).
 
 > **Revision note (2026-11-16, bug fixes — app version 1.2.1)**
 >

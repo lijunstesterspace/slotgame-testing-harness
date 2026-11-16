@@ -2,7 +2,7 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
-> **Synced with code at**: `3f2166c` (2026-11-16) plus the uncommitted 1.2.1 bug fixes described in the first revision note below. Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+> **Synced with code at**: `e0301ab` (2026-11-16, release 1.2.1). Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
 
 > **Revision note (2026-11-16, bug fixes — app version 1.2.1)**
 >

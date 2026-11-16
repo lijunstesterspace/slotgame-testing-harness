@@ -151,6 +151,15 @@ def test_symbol_map_reads_the_playcheck_icons_key(monkeypatch):
 
 def test_js_fn_wraps_a_statement_body_as_an_arrow_function():
     assert playcheck._js_fn("return 1;") == "() => {\nreturn 1;\n}"
+
+
+def test_cheat_script_is_a_function_not_a_bare_statement_list():
+    """frame.evaluate takes a function or an expression; the cheat script ends in `return`, so
+    unwrapped it raised "SyntaxError: Illegal return statement" and failed every run with cheats."""
+    script = pv._cheat_js(["cheat1", 'quote"d'])
+    assert script.startswith("() => {") and script.rstrip().endswith("}")
+    assert 'const cheats = ["cheat1", "quote\\"d"];' in script
+    assert "return { tried, ok };" in script
     assert playcheck._PC_GAME_DETAIL_JS.startswith("() => {")
     assert "() =>" in playcheck._PC_READY_JS and "() =>" in playcheck._PC_ROWS_JS
 

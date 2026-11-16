@@ -43,7 +43,7 @@ from server.infra.logger import log
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext,
 )
-from server.tools.impl.playcheck import PlayCheckClient, PlayCheckError
+from server.tools.impl.playcheck import PlayCheckClient, PlayCheckError, _js_fn
 
 _DEFAULT_TOLERANCE = 0.005
 _DEFAULT_DIVISOR = 100
@@ -55,9 +55,13 @@ def _cheat_js(cheats: list[str]) -> str:
     Different games expose different cheat APIs; try the common ones in order
     and report which (if any) accepted the call. The caller can read the
     returned string from the diag dict.
+
+    The body uses `return`, so it is wrapped in an arrow function (playcheck._js_fn): handed to
+    frame.evaluate as a bare statement list it raises "SyntaxError: Illegal return statement" and
+    the whole run fails before the first spin.
     """
     payload = json.dumps(cheats)
-    return f"""
+    return _js_fn(f"""
 const cheats = {payload};
 let tried = [], ok = null;
 const try_ = (label, fn) => {{ tried.push(label); try {{ const r = fn(); if (r !== undefined) ok = label + ':' + JSON.stringify(r); }} catch (e) {{}} }};
@@ -66,7 +70,7 @@ try_('jftwTools.common.setCheats', () => window.jftwTools.common.setCheats(cheat
 try_('jftwTools.cheat.set', () => window.jftwTools.cheat.set(cheats));
 try_('hash', () => {{ location.hash = '#cheat=' + encodeURIComponent(cheats.join(',')); return true; }});
 return {{ tried, ok }};
-"""
+""")
 
 
 def _game_financials(resp: PlayResponse) -> dict[str, float | None]:
@@ -258,7 +262,7 @@ class PlaycheckVerifierTool(ToolPlugin):
                               description="Game engine animation speed percent."),
             ]),
             timeout_seconds=300,
-            version="0.2.0",
+            version="0.2.1",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:

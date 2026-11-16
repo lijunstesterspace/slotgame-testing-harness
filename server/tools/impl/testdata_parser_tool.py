@@ -1,6 +1,8 @@
 from __future__ import annotations
 import re
 from typing import Any
+from xml.sax.saxutils import quoteattr
+from server.tools.impl.testdata_generator_tool import safe_testdata_filename
 from server.tools.base import (
     ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter,
     ToolResult, HarnessContext,
@@ -22,7 +24,7 @@ class TestdataParserTool(ToolPlugin):
             ]),
             permissions=["parse:text"],
             timeout_seconds=15,
-            version="1.0.0",
+            version="1.0.1",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -45,15 +47,17 @@ class TestdataParserTool(ToolPlugin):
                 return f"{prefix}_Base game_Regular Wins.testdata"
             if any(k in lname for k in ["big win", "mega win", "epic win", "super win"]):
                 return f"{prefix}_Base game_Big Wins.testdata"
-            return f"{prefix}_{name}.testdata"
+            # The case name becomes the file name: keep it one valid file name ("10/15" -> "10_15").
+            return safe_testdata_filename(f"{prefix}_{name}.testdata")
 
         def _add_rec(scenario: str, bb: int, bi: int, bonus_batch: int | None, bonus_index: int | None, filename: str):
             nonlocal counter
             counter += 1
             is_double = bonus_batch is not None and bonus_index is not None
+            comment = quoteattr(scenario)   # quoted + escaped: "Link&Win" must stay well-formed XML
             if is_double:
                 xml = (
-                    f'<Spin stage="BaseGame" comment="{scenario}">\n'
+                    f'<Spin stage="BaseGame" comment={comment}>\n'
                     f'  <PreGen batch="{bb}" index="{bi}" />\n'
                     f'  <Feature stage="Bonus">\n'
                     f'    <PreGen batch="{bonus_batch}" index="{bonus_index}" />\n'
@@ -61,7 +65,7 @@ class TestdataParserTool(ToolPlugin):
                 )
             else:
                 xml = (
-                    f'<Spin stage="BaseGame" comment="{scenario}">\n'
+                    f'<Spin stage="BaseGame" comment={comment}>\n'
                     f'  <PreGen batch="{bb}" index="{bi}" />\n</Spin>'
                 )
             rec = {

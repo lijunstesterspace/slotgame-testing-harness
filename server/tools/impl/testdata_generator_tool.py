@@ -1,29 +1,57 @@
 from __future__ import annotations
 import json
+import re
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import quoteattr
 from server.tools.base import (ToolPlugin, ToolInfo, ToolInputSchema, ToolParameter, ToolResult, HarnessContext)
+
+# Path separators and the characters Windows forbids in a file name, plus control characters.
+_UNSAFE_FILE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_testdata_filename(name: str) -> str:
+    """A case-derived name made safe to use as ONE file name on Windows and Linux.
+
+    File names come from the sheet's case names ("Free Spins 10/15", 'Big "Win"'), so a slash would
+    create a sub-folder (or, as "../x", leave the work dir) and a quote or "<" cannot be written on
+    Windows at all. Each such character becomes "_"; the rest of the name is kept as typed."""
+    cleaned = _UNSAFE_FILE_CHARS.sub("_", str(name)).strip().rstrip(". ")
+    return cleaned or "generated.testdata"
+
+
+def _attr(value: Any) -> str:
+    """A quoted, escaped XML attribute value: & < > and the quote itself (case names like
+    "Ultra Link&Win trigger" otherwise produce a file that is not well-formed XML)."""
+    return quoteattr(str(value))
+
+
+def _comment(text: Any) -> str:
+    """Text safe inside <!-- ... -->, where XML forbids "--"."""
+    return re.sub(r"-(?=-)", "- ", str(text))
+
 
 def _write_xml(records: list[dict], file_name: str, module_id: str, login_name: str) -> str:
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              "<Test>",
-             f'  <Key moduleID="{module_id}" loginName="{login_name}" />',
+             f'  <Key moduleID={_attr(module_id)} loginName={_attr(login_name)} />',
              "  <Slot>"]
     for r in records:
-        lines.append(f'    <!-- Case: {r["case_name"]} -->')
+        lines.append(f'    <!-- Case: {_comment(r["case_name"])} -->')
         if r.get("bonus_batch") is not None:
             lines += [
                 '    <Spin stage="BaseGame">',
-                f'      <PreGen batch="{r["base_batch"]}" index="{r["base_index"]}"></PreGen>',
+                f'      <PreGen batch={_attr(r["base_batch"])} index={_attr(r["base_index"])}></PreGen>',
                 '      <Feature stage="Bonus">',
-                f'        <PreGen batch="{r["bonus_batch"]}" index="{r["bonus_index"]}"></PreGen>',
+                f'        <PreGen batch={_attr(r["bonus_batch"])} index={_attr(r["bonus_index"])}></PreGen>',
                 "      </Feature>",
                 "    </Spin>",
             ]
         else:
             lines += [
-                f'    <Spin stage="{r.get("stage") or "BaseGame"}" comment="{r.get("comment") or r["case_name"]}">',
-                f'      <PreGen batch="{r["base_batch"]}" index="{r["base_index"]}" />',
+                f'    <Spin stage={_attr(r.get("stage") or "BaseGame")} '
+                f'comment={_attr(r.get("comment") or r["case_name"])}>',
+                f'      <PreGen batch={_attr(r["base_batch"])} index={_attr(r["base_index"])} />',
                 "    </Spin>",
             ]
     lines += ["  </Slot>", "</Test>"]
@@ -47,6 +75,7 @@ class TestdataGeneratorTool(ToolPlugin):
             ]),
             permissions=["filesystem:write"],
             timeout_seconds=30,
+            version="1.0.1",
         )
 
     async def _run_impl(self, params: dict[str, Any], ctx: HarnessContext) -> ToolResult:
@@ -57,7 +86,9 @@ class TestdataGeneratorTool(ToolPlugin):
         groups: dict[str, list[dict]] = {}
         for r in records:
             fn = r.get("file_name") or ("P5P_Bonus_Feature.testdata" if r.get("bonus_batch") is not None else "P5P_Base_Spins.testdata")
-            groups.setdefault(fn, []).append(r)
+            # Grouped by the name actually written, so two case names that differ only in an
+            # unsafe character share one file instead of the second overwriting the first.
+            groups.setdefault(safe_testdata_filename(fn), []).append(r)
         artifacts: list[str] = []
         module_id = str(records[0].get("module_id") or "105359") if records else "105359"
         for fn, recs in groups.items():

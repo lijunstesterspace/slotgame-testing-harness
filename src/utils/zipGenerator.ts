@@ -1,6 +1,18 @@
 import JSZip from 'jszip';
 import { TestRecord } from '../types';
 
+/** Escape a value for use inside a double-quoted XML attribute (case names like "Ultra Link&Win
+ * trigger" otherwise produce a .testdata file that is not well-formed XML). */
+export const escapeXml = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+/** Text safe inside <!-- ... -->, where XML forbids "--". */
+export const xmlComment = (value: unknown): string => String(value ?? '').replace(/-(?=-)/g, '- ');
+
 export const generateOutcomeZip = async (records: TestRecord[], loginName: string = ''): Promise<void> => {
   const zip = new JSZip();
 
@@ -21,10 +33,10 @@ export const generateOutcomeZip = async (records: TestRecord[], loginName: strin
 
   // Create each distinct .testdata file
   Object.entries(fileGroups).forEach(([fileName, groupRecords]) => {
-    let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n<Test>\n  <Key moduleID="${moduleID}" loginName="${loginName}" />\n  <Slot>\n`;
+    let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n<Test>\n  <Key moduleID="${escapeXml(moduleID)}" loginName="${escapeXml(loginName)}" />\n  <Slot>\n`;
 
     groupRecords.forEach((rec) => {
-      xmlContent += `    <!-- Case: ${rec.caseName} -->\n`;
+      xmlContent += `    <!-- Case: ${xmlComment(rec.caseName)} -->\n`;
       if (rec.formatType === 'DOUBLE_PREGEN') {
         xmlContent += `    <Spin stage="BaseGame">\n`;
         xmlContent += `      <PreGen batch="${rec.baseBatch}" index="${rec.baseIndex}"></PreGen>\n`;
@@ -33,7 +45,7 @@ export const generateOutcomeZip = async (records: TestRecord[], loginName: strin
         xmlContent += `      </Feature>\n`;
         xmlContent += `    </Spin>\n`;
       } else {
-        xmlContent += `    <Spin stage="${rec.stage || 'BaseGame'}" comment="${rec.comment || rec.caseName}">\n`;
+        xmlContent += `    <Spin stage="${escapeXml(rec.stage || 'BaseGame')}" comment="${escapeXml(rec.comment || rec.caseName)}">\n`;
         xmlContent += `      <PreGen batch="${rec.baseBatch}" index="${rec.baseIndex}" />\n`;
         xmlContent += `    </Spin>\n`;
       }

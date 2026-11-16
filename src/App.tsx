@@ -122,6 +122,30 @@ function buildPortugalFetchParams(gameUrl: string, text: string, loginName: stri
   return out;
 }
 
+/**
+ * playcheck_verification: `key=value` settings typed next to the cheats (spins=1, moduleId=…,
+ * productId=…, clientId=…, username=…, brand=…, …). They are read by their own matchers in
+ * runPipeline and must never be sent to the game as cheat codes.
+ */
+const PLAYCHECK_SETTING =
+  /\b(?:spins?|module(?:id)?|trans(?:action)?(?:number)?|tolerance|divisor|headless|user(?:name)?|password|product(?:id)?|client(?:id)?|brand)\s*=\s*\S+/gi;
+
+/**
+ * The cheat codes in a PlayCheck Verification intent: what is left once URLs and `key=value`
+ * settings are taken out, split on commas / newlines. Settings are removed wherever they sit —
+ * several can share one line ("moduleId=105233 productId=5001 clientId=50300") — instead of
+ * testing each comma-separated token's first word, which let `spins=1` and `moduleId=…` through
+ * as cheats.
+ */
+function parsePlaycheckCheats(intent: string): string[] {
+  return intent
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(PLAYCHECK_SETTING, " ")
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 const MODEL_OPTIONS: { label: string; value: string }[] = [
   { label: "Ollama · llama3:7b (local)", value: "llama3:7b" },
   { label: "Ollama · qwen2.5:7b (local)", value: "qwen2.5:7b" },
@@ -303,7 +327,10 @@ const Workbench: React.FC = () => {
 
   // Step 1: Show preview of planned tests
   const handleShowPreview = () => {
-    if (!promptIntent.trim()) {
+    // PlayCheck Verification needs nothing but the game URL: cheats and settings are optional, and
+    // any text typed just to get past this check would be sent to the game as a cheat code.
+    const urlIsEnough = selectedScenarioId === "playcheck_verification" && sheetUrl.trim() !== "";
+    if (!promptIntent.trim() && !urlIsEnough) {
       setError("Please describe your test task first");
       return;
     }
@@ -619,12 +646,7 @@ const Workbench: React.FC = () => {
         // newline-separated tokens that aren't the URL.
         const urlMatch = promptIntent.match(/https?:\/\/\S+/);
         extraParams.gameUrl = urlMatch ? urlMatch[0] : sheetUrl.trim();
-        const cheats = promptIntent
-          .split(/[,\n]+/)
-          .map((s) => s.trim())
-          .filter((s) => s && !s.startsWith("http") &&
-            !/^(spin|module|trans|tolerance|divisor|headless|user|username|product|client|brand)\s*=/i.test(s));
-        extraParams.cheats = cheats;
+        extraParams.cheats = parsePlaycheckCheats(promptIntent);
         // Optional key=value overrides from the intent text.
         const spinMatch = promptIntent.match(/spin(s)?\s*=\s*(\d+)/i);
         if (spinMatch) extraParams.spinCount = Number(spinMatch[2]);

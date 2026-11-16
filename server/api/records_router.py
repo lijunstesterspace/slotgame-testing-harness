@@ -43,7 +43,7 @@ async def download_zip(rid: str, user=Depends(require_user())):
     # build fresh zip via ZipPackagerTool directly
     from server.tools.base import HarnessContext
     from server.tools.impl.zip_packager_tool import ZipPackagerTool
-    from server.tools.impl.testdata_generator_tool import _write_xml
+    from server.tools.impl.testdata_generator_tool import _write_xml, safe_testdata_filename
     from server.config import RUNS_DIR
     eid = rows[0].get("execution_id") or rid
     work_dir = RUNS_DIR / eid / "ondemand"
@@ -52,7 +52,7 @@ async def download_zip(rid: str, user=Depends(require_user())):
     login_name = ""
     groups: dict[str, list[dict]] = {}
     for r in rows:
-        groups.setdefault(r.get("file_name") or "generated.testdata", []).append(r)
+        groups.setdefault(safe_testdata_filename(r.get("file_name") or "generated.testdata"), []).append(r)
     files = []
     for fn, recs in groups.items():
         files.append(_write_xml(recs, str(work_dir / fn), module_id, login_name))

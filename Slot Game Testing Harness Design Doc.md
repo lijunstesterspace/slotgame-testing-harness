@@ -2,7 +2,17 @@
 
 > **Language**: English only. The earlier Chinese version of this document was removed on 2026-10-08 (company repositories must be in English); this English text is now the single authoritative version.
 
-> **Synced with code at**: `53ce0ac` (2026-10-28) plus the uncommitted PlayCheck Verification feature. Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+> **Synced with code at**: `3f2166c` (2026-11-16) plus the uncommitted 1.2.1 bug fixes described in the first revision note below. Every feature commit should update this document in the same PR; doc-only catch-up revisions go on the `docs/design-doc-sync` branch (see `CLAUDE.md`).
+
+> **Revision note (2026-11-16, bug fixes — app version 1.2.1)**
+>
+> Fixes only; no Plugin, param, route or report format was added or removed.
+>
+> - `playcheck_verifier` (0.2.0 → 0.2.1): the cheat-application script is now wrapped in an arrow function like every other page script (`playcheck._js_fn`). Handed to `frame.evaluate` as a bare statement list ending in `return`, it raised `SyntaxError: Illegal return statement`, so every run with at least one cheat failed before the first spin;
+> - PlayCheck Verification intent parsing (`App.tsx`, `parsePlaycheckCheats`): `key=value` settings (`spins=`, `moduleId=`, `productId=`, `clientId=`, `username=`, `brand=`, ...) are removed from the text wherever they sit before it is split into cheats. The previous per-token filter only recognised `spin=` / `module=` / `product=` / `client=`, so the input box's own example lines were sent to the game as cheat codes. The scenario can now also be run with the game URL alone (no cheats);
+> - `GET /api/executions/stream/{id}` (12.2): when the execution has already reached `SUCCESS` / `FAILED` by the time the client subscribes, the stream replays the tool calls and then emits `done` at once. A verifier that fails its pre-flight checks finishes before the browser opens the stream; its `done` used to be lost, leaving the stream pinging and the UI waiting out its full timeout;
+> - TestData Generation — `testdata_parser` / `testdata_generator` (both 1.0.0 → 1.0.1), the on-demand `outcome.zip` route, and the frontend `zipGenerator.ts` / `XmlViewer.tsx`: attribute values (`comment`, `stage`, `moduleID`, `loginName`, seeds) are XML-escaped and `--` is broken up inside `<!-- Case: ... -->` comments, so a case named e.g. "Ultra Link&Win trigger" yields a well-formed file. File names derived from case names go through `safe_testdata_filename` (path separators and the characters Windows forbids become `_`), so a name cannot create a sub-folder or leave the work directory;
+> - New test files `tests/test_testdata_generator.py` and `tests/test_executions_stream.py` (109 tests total).
 
 > **Revision note (2026-11-16, PlayCheck Verification — new Plugin / scenario / pipeline)**
 >
@@ -927,7 +937,7 @@ function selectModel(task: TestTask): "local" | "cloud" {
 | `GET /api/tools/skills/list` | Lists Skill-file metadata from the `skills/` directory |
 | `POST /api/executions/new` | Creates an execution record |
 | `GET /api/executions/mine` / `GET /api/executions/{id}` | Execution history list / execution detail (with tool_calls and records) |
-| `GET /api/executions/stream/{id}` | SSE event stream (`harness_event` / `done` / `ping`) |
+| `GET /api/executions/stream/{id}` | SSE event stream (`harness_event` / `done` / `ping`): replays the execution's recorded tool calls, then live events; an execution that has already finished gets `done` immediately after the replay |
 | `POST /api/executions/{id}/cancel` | Requests cancellation of a running browser-driven Plugin |
 | `POST /api/executions/audit-llm` | Records an LLM-call audit entry (not currently called by the frontend) |
 | `GET /api/executions/runs/{id}/{tool}/{file}` | Downloads an artifact from an execution's working directory |

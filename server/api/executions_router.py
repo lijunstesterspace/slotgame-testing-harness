@@ -15,6 +15,9 @@ from server.infra.storage import StorageAsync
 
 router = APIRouter(prefix="/api/executions", tags=["Executions"])
 
+# Statuses after which no further event will ever be published for an execution.
+_TERMINAL_STATUSES = {"SUCCESS", "FAILED"}
+
 
 @router.get("/mine")
 async def list_mine(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=200),
@@ -61,6 +64,16 @@ async def stream_execution(eid: str, request: Request, user=Depends(require_user
         q: asyncio.Queue = asyncio.Queue()
         shared.sse_hub.subscribe(eid, q)
         try:
+            # The run may already be over: a tool that fails its pre-flight checks (file not found,
+            # <Key> / URL mismatch, env_required, ...) returns within milliseconds — before the
+            # browser has opened this stream — and its `done` was then published to no subscriber.
+            # Without this check the client only ever sees pings and waits out its full timeout.
+            # Checked after subscribing, so a run that ends in between is caught by one or the other.
+            current = await storage.get_execution(eid)
+            if current and current["status"] in _TERMINAL_STATUSES:
+                yield _sse("done", {"success": current["status"] == "SUCCESS", "execution_id": eid,
+                                    "total_ms": current.get("total_ms") or 0, "timestamp": _now_ts()})
+                return
             while True:
                 if await request.is_disconnected():
                     break
